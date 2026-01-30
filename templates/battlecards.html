@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Battlecard Dashboard</title>
+    <style>
+        :root {
+            --primary: #FF3621;
+            --primary-dark: #E02E1B;
+            --success: #00A972;
+            --warning: #F5A623;
+            --info: #2196F3;
+            --bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --text: #1F2937;
+            --text-secondary: #6B7280;
+            --border: #E5E7EB;
+            --teal: #2d5a5a;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        .header {
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+        }
+
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header-title { font-size: 20px; font-weight: 700; }
+
+        .btn-new {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 18px;
+            background: var(--teal);
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .btn-new:hover { background: #1e4444; }
+
+        .container {
+            max-width: 1200px;
+            margin: 24px auto;
+            padding: 0 24px;
+        }
+
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+            gap: 16px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            cursor: pointer;
+            transition: box-shadow 0.15s, border-color 0.15s;
+            text-decoration: none;
+            color: inherit;
+            display: block;
+        }
+
+        .card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            border-color: var(--teal);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+        }
+
+        .competitor-name {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .version-badge {
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 12px;
+            background: var(--teal);
+            color: white;
+            font-weight: 600;
+        }
+
+        .card-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .meta-row {
+            display: flex;
+            gap: 16px;
+        }
+
+        .meta-label {
+            font-weight: 600;
+            color: var(--text);
+            min-width: 100px;
+        }
+
+        /* Status badges */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 20px;
+            text-transform: uppercase;
+        }
+        .status-badge.in_progress { background: #DBEAFE; color: #1E40AF; }
+        .status-badge.completed { background: #D1FAE5; color: #065F46; }
+        .status-badge.failed { background: #FEE2E2; color: #991B1B; }
+        .status-badge.cancelled { background: #F3F4F6; color: #6B7280; }
+        .status-badge.draft { background: #FEF3C7; color: #92400E; }
+        .status-badge.pending_review { background: #DBEAFE; color: #1E40AF; }
+        .status-badge.approved { background: #D1FAE5; color: #065F46; }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+        .status-badge.in_progress .status-dot { background: #2563EB; animation: pulse 1.5s infinite; }
+        .status-badge.completed .status-dot { background: #059669; }
+        .status-badge.failed .status-dot { background: #DC2626; }
+        .status-badge.cancelled .status-dot { background: #9CA3AF; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* Step progress bar */
+        .step-progress {
+            display: flex;
+            gap: 4px;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--border);
+            align-items: center;
+        }
+        .step-dot {
+            width: 28px;
+            height: 6px;
+            border-radius: 3px;
+            background: #E5E7EB;
+        }
+        .step-dot.done { background: var(--success); }
+        .step-dot.active { background: var(--info); }
+        .step-progress-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-left: 8px;
+        }
+
+        /* Review stats */
+        .review-bar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid var(--border);
+        }
+        .review-bar-label {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+        .review-mini-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .review-mini-badge.approved { background: #D1FAE5; color: #065F46; }
+        .review-mini-badge.revision { background: #FEF3C7; color: #92400E; }
+        .review-mini-badge.rejected { background: #FEE2E2; color: #991B1B; }
+
+        /* Card actions */
+        .card-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--border);
+        }
+        .card-action-link {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--teal);
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .card-action-link:hover { text-decoration: underline; }
+        .card-action-link.secondary {
+            color: var(--text-secondary);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+        }
+        .empty-state h2 { margin-bottom: 8px; color: var(--text); }
+        .empty-state p { margin-bottom: 16px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <h1 class="header-title">Battlecard Dashboard</h1>
+            <a href="/workflow/new" class="btn-new">+ New Battlecard</a>
+        </div>
+    </div>
+
+    <div class="container">
+        {% if entries %}
+        <div class="card-grid">
+            {% for e in entries %}
+            <a href="{% if e.workflow_status == 'completed' %}/battlecard/{{ e.battlecard_id }}{% else %}/workflow/{{ e.session_id }}{% endif %}" class="card">
+                <div class="card-header">
+                    <div class="competitor-name">{{ e.competitor_name }}</div>
+                    <span class="version-badge">v{{ e.version_number }}</span>
+                </div>
+                <div class="card-meta">
+                    <div class="meta-row">
+                        <span class="meta-label">Product Area</span>
+                        <span>{{ e.product_area }}</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Model</span>
+                        <span>{{ e.model_name }}</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Workflow</span>
+                        <span>
+                            <span class="status-badge {{ e.workflow_status }}">
+                                <span class="status-dot"></span>
+                                {% if e.workflow_status == 'in_progress' %}In Progress (Step {{ e.current_step }}/6){% else %}{{ e.workflow_status | replace('_', ' ') | title }}{% endif %}
+                            </span>
+                        </span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Battlecard</span>
+                        <span>
+                            <span class="status-badge {{ e.battlecard_status or 'draft' }}">
+                                {{ (e.battlecard_status or 'draft') | replace('_', ' ') | title }}
+                            </span>
+                        </span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Created</span>
+                        <span>{{ e.created_at }}</span>
+                    </div>
+                </div>
+
+                <!-- Step progress dots -->
+                <div class="step-progress">
+                    {% for i in range(1, 7) %}
+                    <div class="step-dot {% if i < e.current_step %}done{% elif i == e.current_step and e.workflow_status == 'in_progress' %}active{% elif e.workflow_status == 'completed' %}done{% endif %}"></div>
+                    {% endfor %}
+                    <span class="step-progress-label">{{ e.current_step }}/6</span>
+                </div>
+
+                <!-- Review stats (if any reviews exist) -->
+                {% if e.review and e.review.total > 0 %}
+                <div class="review-bar">
+                    <span class="review-bar-label">Reviews</span>
+                    {% if e.review.approved %}<span class="review-mini-badge approved">{{ e.review.approved }} approved</span>{% endif %}
+                    {% if e.review.needs_revision %}<span class="review-mini-badge revision">{{ e.review.needs_revision }} needs revision</span>{% endif %}
+                    {% if e.review.rejected %}<span class="review-mini-badge rejected">{{ e.review.rejected }} rejected</span>{% endif %}
+                </div>
+                {% endif %}
+
+                <!-- Action links -->
+                <div class="card-actions">
+                    {% if e.workflow_status == 'completed' %}
+                    <span class="card-action-link" onclick="event.preventDefault(); window.location.href='/battlecard/{{ e.battlecard_id }}';">Review Battlecard</span>
+                    <span class="card-action-link secondary" onclick="event.preventDefault(); window.location.href='/workflow/{{ e.session_id }}';">View Workflow</span>
+                    <span class="card-action-link secondary" onclick="event.preventDefault(); window.location.href='/workflow/new?competitor={{ e.competitor_name | urlencode }}&product_area={{ e.product_area | urlencode }}';">+ New Version</span>
+                    {% else %}
+                    <span class="card-action-link" onclick="event.preventDefault(); window.location.href='/workflow/{{ e.session_id }}';">Continue Workflow</span>
+                    {% endif %}
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <h2>No battlecards yet</h2>
+            <p>Create a new battlecard to start generating competitive intelligence.</p>
+            <a href="/workflow/new" class="btn-new">+ New Battlecard</a>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

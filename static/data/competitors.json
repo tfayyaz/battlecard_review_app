@@ -1,0 +1,400 @@
+{
+  "categories": {
+    "priorities": [
+      {
+        "name": "AI Assistants",
+        "description": "Ready-to-use AI assistants like ChatGPT, Copilot, Gemini that work out-of-the-box without building custom applications"
+      },
+      {
+        "name": "OLTP Databases",
+        "description": "Transactional databases for operational applications requiring ACID compliance and low-latency read/writes"
+      }
+    ],
+    "platforms": [
+      {
+        "name": "Data Platform",
+        "description": "Unified platform combining data lake, warehouse, engineering, and analytics capabilities"
+      },
+      {
+        "name": "DS/ML Platform",
+        "description": "Machine learning platform for training, deploying, and managing ML models at scale"
+      },
+      {
+        "name": "GenAI/Agent Platform",
+        "description": "Platform for building custom GenAI applications, fine-tuning LLMs, and developing AI agents"
+      }
+    ],
+    "point_solutions": [
+      {
+        "name": "Data Warehouse/Lakehouse",
+        "description": "SQL analytics engine for structured data warehousing and lakehouse workloads"
+      },
+      {
+        "name": "Data Eng (Ingest, ETL, Streaming)",
+        "description": "Data engineering tools for ingestion, transformation, and real-time streaming"
+      },
+      {
+        "name": "Orchestration",
+        "description": "Workflow orchestration for scheduling and managing data pipeline dependencies"
+      },
+      {
+        "name": "BI & Agentic BI",
+        "description": "Business intelligence dashboards and AI-powered natural language analytics"
+      },
+      {
+        "name": "DS/ML",
+        "description": "Data science and ML tools for model development, experimentation, and deployment"
+      },
+      {
+        "name": "Gen AI & Agents Dev",
+        "description": "Tools for building custom GenAI applications, RAG systems, and AI agents"
+      },
+      {
+        "name": "Apps Hosting",
+        "description": "Platform for hosting data applications like Streamlit, Gradio, or custom web apps"
+      },
+      {
+        "name": "Open Table Storage",
+        "description": "Open table formats like Delta Lake, Iceberg, or Hudi for interoperable data storage"
+      },
+      {
+        "name": "Catalog & Governance",
+        "description": "Data catalog, lineage tracking, access control, and governance capabilities"
+      }
+    ]
+  },
+  "competitors": [
+    {
+      "id": "databricks",
+      "name": "Databricks",
+      "icon": "DB",
+      "color": "#FF3621",
+      "capabilities": {
+        "AI Assistants": { "status": "full", "reasoning": "Genie for natural language data queries, AI/BI Dashboards with AI-generated insights, and Databricks Assistant for code generation and debugging across notebooks and SQL." },
+        "OLTP Databases": { "status": "none", "reasoning": "Databricks is an analytics platform, not designed for OLTP workloads. Customers use separate databases for transactional applications." },
+        "Data Platform": { "status": "full", "reasoning": "Unified lakehouse platform combining data warehouse and data lake. Native support for all workloads—ETL, BI, ML, and AI—on a single platform with Delta Lake." },
+        "DS/ML Platform": { "status": "full", "reasoning": "Comprehensive ML platform with MLflow, Feature Store, Model Serving, AutoML, and Unity Catalog for ML artifacts. Best-in-class experiment tracking and model deployment." },
+        "GenAI/Agent Platform": { "status": "full", "reasoning": "Complete GenAI stack with Mosaic AI for training/fine-tuning, Vector Search, Model Serving with Foundation Model APIs, and Agent Framework for building AI applications." },
+        "Data Warehouse/Lakehouse": { "status": "full", "reasoning": "Photon-powered SQL analytics with serverless compute. Industry-leading price-performance for data warehousing with Delta Lake open format." },
+        "Data Eng (Ingest, ETL, Streaming)": { "status": "full", "reasoning": "Apache Spark for batch, Structured Streaming for real-time. Delta Live Tables for declarative ETL. Auto Loader for incremental ingestion. LakeFlow for managed pipelines." },
+        "Orchestration": { "status": "full", "reasoning": "Databricks Workflows for native orchestration with multi-task jobs, dependencies, and monitoring. Integrates with Airflow and other tools." },
+        "BI & Agentic BI": { "status": "full", "reasoning": "AI/BI product with Genie for natural language queries and dashboards. Direct lake access for sub-second queries. Integrates with major BI tools." },
+        "DS/ML": { "status": "full", "reasoning": "Full ML lifecycle: experiments, Feature Store, model registry, AutoML, and serverless Model Serving. MLflow integration for tracking and reproducibility." },
+        "Gen AI & Agents Dev": { "status": "full", "reasoning": "Mosaic AI for training custom LLMs, Foundation Model APIs, Vector Search, RAG applications, and Agent Framework for building compound AI systems." },
+        "Apps Hosting": { "status": "partial", "reasoning": "Databricks Apps for hosting Streamlit, Gradio, and custom web apps directly on the platform. Newer capability, still maturing compared to dedicated PaaS." },
+        "Open Table Storage": { "status": "full", "reasoning": "Delta Lake creator and primary contributor. UniForm provides interoperability with Iceberg and Hudi. Open format by design." },
+        "Catalog & Governance": { "status": "full", "reasoning": "Unity Catalog provides unified governance for data, ML models, and AI assets. Fine-grained access control, lineage, and data discovery across the lakehouse." }
+      }
+    },
+    {
+      "id": "snowflake",
+      "name": "Snowflake",
+      "icon": "SF",
+      "color": "#29B5E8",
+      "capabilities": {
+        "AI Assistants": { "status": "partial", "reasoning": "Cortex Analyst for natural language SQL queries. Copilot features in Snowsight for code assistance. Less comprehensive than Databricks Genie/Assistant." },
+        "OLTP Databases": { "status": "none", "reasoning": "Snowflake is OLAP only. Not designed for transactional workloads. Hybrid tables provide limited OLTP-like features but not a replacement for OLTP databases." },
+        "Data Platform": { "status": "partial", "reasoning": "Strong data warehousing but limited native data engineering. Relies on partners for ETL. No native streaming—requires Snowpipe or external tools." },
+        "DS/ML Platform": { "status": "partial", "reasoning": "Snowpark ML for in-Snowflake ML with stored procedures. Limited compared to Databricks—no native experiment tracking or model registry. Feature Store recently added." },
+        "GenAI/Agent Platform": { "status": "partial", "reasoning": "Cortex AI for LLMs with functions like COMPLETE and EMBED. Arctic LLM for text-to-SQL. Lacks agent framework and comprehensive AI development platform." },
+        "Data Warehouse/Lakehouse": { "status": "full", "reasoning": "Industry-leading cloud data warehouse with instant elasticity. Iceberg Tables for lakehouse patterns. Excellent for structured data analytics." },
+        "Data Eng (Ingest, ETL, Streaming)": { "status": "partial", "reasoning": "Snowpipe for micro-batch ingestion, Dynamic Tables for transformations. No native streaming—recently acquired Streamlit for UI but not for streaming data." },
+        "Orchestration": { "status": "partial", "reasoning": "Tasks and DAGs for basic orchestration. Less sophisticated than dedicated orchestration tools. Many customers use external orchestrators." },
+        "BI & Agentic BI": { "status": "partial", "reasoning": "Native dashboards and visualizations in Snowsight. Acquired Streamlit for apps. Cortex for NL queries. Less mature BI than Power BI or Tableau integrations." },
+        "DS/ML": { "status": "partial", "reasoning": "Snowpark ML for model training in Snowflake. Model Registry added recently. No native MLflow, limited experiment tracking compared to Databricks." },
+        "Gen AI & Agents Dev": { "status": "partial", "reasoning": "Cortex AI with LLM functions and Arctic model. Vector embedding support. No agent framework, no model fine-tuning, limited to pre-built functions." },
+        "Apps Hosting": { "status": "full", "reasoning": "Streamlit in Snowflake for data apps. Native Apps Framework for distributing applications. Strong app development story post-Streamlit acquisition." },
+        "Open Table Storage": { "status": "full", "reasoning": "Iceberg Tables (native Iceberg support) enable open format storage. Supports reading external Iceberg tables. Moving toward open formats but historically proprietary." },
+        "Catalog & Governance": { "status": "full", "reasoning": "Horizon for governance with data classification, access control, lineage, and data quality. Comprehensive governance for Snowflake-managed data." }
+      }
+    },
+    {
+      "id": "microsoft",
+      "name": "Microsoft",
+      "icon": "MF",
+      "color": "#0078D4",
+      "hasSubPlatforms": true,
+      "subPlatforms": [
+        {
+          "id": "microsoft-fabric",
+          "name": "Microsoft Fabric",
+          "description": "Unified SaaS analytics platform"
+        },
+        {
+          "id": "azure-data",
+          "name": "Azure Data Products",
+          "description": "Azure Synapse, Data Factory, Event Hubs"
+        },
+        {
+          "id": "azure-foundry",
+          "name": "Microsoft Foundry",
+          "description": "Unified AI platform (formerly Azure AI Foundry)"
+        },
+        {
+          "id": "copilot-studio",
+          "name": "Copilot Studio",
+          "description": "Low-code agent builder platform"
+        }
+      ],
+      "capabilities": {
+        "AI Assistants": { "status": "full", "reasoning": "Copilot deeply integrated across all Microsoft products—M365, Power BI, Data Factory, Azure. Natural language for report creation, pipeline building, and code generation." },
+        "OLTP Databases": { "status": "full", "reasoning": "Azure SQL, Cosmos DB, PostgreSQL Flexible Server handle transactional workloads. Strong OLTP options as separate Azure services." },
+        "Data Platform": { "status": "full", "reasoning": "Unified SaaS platform combining data lake, warehouse, data engineering, and analytics. OneLake provides single data copy across all workloads." },
+        "DS/ML Platform": { "status": "partial", "reasoning": "Synapse ML and notebooks for data science. Azure ML integration for full MLOps. Less native than Databricks—requires switching to Azure ML for production ML." },
+        "GenAI/Agent Platform": { "status": "full", "reasoning": "Microsoft Foundry provides unified AI platform with OpenAI and Anthropic models. Copilot Studio for agent building. Agent Factory combines Work IQ, Fabric IQ, and Foundry IQ." },
+        "Data Warehouse/Lakehouse": { "status": "full", "reasoning": "Synapse Data Warehouse for analytics. Lakehouse with Delta Lake format. Direct Lake mode for fast Power BI queries without data movement." },
+        "Data Eng (Ingest, ETL, Streaming)": { "status": "full", "reasoning": "Data Factory for ETL/ELT, Spark notebooks for transformations, Dataflows Gen2 for low-code. Eventstream for real-time ingestion." },
+        "Orchestration": { "status": "full", "reasoning": "Data Factory pipelines for orchestration with triggers, dependencies, and monitoring. Integrates with Azure DevOps and GitHub for CI/CD." },
+        "BI & Agentic BI": { "status": "full", "reasoning": "Power BI is the core BI tool—industry leader in enterprise BI. Copilot for natural language report creation. Direct Lake for real-time lakehouse BI." },
+        "DS/ML": { "status": "partial", "reasoning": "Notebooks with Spark ML. For production ML, typically requires Azure ML integration. No native Feature Store or MLflow-equivalent in Fabric." },
+        "Gen AI & Agents Dev": { "status": "full", "reasoning": "Microsoft Foundry with OpenAI and Anthropic models. Copilot Studio for low-code agents. Agent Factory for enterprise agent development." },
+        "Apps Hosting": { "status": "partial", "reasoning": "Power Apps for low-code apps. No native Streamlit/Gradio equivalent in Fabric. Custom apps require Azure App Service separately." },
+        "Open Table Storage": { "status": "full", "reasoning": "OneLake uses Delta Lake/Parquet as the native format. Supports shortcuts to external Delta and Iceberg tables for interoperability." },
+        "Catalog & Governance": { "status": "full", "reasoning": "Microsoft Purview integration for governance, lineage, and data discovery. OneLake provides unified data access layer with centralized security policies." }
+      }
+    },
+    {
+      "id": "aws",
+      "name": "AWS",
+      "icon": "AWS",
+      "color": "#FF9900",
+      "capabilities": {
+        "AI Assistants": { "status": "full", "reasoning": "Amazon Q for AWS console assistance, Q in QuickSight for BI, CodeWhisperer for development. Strong in-product AI across AWS services." },
+        "OLTP Databases": { "status": "full", "reasoning": "RDS (MySQL, PostgreSQL, SQL Server), Aurora, DynamoDB. Comprehensive OLTP database options from relational to NoSQL." },
+        "Data Platform": { "status": "partial", "reasoning": "Broad services but fragmented—Redshift, EMR, Glue, Athena are separate products. Requires significant integration work for unified experience." },
+        "DS/ML Platform": { "status": "full", "reasoning": "SageMaker is comprehensive ML platform with notebooks, training, deployment, Feature Store, and MLOps. Strong enterprise ML capabilities." },
+        "GenAI/Agent Platform": { "status": "full", "reasoning": "Bedrock provides managed access to foundation models (Claude, Llama, Titan). Agents for Bedrock for building AI agents. Strong but less integrated than Databricks." },
+        "Data Warehouse/Lakehouse": { "status": "full", "reasoning": "Redshift for data warehouse, Redshift Serverless for flexibility. S3 Tables for Iceberg lakehouse. Strong but multiple products to manage." },
+        "Data Eng (Ingest, ETL, Streaming)": { "status": "full", "reasoning": "Glue for ETL, EMR for Spark, Kinesis for streaming, MSK for Kafka. Comprehensive but requires stitching multiple services together." },
+        "Orchestration": { "status": "full", "reasoning": "Step Functions for workflow orchestration, MWAA (managed Airflow), EventBridge for event-driven. Multiple options available." },
+        "BI & Agentic BI": { "status": "partial", "reasoning": "QuickSight for BI with Q for natural language queries. Less market share than Power BI or Tableau. Agentic BI features emerging." },
+        "DS/ML": { "status": "full", "reasoning": "SageMaker provides full ML lifecycle—notebooks, training, hyperparameter tuning, deployment, Feature Store, and monitoring." },
+        "Gen AI & Agents Dev": { "status": "full", "reasoning": "Bedrock for foundation models, Agents for Bedrock, Knowledge Bases for RAG. PartyRock for no-code experimentation. Comprehensive GenAI offering." },
+        "Apps Hosting": { "status": "full", "reasoning": "Lambda, ECS, EKS, App Runner, Elastic Beanstalk. AWS has the most comprehensive app hosting options across serverless, containers, and PaaS." },
+        "Open Table Storage": { "status": "partial", "reasoning": "S3 Tables provides native Iceberg support. Historically proprietary formats. Increasing open format adoption but Databricks leads here." },
+        "Catalog & Governance": { "status": "partial", "reasoning": "Glue Data Catalog, Lake Formation for access control. Governance features exist but spread across services. Less unified than Unity Catalog." }
+      }
+    },
+    {
+      "id": "google",
+      "name": "Google",
+      "icon": "GCP",
+      "color": "#4285F4",
+      "hasSubPlatforms": true,
+      "subPlatforms": [
+        {
+          "id": "bigquery",
+          "name": "BigQuery Platform",
+          "description": "Serverless data warehouse with BigQuery AI"
+        },
+        {
+          "id": "vertex-ai",
+          "name": "Vertex AI",
+          "description": "Unified ML and GenAI platform with Gemini"
+        },
+        {
+          "id": "gcp-data",
+          "name": "GCP Data Products",
+          "description": "Dataflow, Dataproc, Pub/Sub, Cloud Composer"
+        },
+        {
+          "id": "gemini-enterprise",
+          "name": "Gemini for Enterprise",
+          "description": "Gemini across Google Workspace and Cloud"
+        }
+      ],
+      "capabilities": {
+        "AI Assistants": { "status": "full", "reasoning": "Gemini integrated across Google Cloud console, BigQuery, Looker, and Colab. Strong code assistance, SQL generation, and data exploration agents." },
+        "OLTP Databases": { "status": "full", "reasoning": "Cloud SQL (MySQL, PostgreSQL), Cloud Spanner for global scale, Firestore for NoSQL, Bigtable for wide-column. Excellent OLTP options." },
+        "Data Platform": { "status": "partial", "reasoning": "BigQuery-centric with Dataproc, Dataflow, Pub/Sub as supporting services. Not as unified as Databricks or Fabric—requires service integration." },
+        "DS/ML Platform": { "status": "full", "reasoning": "Vertex AI is comprehensive ML platform with AutoML, custom training, Feature Store, Model Registry, and managed notebooks. Strong MLOps capabilities." },
+        "GenAI/Agent Platform": { "status": "full", "reasoning": "Vertex AI with Gemini models, Agent Builder, Agent Development Kit (ADK), and Agent2Agent protocol. 20x increase in Vertex AI usage driven by Gemini adoption." },
+        "Data Warehouse/Lakehouse": { "status": "full", "reasoning": "BigQuery is leading serverless warehouse. BigLake for lakehouse patterns with Iceberg/Delta support. BigQuery AI for integrated ML and GenAI." },
+        "Data Eng (Ingest, ETL, Streaming)": { "status": "full", "reasoning": "Dataflow for streaming/batch (Apache Beam), Dataproc for Spark, Pub/Sub for messaging, Data Fusion for low-code ETL. Comprehensive data engineering." },
+        "Orchestration": { "status": "full", "reasoning": "Cloud Composer (managed Airflow) for workflow orchestration, Cloud Workflows for lightweight orchestration, Cloud Scheduler for cron jobs." },
+        "BI & Agentic BI": { "status": "partial", "reasoning": "Looker for enterprise BI (acquired 2020), Looker Studio for dashboards. Gemini for NL queries. Less mature agentic BI than competitors." },
+        "DS/ML": { "status": "full", "reasoning": "Vertex AI with AutoML, custom training on TPUs/GPUs, Feature Store, experiments tracking, and model deployment. BigQuery ML for in-database ML." },
+        "Gen AI & Agents Dev": { "status": "full", "reasoning": "Gemini models in Vertex AI, Agent Builder, Agent Development Kit (ADK), Grounding for RAG, fine-tuning support. Google is only platform with video, image, speech, and music models." },
+        "Apps Hosting": { "status": "full", "reasoning": "Cloud Run for containers, App Engine for PaaS, Cloud Functions for serverless, GKE for Kubernetes. Comprehensive but not data-platform native hosting." },
+        "Open Table Storage": { "status": "none", "reasoning": "BigLake supports Iceberg and Delta but BigQuery's native format is proprietary. Less focus on open formats compared to Databricks." },
+        "Catalog & Governance": { "status": "full", "reasoning": "Dataplex for data mesh and governance, Data Catalog for metadata discovery, BigQuery fine-grained access controls. Comprehensive governance layer." }
+      }
+    },
+    {
+      "id": "cloudera",
+      "name": "Cloudera",
+      "icon": "CL",
+      "color": "#F96702",
+      "capabilities": {
+        "AI Assistants": { "status": "none", "reasoning": "No AI assistants or copilot features across the platform. Traditional interface without modern AI-assisted experiences." },
+        "OLTP Databases": { "status": "none", "reasoning": "CDP is for analytics workloads. HBase provides NoSQL but not true OLTP. Customers need separate database solutions." },
+        "Data Platform": { "status": "full", "reasoning": "Cloudera Data Platform (CDP) provides unified platform across public cloud, private cloud, and hybrid. Strong for enterprises with on-prem requirements." },
+        "DS/ML Platform": { "status": "partial", "reasoning": "Cloudera Machine Learning (CML) for ML workloads. Less mature than Databricks MLflow or SageMaker. Limited AutoML and experiment tracking." },
+        "GenAI/Agent Platform": { "status": "none", "reasoning": "No native GenAI platform. Relies on partners and integrations for LLM capabilities. Behind competitors in AI platform development." },
+        "Data Warehouse/Lakehouse": { "status": "full", "reasoning": "Cloudera Data Warehouse powered by Apache Impala and Hive. Open lakehouse with Iceberg support. Strong for hybrid cloud scenarios." },
+        "Data Eng (Ingest, ETL, Streaming)": { "status": "full", "reasoning": "NiFi for data ingestion, Spark for processing, Flink for streaming, Kafka included. Comprehensive but requires more operational overhead." },
+        "Orchestration": { "status": "partial", "reasoning": "Oozie for Hadoop workflow orchestration. Less modern than Airflow or Databricks Workflows. Many customers use external orchestrators." },
+        "BI & Agentic BI": { "status": "partial", "reasoning": "Data Visualization tool included but limited compared to Power BI or Tableau. No agentic BI capabilities." },
+        "DS/ML": { "status": "partial", "reasoning": "Cloudera Machine Learning supports model development and deployment. Experiment tracking and Feature Store less mature than competitors." },
+        "Gen AI & Agents Dev": { "status": "none", "reasoning": "No native GenAI development capabilities. Customers must integrate external LLM services." },
+        "Apps Hosting": { "status": "partial", "reasoning": "Can host applications via Kubernetes integration but not a native app development platform. Limited compared to AWS or Azure." },
+        "Open Table Storage": { "status": "full", "reasoning": "Strong Iceberg support. Cloudera is major Iceberg contributor. Open Data Lakehouse architecture embraces open formats." },
+        "Catalog & Governance": { "status": "full", "reasoning": "Shared Data Experience (SDX) provides comprehensive governance with Atlas-based cataloging, Ranger for security, lineage tracking." }
+      }
+    },
+    {
+      "id": "teradata",
+      "name": "Teradata",
+      "icon": "TD",
+      "color": "#F37440",
+      "capabilities": {
+        "AI Assistants": { "status": "partial", "reasoning": "Ask AI for natural language SQL generation. Limited AI assistance compared to modern platforms with full copilot experiences." },
+        "OLTP Databases": { "status": "none", "reasoning": "Teradata is OLAP only. Designed for analytics, not transactional workloads." },
+        "Data Platform": { "status": "partial", "reasoning": "VantageCloud provides enterprise data platform but focused on analytics. Strong warehouse heritage but limited modern data engineering." },
+        "DS/ML Platform": { "status": "partial", "reasoning": "ClearScape Analytics for in-database ML. BYOM (Bring Your Own Model) for external models. Less comprehensive than dedicated ML platforms." },
+        "GenAI/Agent Platform": { "status": "none", "reasoning": "No native GenAI platform. Ask AI features for NL queries but no LLM training or agent framework." },
+        "Data Warehouse/Lakehouse": { "status": "full", "reasoning": "Industry pioneer in enterprise data warehousing. VantageCloud Lake for lakehouse patterns. Excellent for large-scale analytics workloads." },
+        "Data Eng (Ingest, ETL, Streaming)": { "status": "partial", "reasoning": "QueryGrid for data federation. Limited native ETL—relies on partners. No native streaming—batch-focused architecture." },
+        "Orchestration": { "status": "partial", "reasoning": "Basic workflow capabilities. Enterprise customers typically use external orchestration tools like Airflow." },
+        "BI & Agentic BI": { "status": "partial", "reasoning": "No native BI tool—partners with Tableau, Power BI. Ask AI provides some agentic query capabilities." },
+        "DS/ML": { "status": "partial", "reasoning": "ClearScape Analytics provides in-database ML with R and Python. Model deployment available. Less feature-rich than dedicated ML platforms." },
+        "Gen AI & Agents Dev": { "status": "none", "reasoning": "No GenAI development platform. Limited to Ask AI for query assistance. No LLM serving or agent capabilities." },
+        "Apps Hosting": { "status": "none", "reasoning": "Not an application platform. Teradata is purely analytics infrastructure." },
+        "Open Table Storage": { "status": "none", "reasoning": "Proprietary storage format. VantageCloud Lake can query open formats but storage remains proprietary." },
+        "Catalog & Governance": { "status": "partial", "reasoning": "Data Dictionary and access controls. Less comprehensive governance than modern data platforms. QueryGrid provides some federation governance." }
+      }
+    },
+    {
+      "id": "palantir",
+      "name": "Palantir",
+      "icon": "PL",
+      "color": "#101113",
+      "capabilities": {
+        "AI Assistants": { "status": "partial", "reasoning": "AIP assistants within Foundry. Natural language interaction with data and ontology. Less broadly integrated than Microsoft or Google copilots." },
+        "OLTP Databases": { "status": "none", "reasoning": "Foundry is for analytics and operations, not transactional databases." },
+        "Data Platform": { "status": "full", "reasoning": "Foundry provides unified platform for data integration, transformation, and analysis. Strong for complex enterprise data scenarios and government contracts." },
+        "DS/ML Platform": { "status": "partial", "reasoning": "ML capabilities within Foundry for model development. Less open than MLflow-based platforms. Proprietary approach to ML lifecycle." },
+        "GenAI/Agent Platform": { "status": "full", "reasoning": "AIP (Artificial Intelligence Platform) for enterprise GenAI with LLM integration, ontology-based AI applications, and agent capabilities." },
+        "Data Warehouse/Lakehouse": { "status": "full", "reasoning": "Foundry provides warehouse-like capabilities with strong data modeling via Ontology. Good for complex analytical workloads." },
+        "Data Eng (Ingest, ETL, Streaming)": { "status": "full", "reasoning": "Strong data integration with 200+ connectors. Pipeline Builder for transformations. Real-time data sync capabilities." },
+        "Orchestration": { "status": "full", "reasoning": "Built-in workflow and pipeline orchestration in Foundry. Actions for operational workflows that integrate with external systems." },
+        "BI & Agentic BI": { "status": "partial", "reasoning": "Dashboards and reports in Foundry. Not a dedicated BI tool. AIP provides some agentic capabilities for data exploration." },
+        "DS/ML": { "status": "partial", "reasoning": "Model training and deployment in Foundry. Code Workbook for development. Less open ecosystem than Databricks." },
+        "Gen AI & Agents Dev": { "status": "full", "reasoning": "AIP provides LLM integration with enterprise grounding via Ontology. Logic for AI reasoning workflows. Strong for enterprise AI applications." },
+        "Apps Hosting": { "status": "partial", "reasoning": "Operational applications can be built in Foundry. Less flexible than dedicated PaaS for custom application development." },
+        "Open Table Storage": { "status": "none", "reasoning": "Proprietary data storage. Foundry can connect to external data but uses proprietary formats internally." },
+        "Catalog & Governance": { "status": "full", "reasoning": "Strong governance with Ontology providing semantic layer. Fine-grained access control, lineage, and audit capabilities." }
+      }
+    },
+    {
+      "id": "dbt-labs",
+      "name": "dbt Labs",
+      "icon": "dbt",
+      "color": "#FF694A",
+      "capabilities": {
+        "AI Assistants": { "status": "partial", "reasoning": "dbt Copilot for AI-assisted documentation and code generation. Limited compared to full platform assistants." },
+        "OLTP Databases": { "status": "none", "reasoning": "Not a database. dbt transforms data in existing warehouses." },
+        "Data Platform": { "status": "none", "reasoning": "dbt is transformation layer only. Requires external warehouse (Snowflake, Databricks, BigQuery). Not a complete data platform." },
+        "DS/ML Platform": { "status": "none", "reasoning": "Not an ML platform. dbt is for SQL transformations. No ML training, serving, or experiment tracking." },
+        "GenAI/Agent Platform": { "status": "none", "reasoning": "Not a GenAI platform. dbt Copilot helps write dbt code but no LLM serving or agent capabilities." },
+        "Data Warehouse/Lakehouse": { "status": "partial", "reasoning": "dbt Mesh enables semantic layer and data mesh patterns. Not a warehouse itself but enhances warehouse capabilities." },
+        "Data Eng (Ingest, ETL, Streaming)": { "status": "full", "reasoning": "Industry standard for SQL-based transformations (the T in ELT). dbt Cloud for managed execution. Strong for modeling and transformation." },
+        "Orchestration": { "status": "partial", "reasoning": "dbt Cloud has job scheduling and orchestration for dbt jobs. Limited to dbt workloads—not general-purpose orchestration." },
+        "BI & Agentic BI": { "status": "none", "reasoning": "Not a BI tool. dbt provides semantic layer that BI tools consume via Semantic Layer APIs." },
+        "DS/ML": { "status": "none", "reasoning": "Not an ML platform. dbt is purely SQL transformation. No ML capabilities." },
+        "Gen AI & Agents Dev": { "status": "none", "reasoning": "No GenAI development capabilities. dbt Copilot assists with dbt development but is not an AI platform." },
+        "Apps Hosting": { "status": "none", "reasoning": "Not an application platform. dbt is a transformation tool only." },
+        "Open Table Storage": { "status": "none", "reasoning": "Storage agnostic. dbt transforms data regardless of format. No storage capabilities." },
+        "Catalog & Governance": { "status": "none", "reasoning": "dbt provides documentation and lineage but not governance. No access control or data classification—relies on underlying platform." }
+      }
+    },
+    {
+      "id": "fivetran",
+      "name": "Fivetran",
+      "icon": "FT",
+      "color": "#0073FF",
+      "capabilities": {
+        "AI Assistants": { "status": "none", "reasoning": "No in-product AI agents. Fivetran is a pure data movement tool without AI-assisted features for users." },
+        "OLTP Databases": { "status": "none", "reasoning": "Not a database. Fivetran extracts from databases and loads to warehouses." },
+        "Data Platform": { "status": "none", "reasoning": "Fivetran is ELT tool only. Provides data ingestion but requires external warehouse for storage and transformation." },
+        "DS/ML Platform": { "status": "none", "reasoning": "Not an ML platform. Pure data movement focus. No ML capabilities whatsoever." },
+        "GenAI/Agent Platform": { "status": "none", "reasoning": "Not a GenAI platform. Focus is exclusively on data replication and ELT pipelines." },
+        "Data Warehouse/Lakehouse": { "status": "none", "reasoning": "Not a warehouse. Fivetran moves data INTO warehouses like Snowflake, BigQuery, or Databricks." },
+        "Data Eng (Ingest, ETL, Streaming)": { "status": "full", "reasoning": "Industry leader in managed ELT. 400+ pre-built connectors. Automatic schema handling and incremental updates. HVR for enterprise CDC." },
+        "Orchestration": { "status": "none", "reasoning": "No workflow orchestration. Fivetran schedules data syncs but doesn't orchestrate broader data pipelines or dependencies." },
+        "BI & Agentic BI": { "status": "none", "reasoning": "Not a BI tool. Purely data movement. No visualization or query capabilities." },
+        "DS/ML": { "status": "none", "reasoning": "Not an ML platform. Zero ML capabilities—pure data integration focus." },
+        "Gen AI & Agents Dev": { "status": "none", "reasoning": "No GenAI capabilities. Focused entirely on data replication." },
+        "Apps Hosting": { "status": "none", "reasoning": "Not an application platform. Pure data integration service." },
+        "Open Table Storage": { "status": "none", "reasoning": "Storage-agnostic. Writes to destination warehouse format. Supports Iceberg destinations but doesn't provide storage." },
+        "Catalog & Governance": { "status": "none", "reasoning": "No governance capabilities. Provides lineage for its pipelines but no data catalog or access control." }
+      }
+    },
+    {
+      "id": "starburst",
+      "name": "Starburst",
+      "icon": "SB",
+      "color": "#6929C4",
+      "capabilities": {
+        "AI Assistants": { "status": "none", "reasoning": "No AI assistants or copilot features. Traditional SQL query interface without AI-assisted capabilities." },
+        "OLTP Databases": { "status": "none", "reasoning": "Not a database. Query federation engine that queries other databases. No OLTP capabilities." },
+        "Data Platform": { "status": "none", "reasoning": "Query federation engine, not a platform. Starburst queries data in place but doesn't provide complete data platform capabilities." },
+        "DS/ML Platform": { "status": "none", "reasoning": "Not an ML platform. Pure SQL query engine. No ML training or deployment capabilities." },
+        "GenAI/Agent Platform": { "status": "none", "reasoning": "Not a GenAI platform. Query engine focus only. No LLM or agent capabilities." },
+        "Data Warehouse/Lakehouse": { "status": "full", "reasoning": "Starburst Galaxy provides lakehouse experience with Trino. Strong query federation across data sources. Warp Speed for caching." },
+        "Data Eng (Ingest, ETL, Streaming)": { "status": "none", "reasoning": "Not a data engineering tool. Can transform via SQL but not designed for ETL pipelines. No orchestration or streaming." },
+        "Orchestration": { "status": "none", "reasoning": "No workflow orchestration. Query engine only. Customers need external orchestration tools." },
+        "BI & Agentic BI": { "status": "none", "reasoning": "Not a BI tool. Query engine that BI tools connect to. No visualization or agentic capabilities." },
+        "DS/ML": { "status": "none", "reasoning": "Not an ML platform. SQL-only query engine. No ML training, serving, or experimentation." },
+        "Gen AI & Agents Dev": { "status": "none", "reasoning": "No GenAI capabilities. Pure query federation focus. No LLM integration." },
+        "Apps Hosting": { "status": "none", "reasoning": "Not an application platform. Query engine only." },
+        "Open Table Storage": { "status": "none", "reasoning": "Queries open formats (Iceberg, Delta, Hudi) but doesn't provide storage. Federation engine, not storage layer." },
+        "Catalog & Governance": { "status": "partial", "reasoning": "Built-in data catalog and access control. Governance features for federated access. Less comprehensive than dedicated governance platforms." }
+      }
+    },
+    {
+      "id": "dremio",
+      "name": "Dremio",
+      "icon": "DR",
+      "color": "#1DAD91",
+      "capabilities": {
+        "AI Assistants": { "status": "none", "reasoning": "No AI assistants or copilot features. SQL query interface without AI-assisted capabilities." },
+        "OLTP Databases": { "status": "none", "reasoning": "Not a database. Lakehouse query engine for analytics, not transactions." },
+        "Data Platform": { "status": "none", "reasoning": "Lakehouse query engine, not complete platform. Requires external storage. No data engineering, ML, or streaming capabilities." },
+        "DS/ML Platform": { "status": "none", "reasoning": "Not an ML platform. SQL analytics engine only. No ML training or deployment." },
+        "GenAI/Agent Platform": { "status": "none", "reasoning": "Not a GenAI platform. Query engine focus. No LLM capabilities." },
+        "Data Warehouse/Lakehouse": { "status": "full", "reasoning": "Strong lakehouse query engine with Apache Arrow and Iceberg-native architecture. Reflections for query acceleration. Good analytics performance." },
+        "Data Eng (Ingest, ETL, Streaming)": { "status": "none", "reasoning": "Not a data engineering tool. Can do SQL transformations but no ETL orchestration, streaming, or ingestion tools." },
+        "Orchestration": { "status": "none", "reasoning": "No workflow orchestration. Query engine only. Relies on external tools for pipeline management." },
+        "BI & Agentic BI": { "status": "partial", "reasoning": "No native BI tool but optimized for BI connectivity. Reflections accelerate BI queries. No agentic BI capabilities." },
+        "DS/ML": { "status": "none", "reasoning": "Not an ML platform. Analytics SQL engine only." },
+        "Gen AI & Agents Dev": { "status": "none", "reasoning": "No GenAI capabilities. Pure lakehouse query engine." },
+        "Apps Hosting": { "status": "none", "reasoning": "Not an application platform. Query engine only." },
+        "Open Table Storage": { "status": "full", "reasoning": "Strong Iceberg support (Dremio is major Iceberg contributor). Arctic catalog for Iceberg tables. Open format-native architecture." },
+        "Catalog & Governance": { "status": "partial", "reasoning": "Arctic provides Iceberg catalog with versioning. Access control available. Less comprehensive governance than enterprise platforms." }
+      }
+    },
+    {
+      "id": "confluent",
+      "name": "Confluent",
+      "icon": "CF",
+      "color": "#171A21",
+      "capabilities": {
+        "AI Assistants": { "status": "none", "reasoning": "No AI assistants or copilot features. Streaming platform without AI-assisted user experiences." },
+        "OLTP Databases": { "status": "none", "reasoning": "Not a database. Kafka is a distributed log, not a transactional database." },
+        "Data Platform": { "status": "none", "reasoning": "Streaming platform only, not complete data platform. Requires external storage, batch processing, and analytics capabilities." },
+        "DS/ML Platform": { "status": "none", "reasoning": "Not an ML platform. Streaming focus. No ML training or deployment capabilities." },
+        "GenAI/Agent Platform": { "status": "none", "reasoning": "Not a GenAI platform. Streaming data platform. No LLM or agent capabilities." },
+        "Data Warehouse/Lakehouse": { "status": "none", "reasoning": "Not a warehouse or lakehouse. Kafka-based streaming platform. Tableflow enables Iceberg but not a query engine." },
+        "Data Eng (Ingest, ETL, Streaming)": { "status": "full", "reasoning": "Industry leader in streaming data. Kafka, Flink SQL, connectors for integration. Strong for real-time data movement and stream processing." },
+        "Orchestration": { "status": "none", "reasoning": "No workflow orchestration. Event-driven, not orchestrated. Customers use external tools for pipeline orchestration." },
+        "BI & Agentic BI": { "status": "none", "reasoning": "Not a BI tool. Streaming platform. BI tools connect to downstream systems that consume Kafka data." },
+        "DS/ML": { "status": "none", "reasoning": "Not an ML platform. Can stream data to ML systems but no native ML capabilities." },
+        "Gen AI & Agents Dev": { "status": "none", "reasoning": "No GenAI capabilities. Streaming platform focus. Can transport data to LLM applications but no native AI." },
+        "Apps Hosting": { "status": "none", "reasoning": "Not an application platform. Streaming infrastructure. Applications run elsewhere." },
+        "Open Table Storage": { "status": "none", "reasoning": "Tableflow outputs to Iceberg but Confluent isn't storage. Streaming platform that connects to storage systems." },
+        "Catalog & Governance": { "status": "partial", "reasoning": "Schema Registry for schema management. Stream governance and lineage. Limited to streaming data, not broader data governance." }
+      }
+    }
+  ]
+}

@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Competitor Matrix - Battlecard Review</title>
+    <style>
+        :root {
+            --primary: #BD2B26;
+            --primary-dark: #9A2320;
+            --success: #00A972;
+            --warning: #F5A623;
+            --danger: #E02E1B;
+            --info: #2196F3;
+            --bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --text: #1F2937;
+            --text-secondary: #6B7280;
+            --border: #E5E7EB;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: text; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+
+        header {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+        header h1 { font-size: 24px; font-weight: 600; }
+        .breadcrumb {
+            font-size: 13px;
+            opacity: 0.9;
+            margin-top: 4px;
+        }
+        .breadcrumb a { color: white; }
+
+        /* Matrix Container */
+        .matrix-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            overflow-x: auto;
+        }
+
+        .matrix-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .matrix-header h2 {
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            background: #ccc;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .toggle-switch.active {
+            background: var(--primary);
+        }
+
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.3s;
+        }
+
+        .toggle-switch.active::after {
+            transform: translateX(20px);
+        }
+
+        .legend {
+            display: flex;
+            gap: 16px;
+            font-size: 12px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+        }
+
+        .legend-dot.full { background: var(--success); }
+        .legend-dot.partial { background: var(--warning); }
+        .legend-dot.none { background: var(--border); }
+
+        /* Loading state */
+        .matrix-loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 400px;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Matrix Grid */
+        .matrix-grid {
+            display: grid;
+            gap: 2px;
+            min-width: 1200px;
+        }
+
+        /* Column headers - Platform categories */
+        .column-headers {
+            display: contents;
+        }
+
+        .platform-header {
+            background: linear-gradient(135deg, #1e3a5f, #2d5a87);
+            color: white;
+            padding: 10px 8px;
+            text-align: center;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            border-radius: 6px 6px 0 0;
+        }
+
+        .solution-header {
+            background: #f1f5f9;
+            color: var(--text);
+            padding: 8px 6px;
+            text-align: center;
+            font-size: 10px;
+            font-weight: 500;
+            border-bottom: 2px solid var(--border);
+            min-width: 90px;
+            cursor: help;
+            position: relative;
+        }
+
+        .solution-header:hover {
+            background: #e2e8f0;
+        }
+
+        .solution-header.priority {
+            background: linear-gradient(135deg, #fef3c7, #fde68a);
+            border-bottom: 2px solid #f59e0b;
+        }
+
+        .solution-header.priority::before {
+            content: '★';
+            color: #f59e0b;
+            font-size: 12px;
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .header-tooltip {
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1e293b;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 400;
+            white-space: normal;
+            width: 200px;
+            text-align: left;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s, visibility 0.2s;
+            z-index: 100;
+            pointer-events: none;
+            line-height: 1.4;
+        }
+
+        .header-tooltip::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 6px solid transparent;
+            border-top-color: #1e293b;
+        }
+
+        .solution-header:hover .header-tooltip {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .corner-cell {
+            background: transparent;
+        }
+
+        /* Company rows */
+        .company-row {
+            display: contents;
+        }
+
+        .company-cell {
+            background: var(--card-bg);
+            padding: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .company-cell:hover {
+            background: #f8fafc;
+        }
+
+        .company-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+            color: white;
+            flex-shrink: 0;
+        }
+
+        .company-name {
+            font-size: 13px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        /* Expandable company */
+        .company-cell.has-subplatforms {
+            position: relative;
+        }
+
+        .company-cell.has-subplatforms::after {
+            content: '▼';
+            font-size: 8px;
+            color: var(--text-secondary);
+            margin-left: auto;
+            transition: transform 0.2s;
+        }
+
+        .company-cell.has-subplatforms.expanded::after {
+            transform: rotate(180deg);
+        }
+
+        .subplatform-row {
+            display: none;
+        }
+
+        .subplatform-row.visible {
+            display: contents;
+        }
+
+        .subplatform-cell {
+            background: #f8fafc;
+            padding: 8px 12px 8px 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+        }
+
+        .subplatform-cell:hover {
+            background: #f1f5f9;
+        }
+
+        .subplatform-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 9px;
+            font-weight: 600;
+            color: white;
+            flex-shrink: 0;
+        }
+
+        .subplatform-name {
+            font-size: 12px;
+            font-weight: 400;
+            color: var(--text-secondary);
+        }
+
+        .subplatform-cell .capability-placeholder {
+            background: #f1f5f9;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* Capability cells */
+        .capability-cell {
+            background: var(--card-bg);
+            padding: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-bottom: 1px solid var(--border);
+            cursor: help;
+            transition: background 0.2s, transform 0.1s;
+        }
+
+        .capability-cell:hover {
+            background: #f8fafc;
+            transform: scale(1.05);
+            z-index: 1;
+        }
+
+        .capability-indicator {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .capability-indicator.full {
+            background: rgba(0, 169, 114, 0.15);
+            color: var(--success);
+        }
+
+        .capability-indicator.partial {
+            background: rgba(245, 166, 35, 0.15);
+            color: var(--warning);
+        }
+
+        .capability-indicator.none {
+            background: rgba(229, 231, 235, 0.5);
+            color: #9CA3AF;
+        }
+
+        /* Platform separator */
+        .platform-separator {
+            border-left: 3px solid var(--primary);
+        }
+
+        /* Priority cells */
+        .priority-cell {
+            background: rgba(254, 243, 199, 0.3);
+        }
+
+        .priority-cell:hover {
+            background: rgba(254, 243, 199, 0.5);
+        }
+
+        /* Priority header styling */
+        .priority-header {
+            background: linear-gradient(135deg, #f59e0b, #d97706) !important;
+        }
+
+        /* Inherited (subplatform) capability cells */
+        .capability-cell.inherited {
+            background: #f8fafc;
+        }
+
+        .capability-cell.inherited .capability-indicator {
+            opacity: 0.6;
+        }
+
+        .capability-cell.inherited:hover {
+            background: #f1f5f9;
+        }
+
+        /* Hover Panel */
+        .hover-panel {
+            position: fixed;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05);
+            padding: 16px;
+            width: 320px;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s, visibility 0.2s;
+            pointer-events: none;
+        }
+
+        .hover-panel.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .hover-panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .hover-panel-company {
+            font-weight: 600;
+            font-size: 14px;
+            color: var(--text);
+        }
+
+        .hover-panel-capability {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+
+        .hover-panel-status {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .hover-panel-status.full {
+            background: rgba(0, 169, 114, 0.15);
+            color: var(--success);
+        }
+
+        .hover-panel-status.partial {
+            background: rgba(245, 166, 35, 0.15);
+            color: var(--warning);
+        }
+
+        .hover-panel-status.none {
+            background: rgba(229, 231, 235, 0.5);
+            color: #9CA3AF;
+        }
+
+        .hover-panel-reasoning {
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--text);
+        }
+
+        /* Modal styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s, visibility 0.3s;
+        }
+
+        .modal-overlay.open {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .modal {
+            background: white;
+            border-radius: 16px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 85vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transform: scale(0.9);
+            transition: transform 0.3s;
+        }
+
+        .modal-overlay.open .modal {
+            transform: scale(1);
+        }
+
+        .modal-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text-secondary);
+            padding: 4px;
+            line-height: 1;
+        }
+
+        .modal-close:hover {
+            color: var(--text);
+        }
+
+        .modal-body {
+            padding: 24px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        /* Loading */
+        .loading-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 20px;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        .loading-text {
+            margin-top: 16px;
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+
+        /* Stats bar */
+        .stats-bar {
+            display: flex;
+            gap: 24px;
+            padding: 12px 16px;
+            background: #f8fafc;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 12px;
+        }
+
+        .stat-item {
+            display: flex;
+            gap: 6px;
+        }
+
+        .stat-item span:first-child {
+            color: var(--text-secondary);
+        }
+
+        .stat-item .value {
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .stat-item.duration .value {
+            color: var(--success);
+        }
+
+        /* Response section */
+        .response-section {
+            margin-bottom: 20px;
+        }
+
+        .response-section-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .streaming-indicator {
+            color: var(--success);
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .prompt-box {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 16px;
+            border-radius: 8px;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .response-content {
+            background: #fafafa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-size: 14px;
+            line-height: 1.7;
+        }
+
+        .response-content h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-top: 20px;
+            margin-bottom: 8px;
+            color: var(--text);
+        }
+
+        .response-content h2:first-child {
+            margin-top: 0;
+        }
+
+        .response-content p {
+            margin-bottom: 12px;
+        }
+
+        .response-content ul, .response-content ol {
+            margin-left: 20px;
+            margin-bottom: 12px;
+        }
+
+        .response-content li {
+            margin-bottom: 4px;
+        }
+
+        .response-content strong {
+            font-weight: 600;
+        }
+
+        .cursor {
+            animation: blink 1s infinite;
+            color: var(--primary);
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        /* Error state */
+        .error-container {
+            background: #FEF2F2;
+            border: 1px solid #FECACA;
+            border-radius: 8px;
+            padding: 20px;
+        }
+
+        .error-title {
+            color: #DC2626;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .error-message {
+            color: #7F1D1D;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Competitor Capability Matrix</h1>
+        <div class="breadcrumb">
+            <a href="/">Dashboard</a> / Competitor Matrix
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="matrix-card">
+            <div class="matrix-header">
+                <h2>
+                    <span>Data & AI Platform Capabilities</span>
+                </h2>
+                <div class="header-controls">
+                    <div class="toggle-container">
+                        <span>Show Sub-platforms</span>
+                        <div class="toggle-switch" id="subplatformToggle" onclick="toggleSubplatforms()"></div>
+                    </div>
+                    <div class="legend">
+                        <div class="legend-item">
+                            <div class="legend-dot full"></div>
+                            <span>Full Capability</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-dot partial"></div>
+                            <span>Partial/Limited</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-dot none"></div>
+                            <span>Not Offered</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="matrixContainer">
+                <div class="matrix-loading">
+                    <div class="loading-spinner"></div>
+                    <span>Loading competitor data...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hover Panel -->
+    <div class="hover-panel" id="hoverPanel">
+        <div class="hover-panel-header">
+            <div>
+                <div class="hover-panel-company" id="hoverCompany"></div>
+                <div class="hover-panel-capability" id="hoverCapability"></div>
+            </div>
+            <div class="hover-panel-status" id="hoverStatus"></div>
+        </div>
+        <div class="hover-panel-reasoning" id="hoverReasoning"></div>
+    </div>
+
+    <!-- Competitor Modal -->
+    <div class="modal-overlay" id="competitorModal" onclick="closeModal()">
+        <div class="modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 id="modalTitle">Competitor Overview</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <!-- Content loaded dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let competitorData = null;
+        let showSubplatforms = false;
+        let currentCompetitor = null;
+        const hoverPanel = document.getElementById('hoverPanel');
+        let hoverTimeout = null;
+
+        // Load data on page load
+        document.addEventListener('DOMContentLoaded', loadCompetitorData);
+
+        async function loadCompetitorData() {
+            try {
+                const response = await fetch('/static/data/competitors.json');
+                competitorData = await response.json();
+                renderMatrix();
+            } catch (error) {
+                document.getElementById('matrixContainer').innerHTML = `
+                    <div class="error-container">
+                        <div class="error-title">Error Loading Data</div>
+                        <div class="error-message">${error.message}</div>
+                    </div>
+                `;
+            }
+        }
+
+        function toggleSubplatforms() {
+            showSubplatforms = !showSubplatforms;
+            document.getElementById('subplatformToggle').classList.toggle('active', showSubplatforms);
+
+            // Toggle visibility of subplatform rows
+            document.querySelectorAll('.subplatform-row').forEach(row => {
+                row.classList.toggle('visible', showSubplatforms);
+            });
+
+            // Toggle expanded state of parent company cells
+            document.querySelectorAll('.company-cell.has-subplatforms').forEach(cell => {
+                cell.classList.toggle('expanded', showSubplatforms);
+            });
+        }
+
+        function renderMatrix() {
+            if (!competitorData) return;
+
+            const { categories, competitors } = competitorData;
+            const priorityCount = categories.priorities ? categories.priorities.length : 0;
+            const platformCount = categories.platforms.length;
+            const pointSolutionCount = categories.point_solutions.length;
+            const totalColumns = 1 + priorityCount + platformCount + pointSolutionCount;
+
+            // Extract names and descriptions
+            const priorityNames = categories.priorities ? categories.priorities.map(p => typeof p === 'object' ? p.name : p) : [];
+            const priorityDescs = categories.priorities ? categories.priorities.map(p => typeof p === 'object' ? p.description : '') : [];
+            const platformNames = categories.platforms.map(p => typeof p === 'object' ? p.name : p);
+            const platformDescs = categories.platforms.map(p => typeof p === 'object' ? p.description : '');
+            const pointSolutionNames = categories.point_solutions.map(p => typeof p === 'object' ? p.name : p);
+            const pointSolutionDescs = categories.point_solutions.map(p => typeof p === 'object' ? p.description : '');
+
+            let html = `
+                <div class="matrix-grid" style="grid-template-columns: 180px repeat(${priorityCount}, 1fr) repeat(${platformCount}, 1fr) repeat(${pointSolutionCount}, 1fr);">
+                    <!-- Category Headers -->
+                    <div class="platform-header corner-cell"></div>
+                    ${priorityCount > 0 ? `<div class="platform-header priority-header" style="grid-column: span ${priorityCount};">★ Priorities</div>` : ''}
+                    <div class="platform-header" style="grid-column: span ${platformCount};">Platforms</div>
+                    <div class="platform-header" style="grid-column: span ${pointSolutionCount};">Product Categories</div>
+
+                    <!-- Solution Headers -->
+                    <div class="solution-header corner-cell"></div>
+            `;
+
+            // Priority headers with star
+            priorityNames.forEach((name, idx) => {
+                const desc = priorityDescs[idx] || '';
+                html += `<div class="solution-header priority">${name}${desc ? `<span class="header-tooltip">${desc}</span>` : ''}</div>`;
+            });
+
+            // Platform headers
+            platformNames.forEach((name, idx) => {
+                const desc = platformDescs[idx] || '';
+                html += `<div class="solution-header">${name}${desc ? `<span class="header-tooltip">${desc}</span>` : ''}</div>`;
+            });
+
+            // Product category headers (first one has separator)
+            pointSolutionNames.forEach((name, idx) => {
+                const separatorClass = idx === 0 ? ' platform-separator' : '';
+                const desc = pointSolutionDescs[idx] || '';
+                html += `<div class="solution-header${separatorClass}">${name}${desc ? `<span class="header-tooltip">${desc}</span>` : ''}</div>`;
+            });
+
+            // Render each competitor
+            competitors.forEach(competitor => {
+                html += renderCompetitorRow(competitor, categories, priorityNames, platformNames, pointSolutionNames);
+            });
+
+            html += '</div>';
+            document.getElementById('matrixContainer').innerHTML = html;
+
+            // Attach hover event listeners
+            attachHoverListeners();
+        }
+
+        function renderCompetitorRow(competitor, categories, priorityNames, platformNames, pointSolutionNames) {
+            const hasSubplatforms = competitor.hasSubPlatforms && competitor.subPlatforms;
+            const subplatformClass = hasSubplatforms ? ' has-subplatforms' : '';
+
+            let html = `
+                <!-- ${competitor.name} -->
+                <div class="company-row">
+                    <div class="company-cell${subplatformClass}" onclick="openCompetitorModal('${competitor.id}', '${competitor.name}')">
+                        <div class="company-icon" style="background: ${competitor.color};">${competitor.icon}</div>
+                        <div class="company-name">${competitor.name}</div>
+                    </div>
+            `;
+
+            // Priority capabilities
+            priorityNames.forEach(name => {
+                const cap = competitor.capabilities[name] || { status: 'none', reasoning: 'No data available' };
+                html += renderCapabilityCell(competitor.name, name, cap, false, true);
+            });
+
+            // Platform capabilities
+            platformNames.forEach(name => {
+                const cap = competitor.capabilities[name] || { status: 'none', reasoning: 'No data available' };
+                html += renderCapabilityCell(competitor.name, name, cap, false, false);
+            });
+
+            // Product category capabilities
+            pointSolutionNames.forEach((name, idx) => {
+                const cap = competitor.capabilities[name] || { status: 'none', reasoning: 'No data available' };
+                const isSeparator = idx === 0;
+                html += renderCapabilityCell(competitor.name, name, cap, isSeparator, false);
+            });
+
+            html += '</div>';
+
+            // Render subplatforms if they exist - inherit parent capabilities
+            if (hasSubplatforms) {
+                competitor.subPlatforms.forEach(subplatform => {
+                    html += `
+                        <div class="subplatform-row">
+                            <div class="subplatform-cell" onclick="openCompetitorModal('${subplatform.id}', '${subplatform.name}')">
+                                <div class="subplatform-icon" style="background: ${competitor.color}; opacity: 0.7;">↳</div>
+                                <div class="subplatform-name">${subplatform.name}</div>
+                            </div>
+                    `;
+
+                    // Subplatforms inherit parent capabilities with lighter styling
+                    priorityNames.forEach(name => {
+                        const cap = competitor.capabilities[name] || { status: 'none', reasoning: 'Inherited from parent' };
+                        html += renderCapabilityCell(subplatform.name, name, cap, false, true, true);
+                    });
+
+                    platformNames.forEach(name => {
+                        const cap = competitor.capabilities[name] || { status: 'none', reasoning: 'Inherited from parent' };
+                        html += renderCapabilityCell(subplatform.name, name, cap, false, false, true);
+                    });
+
+                    pointSolutionNames.forEach((name, idx) => {
+                        const cap = competitor.capabilities[name] || { status: 'none', reasoning: 'Inherited from parent' };
+                        const isSeparator = idx === 0;
+                        html += renderCapabilityCell(subplatform.name, name, cap, isSeparator, false, true);
+                    });
+
+                    html += '</div>';
+                });
+            }
+
+            return html;
+        }
+
+        function renderCapabilityCell(company, capability, cap, isSeparator, isPriority = false, isInherited = false) {
+            const separatorClass = isSeparator ? ' platform-separator' : '';
+            const priorityClass = isPriority ? ' priority-cell' : '';
+            const inheritedClass = isInherited ? ' inherited' : '';
+            const indicator = cap.status === 'full' ? '&#10003;' : cap.status === 'partial' ? '~' : '-';
+
+            return `
+                <div class="capability-cell${separatorClass}${priorityClass}${inheritedClass}"
+                     data-company="${company}"
+                     data-capability="${capability}"
+                     data-status="${cap.status}"
+                     data-reasoning="${escapeHtml(cap.reasoning)}">
+                    <div class="capability-indicator ${cap.status}">${indicator}</div>
+                </div>
+            `;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML.replace(/"/g, '&quot;');
+        }
+
+        function attachHoverListeners() {
+            document.querySelectorAll('.capability-cell[data-reasoning]').forEach(cell => {
+                cell.addEventListener('mouseenter', function(e) {
+                    clearTimeout(hoverTimeout);
+
+                    const company = this.dataset.company;
+                    const capability = this.dataset.capability;
+                    const status = this.dataset.status;
+                    const reasoning = this.dataset.reasoning;
+
+                    document.getElementById('hoverCompany').textContent = company;
+                    document.getElementById('hoverCapability').textContent = capability;
+                    document.getElementById('hoverReasoning').textContent = reasoning;
+
+                    const statusEl = document.getElementById('hoverStatus');
+                    statusEl.className = 'hover-panel-status ' + status;
+                    if (status === 'full') {
+                        statusEl.innerHTML = '&#10003; Full';
+                    } else if (status === 'partial') {
+                        statusEl.innerHTML = '~ Partial';
+                    } else {
+                        statusEl.innerHTML = '- None';
+                    }
+
+                    // Position the panel
+                    const rect = this.getBoundingClientRect();
+                    const panelWidth = 320;
+                    const panelHeight = hoverPanel.offsetHeight || 150;
+
+                    let left = rect.right + 10;
+                    let top = rect.top;
+
+                    // Check if panel would go off-screen to the right
+                    if (left + panelWidth > window.innerWidth) {
+                        left = rect.left - panelWidth - 10;
+                    }
+
+                    // Check if panel would go off-screen at bottom
+                    if (top + panelHeight > window.innerHeight) {
+                        top = window.innerHeight - panelHeight - 10;
+                    }
+
+                    // Ensure panel doesn't go above viewport
+                    if (top < 10) {
+                        top = 10;
+                    }
+
+                    hoverPanel.style.left = left + 'px';
+                    hoverPanel.style.top = top + 'px';
+                    hoverPanel.classList.add('visible');
+                });
+
+                cell.addEventListener('mouseleave', function() {
+                    hoverTimeout = setTimeout(() => {
+                        hoverPanel.classList.remove('visible');
+                    }, 100);
+                });
+            });
+        }
+
+        function openCompetitorModal(competitorId, competitorName) {
+            currentCompetitor = { id: competitorId, name: competitorName };
+            document.getElementById('modalTitle').textContent = competitorName;
+            document.getElementById('competitorModal').classList.add('open');
+
+            // Show loading state
+            document.getElementById('modalBody').innerHTML = `
+                <div class="loading-container">
+                    <div class="spinner"></div>
+                    <div class="loading-text">Generating overview for ${competitorName}...</div>
+                </div>
+            `;
+
+            // Call the API
+            generateDescription(competitorId, competitorName);
+        }
+
+        function closeModal() {
+            document.getElementById('competitorModal').classList.remove('open');
+            currentCompetitor = null;
+        }
+
+        async function generateDescription(competitorId, competitorName) {
+            let prompt = '';
+            let responseText = '';
+
+            try {
+                const response = await fetch('/api/generate-competitor-description', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        competitor_id: competitorId,
+                        competitor_name: competitorName
+                    })
+                });
+
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('text/event-stream')) {
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+
+                    showStreamingUI();
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        const text = decoder.decode(value);
+                        const lines = text.split('\n');
+
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                try {
+                                    const data = JSON.parse(line.slice(6));
+
+                                    if (data.type === 'prompt') {
+                                        prompt = data.content;
+                                        updatePromptBox(prompt);
+                                    } else if (data.type === 'chunk') {
+                                        responseText += data.content;
+                                        updateResponseContent(responseText);
+                                    } else if (data.type === 'done') {
+                                        updateStats(data.model, data.duration_ms);
+                                    } else if (data.type === 'error') {
+                                        showError(data.content, prompt);
+                                        return;
+                                    }
+                                } catch (e) {}
+                            }
+                        }
+                    }
+                } else {
+                    const data = await response.json();
+                    if (data.error) {
+                        showError(data.error, data.prompt);
+                    }
+                }
+            } catch (error) {
+                showError(error.message, prompt);
+            }
+        }
+
+        function showStreamingUI() {
+            document.getElementById('modalBody').innerHTML = `
+                <div class="stats-bar" id="statsBar">
+                    <div class="stat-item">
+                        <span>Model:</span>
+                        <span class="value" id="modelName">databricks-claude-haiku-4-5</span>
+                    </div>
+                    <div class="stat-item duration">
+                        <span>Duration:</span>
+                        <span class="value" id="durationMs">streaming...</span>
+                    </div>
+                </div>
+
+                <div class="response-section">
+                    <div class="response-section-title">
+                        <span>Prompt Sent</span>
+                    </div>
+                    <div class="prompt-box" id="promptBox">Loading prompt...</div>
+                </div>
+
+                <div class="response-section">
+                    <div class="response-section-title">
+                        <span>Response</span>
+                        <span class="streaming-indicator" id="streamingIndicator">● streaming</span>
+                    </div>
+                    <div class="response-content" id="responseContent">
+                        <span class="cursor">▊</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        function updatePromptBox(prompt) {
+            document.getElementById('promptBox').textContent = prompt;
+        }
+
+        function updateResponseContent(text) {
+            const el = document.getElementById('responseContent');
+            el.innerHTML = renderMarkdown(text) + '<span class="cursor">▊</span>';
+            el.scrollTop = el.scrollHeight;
+        }
+
+        function updateStats(model, durationMs) {
+            document.getElementById('modelName').textContent = model;
+            document.getElementById('durationMs').textContent = durationMs + 'ms';
+            const indicator = document.getElementById('streamingIndicator');
+            if (indicator) indicator.remove();
+            const cursorEl = document.querySelector('.response-content .cursor');
+            if (cursorEl) cursorEl.remove();
+        }
+
+        function showError(message, prompt) {
+            document.getElementById('modalBody').innerHTML = `
+                <div class="error-container">
+                    <div class="error-title">Error</div>
+                    <div class="error-message">${message}</div>
+                </div>
+                ${prompt ? `
+                    <div class="response-section" style="margin-top: 20px;">
+                        <div class="response-section-title">Prompt Sent</div>
+                        <div class="prompt-box">${prompt}</div>
+                    </div>
+                ` : ''}
+            `;
+        }
+
+        function renderMarkdown(text) {
+            return text
+                .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+                .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                .replace(/^\- (.*$)/gim, '<li>$1</li>')
+                .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+                .replace(/\n\n/g, '</p><p>')
+                .replace(/^(?!<[hul])/gm, '<p>')
+                .replace(/(?<![>])$/gm, '</p>')
+                .replace(/<p><\/p>/g, '')
+                .replace(/<p>(<[hul])/g, '$1')
+                .replace(/(<\/[hul].*>)<\/p>/g, '$1');
+        }
+
+        // Close modal on escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && document.getElementById('competitorModal').classList.contains('open')) {
+                closeModal();
+            }
+        });
+    </script>
+</body>
+</html>

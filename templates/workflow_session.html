@@ -1,0 +1,3410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workflow: {{ session.competitor_name }} - Battlecard Generation</title>
+    <style>
+        :root {
+            --primary: #FF3621;
+            --primary-dark: #E02E1B;
+            --success: #00A972;
+            --warning: #F5A623;
+            --info: #2196F3;
+            --bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --text: #1F2937;
+            --text-secondary: #6B7280;
+            --border: #E5E7EB;
+            --teal: #2d5a5a;
+            --human: #7C3AED;
+            --agent: #2563EB;
+            --app: #059669;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+        .header {
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+        }
+        .header-content {
+            max-width: 100%;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header-title { font-size: 20px; font-weight: 700; }
+        .back-link {
+            color: var(--teal);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .back-link:hover { text-decoration: underline; }
+        .session-meta {
+            display: flex;
+            gap: 16px;
+            margin-top: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .session-meta strong { color: var(--text); }
+        /* 2-column layout */
+        .split-layout {
+            display: flex;
+            height: calc(100vh - 60px);  /* full height minus header */
+            overflow: hidden;
+        }
+        .panel-left {
+            flex: 1 1 50%;
+            min-width: 360px;
+            overflow-y: auto;
+            border-right: 1px solid var(--border);
+        }
+        .panel-right {
+            flex: 1 1 50%;
+            min-width: 320px;
+            overflow-y: auto;
+            background: #F9FAFB;
+        }
+        .panel-left .container {
+            max-width: 800px;
+            margin: 24px auto;
+            padding: 0 24px;
+        }
+        .panel-right .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px 24px;
+        }
+
+        /* Resize handle between panels */
+        .resize-handle {
+            width: 6px;
+            cursor: col-resize;
+            background: var(--border);
+            flex-shrink: 0;
+            position: relative;
+            z-index: 50;
+            transition: background 0.15s;
+        }
+        .resize-handle:hover,
+        .resize-handle.active {
+            background: var(--teal);
+        }
+        .resize-handle::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 1px;
+            width: 4px;
+            height: 32px;
+            transform: translateY(-50%);
+            border-radius: 2px;
+            background: rgba(0,0,0,0.15);
+        }
+        .resize-handle:hover::after,
+        .resize-handle.active::after {
+            background: rgba(255,255,255,0.4);
+        }
+
+        /* Battlecard preview panel (right side) */
+        .battlecard-preview-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+        .battlecard-preview-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text);
+        }
+        .battlecard-preview-subtitle {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        .battlecard-preview-empty {
+            text-align: center;
+            padding: 60px 24px;
+            color: var(--text-secondary);
+        }
+        .battlecard-preview-empty-icon {
+            font-size: 48px;
+            opacity: 0.3;
+            margin-bottom: 12px;
+        }
+        .battlecard-preview-empty-text {
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .battlecard-preview-empty-hint {
+            font-size: 12px;
+            margin-top: 6px;
+            opacity: 0.7;
+        }
+
+        /* Battlecard sections */
+        .bc-section {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 12px;
+            overflow: hidden;
+        }
+        .bc-section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px;
+            background: #F3F4F6;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            user-select: none;
+        }
+        .bc-section-header:hover { background: #EBEDF0; }
+        .bc-section-title {
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+        }
+        .bc-section-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+        .bc-section-badge.pending { background: #F3F4F6; color: #6B7280; }
+        .bc-section-badge.ready { background: #DBEAFE; color: #1E40AF; }
+        .bc-section-badge.done { background: #D1FAE5; color: #065F46; }
+        .bc-section-body {
+            padding: 14px;
+        }
+        .bc-section-body.collapsed { display: none; }
+
+        /* Diff card in battlecard preview */
+        .bc-diff-item {
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 8px;
+            overflow: hidden;
+        }
+        .bc-diff-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: #FAFBFC;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+        }
+        .bc-diff-category {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            background: #E5E7EB;
+            padding: 1px 6px;
+            border-radius: 3px;
+        }
+        .bc-diff-ratings {
+            margin-left: auto;
+            display: flex;
+            gap: 4px;
+        }
+        .bc-diff-body {
+            padding: 10px 12px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            font-size: 12px;
+        }
+        .bc-vendor-col {
+            padding: 8px;
+            border-radius: 6px;
+        }
+        .bc-vendor-col.databricks { background: #F0F9FF; border: 1px solid #BFDBFE; }
+        .bc-vendor-col.competitor { background: #FFF7ED; border: 1px solid #FED7AA; }
+        .bc-vendor-col-label {
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+        .bc-vendor-col.databricks .bc-vendor-col-label { color: #1E40AF; }
+        .bc-vendor-col.competitor .bc-vendor-col-label { color: #9A3412; }
+        .bc-vendor-headline {
+            font-weight: 600;
+            font-size: 12px;
+            margin-bottom: 3px;
+        }
+        .bc-vendor-details {
+            font-size: 11px;
+            color: #555;
+            line-height: 1.4;
+        }
+
+        /* Step cards */
+        .workflow {
+            position: relative;
+        }
+        .workflow-step {
+            position: relative;
+            padding-left: 48px;
+            padding-bottom: 0;
+            margin-bottom: 0;
+        }
+        .workflow-step::before {
+            content: '';
+            position: absolute;
+            left: 19px;
+            top: 40px;
+            bottom: -1px;
+            width: 2px;
+            background: var(--border);
+        }
+        .workflow-step:last-child::before { display: none; }
+        .step-number {
+            position: absolute;
+            left: 4px;
+            top: 4px;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 700;
+            color: #fff;
+            z-index: 1;
+        }
+        .step-number.pending { background: #9CA3AF; }
+        .step-number.ready { background: var(--info); }
+        .step-number.in_progress { background: var(--agent); }
+        .step-number.waiting_human { background: var(--human); }
+        .step-number.completed { background: var(--success); }
+        .step-number.failed { background: var(--primary); }
+        .step-number.skipped { background: #9CA3AF; }
+
+        .step-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px 24px;
+            margin-bottom: 16px;
+            transition: border-color 0.2s;
+        }
+        .step-card.active {
+            border-color: var(--info);
+            box-shadow: 0 0 0 1px var(--info);
+        }
+        .step-card.completed {
+            border-color: var(--success);
+        }
+        .step-card.failed {
+            border-color: var(--primary);
+        }
+
+        .step-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .step-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text);
+        }
+        .step-status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 20px;
+        }
+        .step-status-badge.pending { background: #F3F4F6; color: #6B7280; }
+        .step-status-badge.ready { background: #DBEAFE; color: #1E40AF; }
+        .step-status-badge.in_progress { background: #DBEAFE; color: #1E40AF; }
+        .step-status-badge.waiting_human { background: #F5F3FF; color: #6D28D9; }
+        .step-status-badge.completed { background: #D1FAE5; color: #065F46; }
+        .step-status-badge.failed { background: #FEE2E2; color: #991B1B; }
+        .step-status-badge.skipped { background: #F3F4F6; color: #6B7280; }
+
+        .step-status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+        .step-status-badge.pending .step-status-dot { background: #9CA3AF; }
+        .step-status-badge.ready .step-status-dot { background: #2563EB; }
+        .step-status-badge.in_progress .step-status-dot { background: #2563EB; animation: pulse 1.5s infinite; }
+        .step-status-badge.waiting_human .step-status-dot { background: #7C3AED; }
+        .step-status-badge.completed .step-status-dot { background: #059669; }
+        .step-status-badge.failed .step-status-dot { background: #DC2626; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        .step-body { margin-top: 12px; }
+
+        /* Progress bar */
+        .progress-container {
+            margin: 12px 0;
+            position: relative;
+        }
+        .progress-bar-bg {
+            height: 8px;
+            background: #E5E7EB;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: var(--info);
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+        .progress-text {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 6px;
+            font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+            line-height: 1.4;
+        }
+        .progress-pct {
+            position: absolute;
+            top: -2px;
+            right: 0;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--info);
+        }
+        .error-details-list {
+            margin: 8px 0;
+            font-size: 12px;
+        }
+        .error-details-list details {
+            background: #FFF7ED;
+            border: 1px solid #FDBA74;
+            border-radius: 6px;
+            padding: 8px 12px;
+        }
+        .error-details-list summary {
+            cursor: pointer;
+            font-weight: 600;
+            color: #9A3412;
+        }
+        .error-details-list ul {
+            margin: 6px 0 0 16px;
+            color: #9A3412;
+        }
+        .error-details-list li {
+            margin: 4px 0;
+        }
+
+        /* Fact Check Styles */
+        .fc-summary-bar { display: flex; gap: 16px; padding: 12px; border-radius: 8px; background: var(--bg); }
+        .fc-stat { text-align: center; }
+        .fc-count { font-size: 20px; font-weight: 700; }
+        .fc-label { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+        .fc-stat.verified .fc-count { color: #4CAF50; }
+        .fc-stat.unverified .fc-count { color: #FF9800; }
+        .fc-stat.disputed .fc-count { color: #F44336; }
+        .fc-stat.outdated .fc-count { color: #2196F3; }
+        .fc-verdict-badge { padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; display: inline-block; }
+        .fc-verdict-badge.verified { background: #E8F5E9; color: #2E7D32; }
+        .fc-verdict-badge.unverified { background: #FFF3E0; color: #E65100; }
+        .fc-verdict-badge.disputed { background: #FFEBEE; color: #C62828; }
+        .fc-verdict-badge.outdated { background: #E3F2FD; color: #1565C0; }
+        .fc-verdict-badge.pending { background: #F3F4F6; color: #6B7280; }
+        .fc-vendor-badge { padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+        .fc-vendor-badge.databricks { background: #FFF1F0; color: #FF3621; }
+        .fc-vendor-badge.competitor { background: #EEF2FF; color: #4338CA; }
+        .fc-verdict-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .fc-verdict-table th { background: var(--bg); padding: 6px 8px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--border); font-size: 11px; text-transform: uppercase; color: var(--text-secondary); }
+        .fc-verdict-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+        .fc-verdict-table tr:hover { background: #F9FAFB; }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            background: var(--card-bg);
+            color: var(--text);
+        }
+        .btn:hover { border-color: var(--teal); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary {
+            background: var(--teal);
+            color: #fff;
+            border-color: var(--teal);
+        }
+        .btn-primary:hover { background: #1e4444; }
+        .btn-sm { padding: 5px 12px; font-size: 12px; }
+        .btn-danger {
+            border-color: #FCA5A5;
+            color: #DC2626;
+        }
+        .btn-danger:hover { background: #FEF2F2; }
+        .btn-success {
+            background: var(--success);
+            color: #fff;
+            border-color: var(--success);
+        }
+        .btn-success:hover { background: #00895c; }
+
+        .btn-group { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+        /* File upload */
+        .file-upload {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s;
+            margin: 10px 0;
+        }
+        .file-upload:hover { border-color: var(--teal); }
+        .file-upload input { display: none; }
+        .file-upload-text {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        /* Category selection */
+        .category-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 8px;
+            margin: 12px 0;
+        }
+        .category-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .category-checkbox:hover { border-color: var(--teal); background: #f0fafa; }
+        .category-checkbox input { accent-color: var(--teal); }
+        .category-checkbox.selected {
+            border-color: var(--teal);
+            background: #f0fafa;
+        }
+
+        /* Artifact preview */
+        .artifact-panel {
+            background: #F9FAFB;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px;
+            margin: 10px 0;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .artifact-panel pre {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .artifact-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .artifact-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .artifact-badge {
+            font-size: 10px;
+            padding: 2px 6px;
+            background: #E0E7FF;
+            color: #3730A3;
+            border-radius: 3px;
+            font-weight: 600;
+        }
+
+        /* Feedback textarea */
+        .feedback-area {
+            width: 100%;
+            min-height: 80px;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+            font-family: inherit;
+            resize: vertical;
+            margin: 8px 0;
+        }
+        .feedback-area:focus {
+            outline: none;
+            border-color: var(--teal);
+        }
+
+        /* Error message */
+        .error-banner {
+            background: #FEF2F2;
+            border: 1px solid #FCA5A5;
+            border-radius: 6px;
+            padding: 10px 14px;
+            color: #991B1B;
+            font-size: 13px;
+            margin: 10px 0;
+        }
+
+        /* Skeleton table */
+        .skeleton-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin: 10px 0;
+        }
+        .skeleton-table th {
+            background: #F3F4F6;
+            padding: 8px 10px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border);
+        }
+        .skeleton-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+        .skeleton-table tr:hover td {
+            background: #F9FAFB;
+        }
+        .rating-badge {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+        .rating-badge.advantage { background: #D1FAE5; color: #065F46; }
+        .rating-badge.strong_advantage { background: #D1FAE5; color: #065F46; }
+        .rating-badge.partial { background: #FEF3C7; color: #92400E; }
+        .rating-badge.disadvantage { background: #FEE2E2; color: #991B1B; }
+        .rating-badge.positive { background: #D1FAE5; color: #065F46; }
+        .rating-badge.neutral { background: #FEF3C7; color: #92400E; }
+        .rating-badge.negative { background: #FEE2E2; color: #991B1B; }
+
+        /* Diff review cards */
+        .diff-review-list { margin: 10px 0; }
+        .diff-card {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 10px;
+            overflow: hidden;
+            transition: border-color 0.15s;
+        }
+        .diff-card:hover { border-color: #c4c9cf; }
+        .diff-card.feedback-approved { border-left: 3px solid var(--success); }
+        .diff-card.feedback-revision { border-left: 3px solid var(--warning); }
+        .diff-card.feedback-rejected { border-left: 3px solid #DC2626; }
+        .diff-card-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 12px 14px;
+            background: #FAFBFC;
+            cursor: pointer;
+            user-select: none;
+        }
+        .diff-card-header:hover { background: #F3F4F6; }
+        .diff-rank {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-secondary);
+            background: #E5E7EB;
+            border-radius: 4px;
+            padding: 2px 7px;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+        .diff-card-info { flex: 1; min-width: 0; }
+        .diff-card-title {
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--text);
+            margin-bottom: 2px;
+        }
+        .diff-card-category {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+        .diff-card-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+        .diff-card-ratings {
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+            align-items: flex-start;
+            margin-top: 2px;
+        }
+        .diff-card-rating-col {
+            text-align: center;
+            min-width: 60px;
+        }
+        .diff-card-rating-label {
+            font-size: 9px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            letter-spacing: 0.3px;
+            margin-bottom: 3px;
+        }
+        .diff-card-expand {
+            font-size: 10px;
+            color: var(--text-secondary);
+            transition: transform 0.2s;
+            flex-shrink: 0;
+            margin-top: 4px;
+        }
+        .diff-card-expand.open { transform: rotate(180deg); }
+        .diff-card-body {
+            display: none;
+            padding: 0 14px 14px;
+            border-top: 1px solid var(--border);
+        }
+        .diff-card-body.open { display: block; }
+
+        /* Per-item feedback controls */
+        .diff-feedback-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--border);
+        }
+        .diff-feedback-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            flex-shrink: 0;
+            min-width: 50px;
+        }
+        .score-buttons { display: flex; gap: 3px; }
+        .score-btn {
+            width: 24px;
+            height: 24px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+            background: #fff;
+            color: #888;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+        }
+        .score-btn:hover { background: #f5f5f5; }
+        .score-btn.approve.selected { background: var(--success); color: #fff; border-color: var(--success); }
+        .score-btn.revision.selected { background: var(--warning); color: #fff; border-color: var(--warning); }
+        .score-btn.reject.selected { background: #DC2626; color: #fff; border-color: #DC2626; }
+        .diff-comment-input {
+            flex: 1;
+            padding: 5px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 11px;
+            font-family: inherit;
+            min-width: 0;
+        }
+        .diff-comment-input:focus { outline: none; border-color: var(--teal); }
+
+        /* Reasoning section in diff card */
+        .diff-reasoning {
+            margin-top: 10px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+        .diff-reasoning-label {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: var(--text-secondary);
+            margin-bottom: 3px;
+        }
+        .diff-reasoning-text {
+            background: #F9FAFB;
+            border-radius: 4px;
+            padding: 8px 10px;
+            margin-bottom: 8px;
+            border: 1px solid var(--border);
+        }
+
+        /* Claims 3-column table */
+        .claims-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin: 10px 0;
+        }
+        .claims-table thead th {
+            background: var(--teal);
+            color: #fff;
+            padding: 8px 12px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 12px;
+        }
+        .claims-table td {
+            padding: 10px 12px;
+            vertical-align: top;
+            border-bottom: 1px solid var(--border);
+            border-right: 1px solid var(--border);
+        }
+        .claims-table td:last-child { border-right: none; }
+        .claims-table tr:hover td { background: #F9FAFB; }
+        .vendor-headline {
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--text);
+            margin-bottom: 4px;
+        }
+        .vendor-details {
+            font-size: 12px;
+            color: #555;
+            line-height: 1.5;
+        }
+        .rating-prefix {
+            font-size: 11px;
+            font-weight: 700;
+            margin-right: 4px;
+        }
+        .rating-prefix.positive { color: var(--success); }
+        .rating-prefix.neutral { color: var(--warning); }
+        .rating-prefix.negative { color: #DC2626; }
+
+        /* Prompt modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-overlay.open { display: flex; }
+        .modal-content {
+            background: #fff;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 900px;
+            max-height: 85vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .modal-title {
+            font-size: 16px;
+            font-weight: 700;
+        }
+        .modal-close {
+            width: 30px; height: 30px;
+            border: none; background: #F3F4F6;
+            border-radius: 6px; cursor: pointer;
+            font-size: 16px; color: var(--text-secondary);
+            display: flex; align-items: center; justify-content: center;
+        }
+        .modal-close:hover { background: #E5E7EB; }
+        .modal-meta {
+            padding: 10px 20px;
+            background: #F9FAFB;
+            border-bottom: 1px solid var(--border);
+            font-size: 12px;
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+        .modal-meta span { margin-right: 16px; }
+        .modal-meta strong { color: var(--text); }
+
+        /* Variable pills section */
+        .modal-variables {
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+            background: #fff;
+        }
+        .modal-variables-label {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+        .variable-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .variable-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            max-width: 260px;
+            overflow: hidden;
+        }
+        .variable-pill:hover {
+            filter: brightness(0.95);
+            transform: translateY(-1px);
+        }
+        .variable-pill-name {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 10px;
+        }
+        .variable-pill-preview {
+            font-weight: 400;
+            opacity: 0.8;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 140px;
+        }
+        /* Pill color palette */
+        .variable-pill.color-0 { background: #DBEAFE; color: #1E40AF; }
+        .variable-pill.color-1 { background: #D1FAE5; color: #065F46; }
+        .variable-pill.color-2 { background: #FEF3C7; color: #92400E; }
+        .variable-pill.color-3 { background: #F5F3FF; color: #6D28D9; }
+        .variable-pill.color-4 { background: #FCE7F3; color: #9D174D; }
+        .variable-pill.color-5 { background: #E0E7FF; color: #3730A3; }
+        .variable-pill.color-6 { background: #CCFBF1; color: #0F766E; }
+        .variable-pill.color-7 { background: #FEE2E2; color: #991B1B; }
+        .variable-pill.color-8 { background: #F3E8FF; color: #7C3AED; }
+        .variable-pill.color-9 { background: #ECFDF5; color: #047857; }
+
+        /* View toggle tabs */
+        .modal-view-toggle {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .modal-view-tab {
+            padding: 8px 20px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.15s;
+            background: none;
+            border-top: none;
+            border-left: none;
+            border-right: none;
+        }
+        .modal-view-tab:hover { color: var(--text); background: #F9FAFB; }
+        .modal-view-tab.active {
+            color: var(--teal);
+            border-bottom-color: var(--teal);
+        }
+
+        .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .modal-body pre {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.6;
+            background: #F9FAFB;
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+
+        /* Template view: highlighted variable placeholders */
+        .template-var-highlight {
+            display: inline;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-weight: 600;
+            font-size: 11px;
+        }
+        .template-var-highlight.color-0 { background: #DBEAFE; color: #1E40AF; }
+        .template-var-highlight.color-1 { background: #D1FAE5; color: #065F46; }
+        .template-var-highlight.color-2 { background: #FEF3C7; color: #92400E; }
+        .template-var-highlight.color-3 { background: #F5F3FF; color: #6D28D9; }
+        .template-var-highlight.color-4 { background: #FCE7F3; color: #9D174D; }
+        .template-var-highlight.color-5 { background: #E0E7FF; color: #3730A3; }
+        .template-var-highlight.color-6 { background: #CCFBF1; color: #0F766E; }
+        .template-var-highlight.color-7 { background: #FEE2E2; color: #991B1B; }
+        .template-var-highlight.color-8 { background: #F3E8FF; color: #7C3AED; }
+        .template-var-highlight.color-9 { background: #ECFDF5; color: #047857; }
+
+        /* Variable detail popover */
+        .variable-detail-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.3);
+            z-index: 1100;
+            justify-content: center;
+            align-items: center;
+        }
+        .variable-detail-overlay.open { display: flex; }
+        .variable-detail-panel {
+            background: #fff;
+            border-radius: 10px;
+            width: 80%;
+            max-width: 700px;
+            max-height: 60vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+        }
+        .variable-detail-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        .variable-detail-name {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 13px;
+            font-weight: 700;
+        }
+        .variable-detail-body {
+            padding: 16px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .variable-detail-body pre {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.5;
+            background: #F9FAFB;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            max-height: none;
+        }
+
+        /* Uploaded files list */
+        .uploaded-files {
+            list-style: none;
+            margin: 8px 0;
+        }
+        .uploaded-files li {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 0;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .uploaded-files li::before {
+            content: '';
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            background: var(--success);
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .uploaded-files li.uploaded-file-item::before {
+            display: none; /* hide default green dot — we use inline span */
+        }
+        .step-info-banner {
+            background: #f0f5f5;
+            border: 1px solid var(--teal);
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin: 8px 0;
+            font-size: 12px;
+            color: var(--teal);
+        }
+
+        /* Hidden by default */
+        .hidden { display: none; }
+
+        /* Context Window sticky bar */
+        .context-window {
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 24px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .context-window-inner {
+            max-width: 100%;
+            margin: 0 auto;
+        }
+        .context-window-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .context-window-title {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+        }
+        .context-window-count {
+            font-size: 10px;
+            font-weight: 700;
+            background: var(--teal);
+            color: #fff;
+            padding: 1px 6px;
+            border-radius: 10px;
+        }
+        .context-window-tokens {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-left: auto;
+        }
+        .context-window-tokens strong {
+            color: var(--text);
+        }
+        .context-pills-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            min-height: 28px;
+            align-items: stretch;
+        }
+        .context-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+            border: 1px solid transparent;
+        }
+        .context-pill:hover {
+            filter: brightness(0.92);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+        }
+        .context-pill .pill-icon {
+            font-size: 11px;
+            opacity: 0.7;
+        }
+        .context-pill .pill-step {
+            font-size: 10px;
+            font-weight: 700;
+            opacity: 0.6;
+        }
+        .context-pill .pill-tokens {
+            font-size: 10px;
+            font-weight: 700;
+            background: rgba(0,0,0,0.08);
+            padding: 1px 6px;
+            border-radius: 4px;
+            margin-left: 2px;
+        }
+        .context-pill.color-0 { background: #DBEAFE; color: #1E40AF; }
+        .context-pill.color-1 { background: #D1FAE5; color: #065F46; }
+        .context-pill.color-2 { background: #FEF3C7; color: #92400E; }
+        .context-pill.color-3 { background: #F5F3FF; color: #6D28D9; }
+        .context-pill.color-4 { background: #FCE7F3; color: #9D174D; }
+        .context-pill.color-5 { background: #E0E7FF; color: #3730A3; }
+        .context-pill.color-6 { background: #CCFBF1; color: #0F766E; }
+        .context-pill.color-7 { background: #FEE2E2; color: #991B1B; }
+        .context-pill.color-8 { background: #F3E8FF; color: #7C3AED; }
+        .context-pill.color-9 { background: #ECFDF5; color: #047857; }
+        .context-empty {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+
+        /* Context Detail Modal */
+        .context-modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1100;
+            justify-content: center;
+            align-items: center;
+        }
+        .context-modal-overlay.open { display: flex; }
+        .context-modal {
+            background: #fff;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 85vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+        }
+        .context-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .context-modal-header-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .context-modal-title {
+            font-size: 16px;
+            font-weight: 700;
+        }
+        .context-modal-meta {
+            padding: 10px 20px;
+            background: #F9FAFB;
+            border-bottom: 1px solid var(--border);
+            font-size: 12px;
+            color: var(--text-secondary);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            flex-shrink: 0;
+        }
+        .context-modal-meta strong { color: var(--text); }
+        .context-modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .context-modal-body pre {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.6;
+            background: #F9FAFB;
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+        .context-modal-loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+        .context-modal-loading .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--border);
+            border-top-color: var(--teal);
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+
+        /* Collapsed panel mode */
+        .panel-left.collapsed {
+            flex: none !important;
+            width: 60px !important;
+            min-width: 60px !important;
+            overflow: hidden;
+            position: relative;
+        }
+        .panel-left.collapsed > .container,
+        .panel-left.collapsed > .context-window {
+            display: none;
+        }
+        .collapsed-steps {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            padding: 16px 0;
+        }
+        .panel-left.collapsed .collapsed-steps {
+            display: flex;
+        }
+        .collapsed-step-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: 2px solid var(--border);
+            background: var(--card-bg);
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+        }
+        .collapsed-step-btn:hover {
+            border-color: var(--teal);
+            background: #f0fdfa;
+        }
+        .collapsed-step-btn.completed {
+            border-color: var(--success);
+            background: #ECFDF5;
+            color: var(--success);
+        }
+        .collapsed-step-btn.in_progress {
+            border-color: var(--info);
+            background: #EFF6FF;
+            color: var(--info);
+        }
+        .collapsed-step-btn.failed {
+            border-color: var(--primary);
+            background: #FEF2F2;
+            color: var(--primary);
+        }
+        .collapsed-step-btn.ready {
+            border-color: var(--warning);
+            background: #FFFBEB;
+            color: var(--warning);
+        }
+        .collapse-toggle {
+            position: absolute;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            border: 1px solid var(--border);
+            background: var(--card-bg);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: var(--text-secondary);
+            transition: all 0.15s;
+            z-index: 10;
+        }
+        .collapse-toggle:hover {
+            border-color: var(--teal);
+            color: var(--teal);
+            background: #f0fdfa;
+        }
+        .panel-left.collapsed + .resize-handle {
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .split-layout {
+                flex-direction: column;
+                height: auto;
+            }
+            .panel-left, .panel-right {
+                flex: none;
+                min-width: 0;
+                overflow-y: visible;
+                border-right: none;
+            }
+            .panel-right { border-top: 1px solid var(--border); }
+            .resize-handle { display: none; }
+            .panel-left .container, .panel-right .container { padding: 0 12px; }
+            .step-card { padding: 14px 16px; }
+            .workflow-step { padding-left: 40px; }
+            .workflow-step::before { left: 15px; }
+            .step-number { left: 0; width: 28px; height: 28px; font-size: 12px; }
+            .category-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <div class="header-top">
+                <div>
+                    <a href="/battlecards" class="back-link">&larr; Dashboard</a>
+                    <h1 class="header-title" style="margin-top: 4px;">{{ session.competitor_name }} Battlecard Workflow</h1>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    {% if battlecard_id %}
+                    <a href="/battlecard/{{ battlecard_id }}" style="font-size: 12px; font-weight: 600; color: var(--teal); text-decoration: none; padding: 4px 10px; border: 1px solid var(--border); border-radius: 5px;">View Battlecard &rarr;</a>
+                    {% endif %}
+                    <span class="step-status-badge {{ session.status }}">
+                        <span class="step-status-dot"></span>
+                        {{ session.status | replace('_', ' ') | title }}
+                    </span>
+                </div>
+            </div>
+            <div class="session-meta">
+                <span><strong>Product Area:</strong> {{ session.product_area }}</span>
+                <span><strong>Model:</strong> {{ session.model_name }}</span>
+                <span><strong>Diffs/Category:</strong> {{ session.diffs_per_category }}</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="split-layout" id="split-layout">
+    <!-- LEFT PANEL: Workflow -->
+    <div class="panel-left" id="panel-left">
+
+    <!-- Collapsed step indicators (visible only when panel is collapsed) -->
+    <div class="collapsed-steps" id="collapsed-steps">
+        {% for step in steps %}
+        <button class="collapsed-step-btn {{ step.status }}"
+                title="Step {{ step.step_number }}: {{ step.step_name }}"
+                onclick="expandPanel()">
+            {{ step.step_number }}
+        </button>
+        {% endfor %}
+    </div>
+
+    <!-- Context Window sticky bar -->
+    <div class="context-window" id="context-window">
+        <div class="context-window-inner">
+            <div class="context-window-header">
+                <span class="context-window-title">Context Window</span>
+                <span class="context-window-count" id="context-count">0</span>
+                <span class="context-window-tokens" id="context-total-tokens"></span>
+            </div>
+            <div class="context-pills-container" id="context-pills">
+                <span class="context-empty" id="context-empty">No context accumulated yet</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="workflow">
+            {% for step in steps %}
+            <div class="workflow-step" id="step-block-{{ step.step_number }}">
+                <div class="step-number {{ step.status }}">{{ step.step_number }}</div>
+                <div class="step-card {% if step.status in ('in_progress', 'ready', 'waiting_human') %}active{% elif step.status == 'completed' %}completed{% elif step.status == 'failed' %}failed{% endif %}">
+                    <div class="step-header">
+                        <span class="step-title">{{ step.step_name }}</span>
+                        <span class="step-status-badge {{ step.status }}" id="step-badge-{{ step.step_number }}">
+                            <span class="step-status-dot"></span>
+                            <span id="step-status-text-{{ step.step_number }}">{{ step.status | replace('_', ' ') | title }}</span>
+                        </span>
+                    </div>
+
+                    <div class="step-body" id="step-body-{{ step.step_number }}">
+                        {% if step.status == 'in_progress' %}
+                        <div class="progress-container" id="progress-{{ step.step_number }}">
+                            <div class="progress-bar-bg">
+                                <div class="progress-bar-fill" id="progress-fill-{{ step.step_number }}"
+                                     style="width: {% if step.progress_total %}{{ (step.progress_current / step.progress_total * 100) | int }}{% else %}0{% endif %}%"></div>
+                            </div>
+                            <div class="progress-text" id="progress-text-{{ step.step_number }}">
+                                {{ step.progress_message or 'Working...' }}
+                            </div>
+                            <div class="progress-pct" id="progress-pct-{{ step.step_number }}">
+                                {% if step.progress_total %}{{ (step.progress_current / step.progress_total * 100) | int }}%{% endif %}
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        {% if step.status == 'failed' and step.error_message %}
+                        <div class="error-banner">
+                            <strong>Error:</strong> {{ step.error_message }}
+                        </div>
+                        {% endif %}
+
+                        {% if step.error_details and step.error_details.errors %}
+                        <div class="error-details-list">
+                            <details>
+                                <summary>{{ step.error_details.errors | length }} item(s) had errors</summary>
+                                <ul>
+                                {% for err in step.error_details.errors %}
+                                    <li><strong>{{ err.key_differentiator }}</strong>: {{ err.error }}</li>
+                                {% endfor %}
+                                </ul>
+                            </details>
+                        </div>
+                        {% endif %}
+
+                        <!-- Step 1: Generate Directive -->
+                        {% if step.step_number == 1 %}
+                            {% if step.status in ('ready', 'pending') %}
+                            <div class="file-upload" onclick="document.getElementById('file-input-1').click()">
+                                <input type="file" id="file-input-1" accept=".md,.txt,.pdf" onchange="uploadFile(1, this)">
+                                <div class="file-upload-text">Click to upload sales pitch decks (.md, .txt, .pdf)</div>
+                            </div>
+                            <ul class="uploaded-files" id="uploaded-files-1">
+                                {% for a in artifacts_by_step.get(1, []) if a.artifact_type == 'directive_upload' %}
+                                <li>{{ a.artifact_name }}</li>
+                                {% endfor %}
+                            </ul>
+                            <div class="btn-group">
+                                <button class="btn btn-primary" onclick="triggerStep(1, 'generate')" id="btn-step1-generate">Generate Directive</button>
+                                <button class="btn" onclick="skipStep(1)">Skip (use default)</button>
+                                <button class="btn" onclick="viewPrompt(1)">View Prompt</button>
+                            </div>
+                            {% elif step.status == 'completed' %}
+                            <div class="artifact-panel">
+                                <div class="artifact-header">
+                                    <span class="artifact-title">Generated Directive</span>
+                                    <span class="artifact-badge">Completed</span>
+                                </div>
+                                {% for a in artifacts_by_step.get(1, []) if a.artifact_type == 'directive_generated' %}
+                                <pre>{{ a.artifact_content[:500] }}{% if a.artifact_content|length > 500 %}...{% endif %}</pre>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+
+                        <!-- Step 2: Upload Old Battlecards -->
+                        {% elif step.step_number == 2 %}
+                            {% if step.status in ('ready', 'pending') %}
+                            <div class="file-upload" onclick="document.getElementById('file-input-2').click()">
+                                <input type="file" id="file-input-2" accept=".pdf,.md,.txt" onchange="uploadFile(2, this)">
+                                <div class="file-upload-text">Click to upload old battlecard (PDF, MD, or TXT)</div>
+                            </div>
+                            <ul class="uploaded-files" id="uploaded-files-2">
+                                {% for a in artifacts_by_step.get(2, []) if a.artifact_type == 'old_battlecard_upload' %}
+                                <li class="uploaded-file-item" data-filename="{{ a.artifact_name }}">
+                                    <span style="color: var(--success);">&#x25CF;</span> {{ a.artifact_name }}
+                                </li>
+                                {% endfor %}
+                            </ul>
+                            <!-- Info banner for text files -->
+                            <div id="step2-text-info" class="step-info-banner" style="display:none;">
+                                This is a text file — content is already readable. You can use it directly or extract/summarize with LLM.
+                            </div>
+                            <div class="btn-group">
+                                <button class="btn btn-primary" onclick="step2UseAsIs()" id="btn-step2-use" style="display:none;">Use As-Is</button>
+                                <button class="btn btn-primary" onclick="triggerStep(2, 'extract')" id="btn-step2-extract">Extract Content</button>
+                                <button class="btn" onclick="skipStep(2)">Skip</button>
+                                <button class="btn" onclick="viewPrompt(2)">View Prompt</button>
+                            </div>
+                            {% elif step.status == 'completed' %}
+                            <div class="artifact-panel">
+                                <div class="artifact-header">
+                                    <span class="artifact-title">Extracted Content</span>
+                                    <span class="artifact-badge">Completed</span>
+                                </div>
+                                {% for a in artifacts_by_step.get(2, []) if a.artifact_type == 'old_battlecard_extracted' %}
+                                <pre>{{ a.artifact_content[:500] }}{% if a.artifact_content|length > 500 %}...{% endif %}</pre>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+
+                        <!-- Step 3: Choose Product Categories -->
+                        {% elif step.step_number == 3 %}
+                            {% if step.status in ('ready', 'pending') %}
+                            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">Select the product categories to include in the battlecard:</p>
+                            <div class="category-grid" id="category-grid">
+                                {% for cat in categories %}
+                                <label class="category-checkbox">
+                                    <input type="checkbox" name="category" value="{{ cat }}" checked>
+                                    {{ cat }}
+                                </label>
+                                {% endfor %}
+                            </div>
+                            <div class="btn-group">
+                                <button class="btn btn-primary" onclick="saveCategories()">Save Categories</button>
+                                <button class="btn" onclick="viewPrompt(3)">View Prompt</button>
+                            </div>
+                            {% elif step.status == 'completed' %}
+                            <div class="artifact-panel">
+                                <div class="artifact-header">
+                                    <span class="artifact-title">Selected Categories</span>
+                                    <span class="artifact-badge">{{ (artifacts_by_step.get(3, [{}])[0] or {}).get('artifact_metadata', {}).get('categories', []) | length }} selected</span>
+                                </div>
+                                {% for a in artifacts_by_step.get(3, []) if a.artifact_type == 'product_categories' %}
+                                <pre>{{ a.artifact_content }}</pre>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+
+                        <!-- Step 4: Map Products to Categories -->
+                        {% elif step.step_number == 4 %}
+                            {% if step.status in ('ready', 'pending') %}
+                            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">
+                                Classify each product category for the battlecard. Choose <strong>Core Product Category</strong> (gets its own slide),
+                                <strong>Cross-Platform Capability</strong> (supporting context), or <strong>Skip</strong> to exclude.
+                            </p>
+                            <div id="category-classification-form">
+                                <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                                    <thead>
+                                        <tr style="border-bottom: 2px solid var(--border-color); text-align: left;">
+                                            <th style="padding: 6px 8px; width: 25%;">Category</th>
+                                            <th style="padding: 6px 8px; width: 30%;">Description</th>
+                                            <th style="padding: 6px 4px; width: 15%; text-align: center;">Core Product</th>
+                                            <th style="padding: 6px 4px; width: 15%; text-align: center;">Cross-Platform</th>
+                                            <th style="padding: 6px 4px; width: 15%; text-align: center;">Skip</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for cat in category_catalog %}
+                                        <tr style="border-bottom: 1px solid var(--border-color);">
+                                            <td style="padding: 6px 8px; font-weight: 500;">{{ cat.category_name }}</td>
+                                            <td style="padding: 6px 8px; color: var(--text-secondary); font-size: 11px;">{{ cat.category_description or '' }}</td>
+                                            <td style="padding: 6px 4px; text-align: center;">
+                                                <input type="radio" name="cat_{{ cat.catalog_id }}" value="core_product_category"
+                                                    {% if cat.is_core_product_category %}checked{% endif %}
+                                                    {% if session_selections and session_selections.get(cat.catalog_id) == 'core_product_category' %}checked{% endif %}>
+                                            </td>
+                                            <td style="padding: 6px 4px; text-align: center;">
+                                                <input type="radio" name="cat_{{ cat.catalog_id }}" value="cross_platform_capability"
+                                                    {% if cat.is_cross_platform_capability and not cat.is_core_product_category %}checked{% endif %}
+                                                    {% if session_selections and session_selections.get(cat.catalog_id) == 'cross_platform_capability' %}checked{% endif %}>
+                                            </td>
+                                            <td style="padding: 6px 4px; text-align: center;">
+                                                <input type="radio" name="cat_{{ cat.catalog_id }}" value="skip"
+                                                    {% if not cat.is_core_product_category and not cat.is_cross_platform_capability %}checked{% endif %}
+                                                    {% if session_selections and session_selections.get(cat.catalog_id) == 'skip' %}checked{% endif %}>
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="btn-group" style="margin-top: 12px;">
+                                <button class="btn btn-primary" onclick="saveCategorySelections()">Save &amp; Continue</button>
+                                <button class="btn" onclick="viewPrompt(4)">View Prompt</button>
+                            </div>
+                            {% elif step.status == 'completed' %}
+                            <div class="artifact-panel">
+                                <div class="artifact-header">
+                                    <span class="artifact-title">Category Classifications</span>
+                                    <span class="artifact-badge">Saved</span>
+                                </div>
+                                {% for a in artifacts_by_step.get(4, []) if a.artifact_type == 'category_selections' %}
+                                <div style="font-size: 12px; margin-top: 8px;">
+                                    {% set sel_data = a.artifact_content if a.artifact_content is mapping else {} %}
+                                    {% if sel_data.get('core_product_categories') %}
+                                    <div style="margin-bottom: 6px;">
+                                        <strong style="color: #4CAF50;">Core Product Categories:</strong>
+                                        <span>{{ sel_data['core_product_categories'] | join(', ') }}</span>
+                                    </div>
+                                    {% endif %}
+                                    {% if sel_data.get('cross_platform_capabilities') %}
+                                    <div style="margin-bottom: 6px;">
+                                        <strong style="color: #2196F3;">Cross-Platform Capabilities:</strong>
+                                        <span>{{ sel_data['cross_platform_capabilities'] | join(', ') }}</span>
+                                    </div>
+                                    {% endif %}
+                                    {% if sel_data.get('skipped') %}
+                                    <div>
+                                        <strong style="color: var(--text-secondary);">Skipped:</strong>
+                                        <span style="color: var(--text-secondary);">{{ sel_data['skipped'] | join(', ') }}</span>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+
+                        <!-- Step 5: Generate Key Differentiators -->
+                        {% elif step.step_number == 5 %}
+                            {% if step.status == 'ready' %}
+                            <div class="btn-group">
+                                <button class="btn btn-primary" onclick="triggerStep(5, 'generate')" id="btn-step5-generate">Generate Key Differentiators</button>
+                                <button class="btn" onclick="viewPrompt(5)">View Prompt</button>
+                            </div>
+                            {% elif step.status == 'waiting_human' %}
+                            <div id="skeletons-preview">
+                                {% set skel_artifacts = artifacts_by_step.get(5, []) %}
+                                {% for a in skel_artifacts if a.artifact_type == 'pass1_skeletons' %}
+                                <div class="artifact-header">
+                                    <span class="artifact-title">Key Differentiator Skeletons</span>
+                                    <span class="artifact-badge">{{ (a.artifact_metadata or {}).get('count', '?') }} items</span>
+                                </div>
+                                <div class="diff-review-list" id="diff-review-list"></div>
+                                <script>
+                                (function() {
+                                    try {
+                                        var data = {{ a.artifact_content | safe }};
+                                        window._skeletonData = data;
+                                        window._diffFeedback = {};
+                                        var container = document.getElementById('diff-review-list');
+                                        data.forEach(function(sk, i) {
+                                            var id = sk.id || ('diff-' + i);
+                                            window._diffFeedback[id] = {status: null, comment: ''};
+                                            var dbRating = sk.databricks_rating || '';
+                                            var compRating = sk.competitor_rating || '';
+                                            var card = document.createElement('div');
+                                            card.className = 'diff-card';
+                                            card.id = 'diff-card-' + id;
+                                            card.innerHTML =
+                                                '<div class="diff-card-header" onclick="toggleDiffCard(\'' + id + '\')">' +
+                                                    '<span class="diff-rank">' + (sk.rank || (i+1)) + '</span>' +
+                                                    '<div class="diff-card-info">' +
+                                                        '<div class="diff-card-title">' + (sk.key_differentiator || '') + '</div>' +
+                                                        '<div class="diff-card-category">' + (sk.category || '') + '</div>' +
+                                                        '<div class="diff-card-desc">' + (sk.description || '') + '</div>' +
+                                                    '</div>' +
+                                                    '<div class="diff-card-ratings">' +
+                                                        '<div class="diff-card-rating-col"><div class="diff-card-rating-label">Databricks</div><span class="rating-badge ' + dbRating + '">' + dbRating + '</span></div>' +
+                                                        '<div class="diff-card-rating-col"><div class="diff-card-rating-label">Competitor</div><span class="rating-badge ' + compRating + '">' + compRating + '</span></div>' +
+                                                    '</div>' +
+                                                    '<span class="diff-card-expand" id="expand-' + id + '">&#9660;</span>' +
+                                                '</div>' +
+                                                '<div class="diff-card-body" id="body-' + id + '">' +
+                                                    '<div class="diff-reasoning">' +
+                                                        '<div class="diff-reasoning-label">Selection Reasoning</div>' +
+                                                        '<div class="diff-reasoning-text">' + (sk.selection_reasoning || 'N/A') + '</div>' +
+                                                        '<div class="diff-reasoning-label">Rank Reasoning</div>' +
+                                                        '<div class="diff-reasoning-text">' + (sk.rank_reasoning || 'N/A') + '</div>' +
+                                                        '<div class="diff-reasoning-label">Directive Alignment</div>' +
+                                                        '<div class="diff-reasoning-text">' + (sk.directive_alignment || 'N/A') + '</div>' +
+                                                    '</div>' +
+                                                    '<div class="diff-feedback-row">' +
+                                                        '<span class="diff-feedback-label">Review:</span>' +
+                                                        '<div class="score-buttons">' +
+                                                            '<button class="score-btn approve" onclick="setDiffFeedback(\'' + id + '\', \'approved\', this)" title="Approve">&#10003;</button>' +
+                                                            '<button class="score-btn revision" onclick="setDiffFeedback(\'' + id + '\', \'needs_revision\', this)" title="Needs Revision">&#9888;</button>' +
+                                                            '<button class="score-btn reject" onclick="setDiffFeedback(\'' + id + '\', \'rejected\', this)" title="Reject">&#10007;</button>' +
+                                                        '</div>' +
+                                                        '<input type="text" class="diff-comment-input" id="comment-' + id + '" placeholder="Add comment..." onchange="saveDiffComment(\'' + id + '\', this.value)">' +
+                                                    '</div>' +
+                                                '</div>';
+                                            container.appendChild(card);
+                                        });
+                                    } catch(e) { console.error('Failed to parse skeletons', e); }
+                                })();
+                                </script>
+                                {% endfor %}
+                            </div>
+                            <textarea class="feedback-area" id="feedback-step5" placeholder="Optional: provide overall feedback on all key differentiators..."></textarea>
+                            {% if review_summary and review_summary.total > 0 %}
+                            <div style="background: #ECFDF5; border: 1px solid #A7F3D0; border-radius: 6px; padding: 10px 14px; margin: 8px 0; font-size: 13px;">
+                                <strong style="color: #065F46;">Battlecard Review Feedback:</strong>
+                                <span style="color: #065F46;">{{ review_summary.approved }} approved</span>,
+                                <span style="color: #92400E;">{{ review_summary.needs_revision }} needs revision</span>,
+                                <span style="color: #991B1B;">{{ review_summary.rejected }} rejected</span>
+                                {% if battlecard_id %}&mdash; <a href="/battlecard/{{ battlecard_id }}" style="color: var(--teal); font-weight: 600;">View full review details</a>{% endif %}
+                            </div>
+                            {% endif %}
+                            <div class="btn-group">
+                                <button class="btn btn-success" onclick="approveStep(5)">Approve &amp; Continue</button>
+                                <button class="btn btn-primary" onclick="regenerateStep(5)">Regenerate with Feedback</button>
+                                {% if review_summary and review_summary.total > 0 %}
+                                <button class="btn" style="border-color: var(--success); color: var(--success);" onclick="regenerateWithReviewFeedback(5)">Regenerate with Review Feedback</button>
+                                {% endif %}
+                                <button class="btn" onclick="viewPrompt(5)">View Prompt</button>
+                            </div>
+                            {% elif step.status == 'completed' %}
+                            <div class="artifact-panel">
+                                <div class="artifact-header">
+                                    <span class="artifact-title">Key Differentiators</span>
+                                    <span class="artifact-badge">Approved</span>
+                                </div>
+                                <pre>{{ (artifacts_by_step.get(5, [{}])[0] or {}).get('artifact_content', '')[:300] }}...</pre>
+                            </div>
+                            {% endif %}
+
+                        <!-- Step 6: Generate Key Diff Claims -->
+                        {% elif step.step_number == 6 %}
+                            {% if step.status == 'ready' %}
+                            <div class="btn-group">
+                                <button class="btn btn-primary" onclick="triggerStep(6, 'generate')" id="btn-step6-generate">Generate Claims</button>
+                                <button class="btn" onclick="viewPrompt(6)">View Prompt</button>
+                            </div>
+                            {% elif step.status == 'waiting_human' %}
+                            <div id="claims-preview">
+                                {% set skel_json = None %}
+                                {% for a in artifacts_by_step.get(5, []) if a.artifact_type == 'pass1_skeletons' %}{% set skel_json = a.artifact_content %}{% endfor %}
+                                {% for a in artifacts_by_step.get(6, []) if a.artifact_type in ('pass2_claims', 'pass3_regenerated') %}
+                                <div class="artifact-header">
+                                    <span class="artifact-title">Generated Claims</span>
+                                    <span class="artifact-badge">{{ (a.artifact_metadata or {}).get('count', '?') }} claim pairs</span>
+                                </div>
+                                <div style="overflow-x: auto; margin: 10px 0;">
+                                    <table class="claims-table">
+                                        <thead>
+                                            <tr>
+                                                <th style="width: 24%;">Key Differentiator</th>
+                                                <th style="width: 38%;">Databricks</th>
+                                                <th style="width: 38%;">{{ session.competitor_name }}</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="claims-tbody"></tbody>
+                                    </table>
+                                </div>
+                                <script>
+                                (function() {
+                                    try {
+                                        var claims = {{ a.artifact_content | safe }};
+                                        var skeletons = {% if skel_json %}{{ skel_json | safe }}{% else %}[]{% endif %};
+                                        window._claimsData = claims;
+                                        window._claimFeedback = {};
+                                        var tbody = document.getElementById('claims-tbody');
+                                        claims.forEach(function(claim, i) {
+                                            var sk = skeletons[i] || {};
+                                            var id = sk.id || ('claim-' + i);
+                                            window._claimFeedback[id] = {db_status: null, db_comment: '', comp_status: null, comp_comment: ''};
+                                            var dbRating = sk.databricks_rating || '';
+                                            var compRating = sk.competitor_rating || '';
+                                            function ratingPrefix(r) {
+                                                if (r === 'strong_advantage' || r === 'advantage') return '<span class="rating-prefix positive">(+)</span>';
+                                                if (r === 'partial') return '<span class="rating-prefix neutral">(~)</span>';
+                                                if (r === 'disadvantage') return '<span class="rating-prefix negative">(-)</span>';
+                                                return '';
+                                            }
+                                            var tr = document.createElement('tr');
+                                            tr.innerHTML =
+                                                '<td>' +
+                                                    '<strong>' + (sk.key_differentiator || 'Diff ' + (i+1)) + '</strong>' +
+                                                    '<div style="font-size:11px;color:#6B7280;margin-top:3px">' + (sk.category || '') + '</div>' +
+                                                    '<div style="margin-top:6px">' +
+                                                        '<span class="rating-badge ' + dbRating + '" style="margin-right:4px">DB: ' + dbRating + '</span>' +
+                                                        '<span class="rating-badge ' + compRating + '">Comp: ' + compRating + '</span>' +
+                                                    '</div>' +
+                                                '</td>' +
+                                                '<td>' +
+                                                    '<div class="vendor-headline">' + ratingPrefix(dbRating) + (claim.databricks_headline || '') + '</div>' +
+                                                    '<div class="vendor-details">' + (claim.databricks_details || '') + '</div>' +
+                                                    '<div class="diff-feedback-row" style="border-top:1px solid #E5E7EB;margin-top:8px;padding-top:8px">' +
+                                                        '<div class="score-buttons">' +
+                                                            '<button class="score-btn approve" onclick="setClaimFeedback(\'' + id + '\', \'db\', \'approved\', this)" title="Approve">&#10003;</button>' +
+                                                            '<button class="score-btn revision" onclick="setClaimFeedback(\'' + id + '\', \'db\', \'needs_revision\', this)" title="Needs Revision">&#9888;</button>' +
+                                                            '<button class="score-btn reject" onclick="setClaimFeedback(\'' + id + '\', \'db\', \'rejected\', this)" title="Reject">&#10007;</button>' +
+                                                        '</div>' +
+                                                        '<input type="text" class="diff-comment-input" placeholder="Comment..." onchange="saveClaimComment(\'' + id + '\', \'db\', this.value)">' +
+                                                    '</div>' +
+                                                '</td>' +
+                                                '<td>' +
+                                                    '<div class="vendor-headline">' + ratingPrefix(compRating) + (claim.competitor_headline || '') + '</div>' +
+                                                    '<div class="vendor-details">' + (claim.competitor_details || '') + '</div>' +
+                                                    '<div class="diff-feedback-row" style="border-top:1px solid #E5E7EB;margin-top:8px;padding-top:8px">' +
+                                                        '<div class="score-buttons">' +
+                                                            '<button class="score-btn approve" onclick="setClaimFeedback(\'' + id + '\', \'comp\', \'approved\', this)" title="Approve">&#10003;</button>' +
+                                                            '<button class="score-btn revision" onclick="setClaimFeedback(\'' + id + '\', \'comp\', \'needs_revision\', this)" title="Needs Revision">&#9888;</button>' +
+                                                            '<button class="score-btn reject" onclick="setClaimFeedback(\'' + id + '\', \'comp\', \'rejected\', this)" title="Reject">&#10007;</button>' +
+                                                        '</div>' +
+                                                        '<input type="text" class="diff-comment-input" placeholder="Comment..." onchange="saveClaimComment(\'' + id + '\', \'comp\', this.value)">' +
+                                                    '</div>' +
+                                                '</td>';
+                                            tbody.appendChild(tr);
+                                        });
+                                    } catch(e) { console.error('Failed to parse claims', e); }
+                                })();
+                                </script>
+                                {% endfor %}
+                            </div>
+                            <textarea class="feedback-area" id="feedback-step6" placeholder="Optional: provide overall feedback on all claims..."></textarea>
+                            {% if review_summary and review_summary.total > 0 %}
+                            <div style="background: #ECFDF5; border: 1px solid #A7F3D0; border-radius: 6px; padding: 10px 14px; margin: 8px 0; font-size: 13px;">
+                                <strong style="color: #065F46;">Battlecard Review Feedback:</strong>
+                                <span style="color: #065F46;">{{ review_summary.approved }} approved</span>,
+                                <span style="color: #92400E;">{{ review_summary.needs_revision }} needs revision</span>,
+                                <span style="color: #991B1B;">{{ review_summary.rejected }} rejected</span>
+                                {% if battlecard_id %}&mdash; <a href="/battlecard/{{ battlecard_id }}" style="color: var(--teal); font-weight: 600;">View full review details</a>{% endif %}
+                            </div>
+                            {% endif %}
+                            <div class="btn-group">
+                                <button class="btn btn-success" onclick="approveStep(6)">Approve &amp; Continue</button>
+                                <button class="btn btn-primary" onclick="regenerateStep(6)">Regenerate with Feedback</button>
+                                {% if review_summary and review_summary.total > 0 %}
+                                <button class="btn" style="border-color: var(--success); color: var(--success);" onclick="regenerateWithReviewFeedback(6)">Regenerate with Review Feedback</button>
+                                {% endif %}
+                                <button class="btn" onclick="viewPrompt(6)">View Prompt</button>
+                            </div>
+                            {% elif step.status == 'completed' %}
+                            <div class="artifact-panel">
+                                <div class="artifact-header">
+                                    <span class="artifact-title">Claims</span>
+                                    <span class="artifact-badge">Approved</span>
+                                </div>
+                                <pre>{{ (artifacts_by_step.get(6, [{}])[0] or {}).get('artifact_content', '')[:300] }}...</pre>
+                            </div>
+                            {% if battlecard_id %}
+                            <div style="margin-top: 8px;">
+                                <a href="/battlecard/{{ battlecard_id }}" style="font-size: 13px; font-weight: 600; color: var(--teal); text-decoration: none;">View Battlecard Review Page &rarr;</a>
+                            </div>
+                            {% endif %}
+                            {% endif %}
+
+                        <!-- Step 7: Fact Check Claims -->
+                        {% elif step.step_number == 7 %}
+                            {% if step.status == 'ready' %}
+                            <div class="btn-group">
+                                <button class="btn btn-primary" onclick="runFactCheck()" id="btn-step7-factcheck">Run Fact Check</button>
+                                <button class="btn" onclick="viewPrompt(7)">View Prompt</button>
+                            </div>
+                            {% elif step.status == 'in_progress' %}
+                            <div class="progress-container" id="step7-progress">
+                                <div class="progress-bar">
+                                    <div class="progress-fill" id="step7-progress-fill" style="width: {{ step.progress_current|default(0) / step.progress_total|default(1) * 100 if step.progress_total else 0 }}%"></div>
+                                </div>
+                                <div class="progress-text" id="step7-progress-text">{{ step.progress_message or 'Fact checking claims...' }}</div>
+                            </div>
+                            {% elif step.status == 'waiting_human' %}
+                            <!-- Fact Check Summary Bar -->
+                            {% if fact_check_summary %}
+                            <div class="fc-summary-bar">
+                                <div class="fc-stat verified">
+                                    <div class="fc-count">{{ fact_check_summary.verified }}</div>
+                                    <div class="fc-label">Verified</div>
+                                </div>
+                                <div class="fc-stat unverified">
+                                    <div class="fc-count">{{ fact_check_summary.unverified }}</div>
+                                    <div class="fc-label">Unverified</div>
+                                </div>
+                                <div class="fc-stat disputed">
+                                    <div class="fc-count">{{ fact_check_summary.disputed }}</div>
+                                    <div class="fc-label">Disputed</div>
+                                </div>
+                                <div class="fc-stat outdated">
+                                    <div class="fc-count">{{ fact_check_summary.outdated }}</div>
+                                    <div class="fc-label">Outdated</div>
+                                </div>
+                                <div class="fc-stat">
+                                    <div class="fc-count">{{ "%.0f"|format(fact_check_summary.avg_confidence * 100) }}%</div>
+                                    <div class="fc-label">Avg Confidence</div>
+                                </div>
+                            </div>
+                            {% endif %}
+                            <!-- Per-Claim Verdict Table -->
+                            {% if fact_check_details %}
+                            <div class="fc-verdict-table-wrap" style="margin-top: 12px; max-height: 400px; overflow-y: auto;">
+                                <table class="fc-verdict-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Claim Text</th>
+                                            <th>Vendor</th>
+                                            <th>Verdict</th>
+                                            <th>Confidence</th>
+                                            <th>Source</th>
+                                            <th>Reasoning</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for fc in fact_check_details %}
+                                        <tr>
+                                            <td style="max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ fc.traces_to_text }}">{{ fc.traces_to_text[:80] }}{% if fc.traces_to_text|length > 80 %}...{% endif %}</td>
+                                            <td><span class="fc-vendor-badge {{ fc.company_type }}">{{ fc.company_name }}</span></td>
+                                            <td><span class="fc-verdict-badge {{ fc.verdict }}">{{ fc.verdict }}</span></td>
+                                            <td>{{ fc.confidence_score or 0 }}%</td>
+                                            <td>{% if fc.source_url %}<a href="{{ fc.source_url }}" target="_blank" style="color: var(--teal); font-size: 12px;">Link</a>{% else %}-{% endif %}</td>
+                                            <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ fc.reasoning or '' }}">{{ (fc.reasoning or '-')[:60] }}{% if fc.reasoning and fc.reasoning|length > 60 %}...{% endif %}</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {% endif %}
+                            <div class="btn-group" style="margin-top: 12px;">
+                                <button class="btn btn-primary" onclick="approveFactCheck()" id="btn-step7-approve">Approve &amp; Continue</button>
+                                <button class="btn" onclick="runFactCheck()" id="btn-step7-rerun">Re-run Fact Check</button>
+                            </div>
+                            {% elif step.status == 'completed' %}
+                            <div class="artifact-panel">
+                                <div class="artifact-header">
+                                    <span class="artifact-title">Fact Check Results</span>
+                                    <span class="artifact-badge">Completed</span>
+                                </div>
+                                {% if fact_check_summary %}
+                                <div class="fc-summary-bar" style="margin-top: 8px;">
+                                    <div class="fc-stat verified"><div class="fc-count">{{ fact_check_summary.verified }}</div><div class="fc-label">Verified</div></div>
+                                    <div class="fc-stat unverified"><div class="fc-count">{{ fact_check_summary.unverified }}</div><div class="fc-label">Unverified</div></div>
+                                    <div class="fc-stat disputed"><div class="fc-count">{{ fact_check_summary.disputed }}</div><div class="fc-label">Disputed</div></div>
+                                    <div class="fc-stat outdated"><div class="fc-count">{{ fact_check_summary.outdated }}</div><div class="fc-label">Outdated</div></div>
+                                </div>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+
+                        <!-- Step 8: Generate Google Slides -->
+                        {% elif step.step_number == 8 %}
+                            {% if step.status == 'ready' %}
+                            <div class="btn-group">
+                                <button class="btn btn-primary" onclick="triggerStep(8, 'generate')" id="btn-step8-generate">Generate Slides</button>
+                                <button class="btn" onclick="viewPrompt(8)">View Prompt</button>
+                            </div>
+                            {% elif step.status == 'completed' %}
+                            <div class="artifact-panel">
+                                <div class="artifact-header">
+                                    <span class="artifact-title">Google Slides</span>
+                                    <span class="artifact-badge">Generated</span>
+                                </div>
+                                {% for a in artifacts_by_step.get(8, []) if a.artifact_type == 'google_slides_url' %}
+                                <a href="{{ a.artifact_content }}" target="_blank" style="font-size: 14px; color: var(--teal); font-weight: 600;">Open in Google Slides &rarr;</a>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Collapse toggle button -->
+    <div class="collapse-toggle" id="collapse-toggle" onclick="togglePanelCollapse()" title="Collapse workflow panel">
+        <span class="arrow" id="collapse-arrow">&#9664;</span>
+    </div>
+
+    </div><!-- /panel-left -->
+
+    <!-- RESIZE HANDLE -->
+    <div class="resize-handle" id="resize-handle"></div>
+
+    <!-- RIGHT PANEL: Battlecard Preview / Full View -->
+    <div class="panel-right" id="panel-right">
+        {% if battlecard_id %}
+        <iframe id="battlecard-iframe"
+                src="/battlecard/{{ battlecard_id }}?embedded=true"
+                style="width:100%; height:100%; border:none;"
+                title="Battlecard Review"></iframe>
+        {% else %}
+        <div class="container">
+            <div class="battlecard-preview-header">
+                <div>
+                    <div class="battlecard-preview-title" id="bc-preview-title">{{ session.competitor_name }} Battlecard</div>
+                    <div class="battlecard-preview-subtitle">Preview builds as you complete each step</div>
+                </div>
+            </div>
+
+            <div id="bc-preview-content">
+                <!-- Section 1: Competitive Directive -->
+                <div class="bc-section" id="bc-section-directive">
+                    <div class="bc-section-header" onclick="toggleBcSection('directive')">
+                        <span class="bc-section-title">1. Competitive Directive</span>
+                        <span class="bc-section-badge" id="bc-badge-directive">
+                            {% if artifacts_by_step.get(1, [])|selectattr('artifact_type', 'eq', 'directive_generated')|list %}
+                            <span class="bc-section-badge done">Done</span>
+                            {% else %}
+                            <span class="bc-section-badge pending">Pending</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="bc-section-body" id="bc-body-directive">
+                        {% set directive_arts = artifacts_by_step.get(1, [])|selectattr('artifact_type', 'eq', 'directive_generated')|list %}
+                        {% if directive_arts %}
+                        <pre style="font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; background: #F9FAFB; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">{{ directive_arts[0].artifact_content[:1000] }}{% if directive_arts[0].artifact_content|length > 1000 %}...{% endif %}</pre>
+                        {% else %}
+                        <p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 1 to generate the competitive directive.</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Section 2: Prior Battlecard -->
+                <div class="bc-section" id="bc-section-prior">
+                    <div class="bc-section-header" onclick="toggleBcSection('prior')">
+                        <span class="bc-section-title">2. Prior Battlecard Context</span>
+                        <span class="bc-section-badge" id="bc-badge-prior">
+                            {% if artifacts_by_step.get(2, [])|selectattr('artifact_type', 'eq', 'old_battlecard_extracted')|list %}
+                            <span class="bc-section-badge done">Done</span>
+                            {% else %}
+                            <span class="bc-section-badge pending">Pending</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="bc-section-body collapsed" id="bc-body-prior">
+                        {% set prior_arts = artifacts_by_step.get(2, [])|selectattr('artifact_type', 'eq', 'old_battlecard_extracted')|list %}
+                        {% if prior_arts %}
+                        <pre style="font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; background: #F9FAFB; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">{{ prior_arts[0].artifact_content[:1000] }}{% if prior_arts[0].artifact_content|length > 1000 %}...{% endif %}</pre>
+                        {% else %}
+                        <p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 2 to add prior battlecard context.</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Section 3: Product Categories -->
+                <div class="bc-section" id="bc-section-categories">
+                    <div class="bc-section-header" onclick="toggleBcSection('categories')">
+                        <span class="bc-section-title">3. Product Categories</span>
+                        <span class="bc-section-badge" id="bc-badge-categories">
+                            {% if artifacts_by_step.get(3, [])|selectattr('artifact_type', 'eq', 'product_categories')|list %}
+                            <span class="bc-section-badge done">Done</span>
+                            {% else %}
+                            <span class="bc-section-badge pending">Pending</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="bc-section-body collapsed" id="bc-body-categories">
+                        {% set cat_arts = artifacts_by_step.get(3, [])|selectattr('artifact_type', 'eq', 'product_categories')|list %}
+                        {% if cat_arts %}
+                        <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                            {% for cat in cat_arts[0].artifact_content.split('\n') if cat.strip() %}
+                            <span style="padding: 4px 10px; background: #DBEAFE; color: #1E40AF; border-radius: 12px; font-size: 11px; font-weight: 600;">{{ cat.strip() }}</span>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 3 to select categories.</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Section 4: Category Classifications -->
+                <div class="bc-section" id="bc-section-classifications">
+                    <div class="bc-section-header" onclick="toggleBcSection('classifications')">
+                        <span class="bc-section-title">4. Category Classifications</span>
+                        <span class="bc-section-badge" id="bc-badge-classifications">
+                            {% set class_arts = artifacts_by_step.get(4, [])|selectattr('artifact_type', 'eq', 'category_selections')|list %}
+                            {% if class_arts %}
+                            <span class="bc-section-badge done">Classified</span>
+                            {% else %}
+                            <span class="bc-section-badge pending">Pending</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="bc-section-body collapsed" id="bc-body-classifications">
+                        {% if class_arts %}
+                        {% set sel_data = class_arts[0].artifact_content if class_arts[0].artifact_content is mapping else {} %}
+                        {% if sel_data.get('core_product_categories') %}
+                        <div style="margin-bottom: 6px;">
+                            <strong style="font-size: 11px; color: #4CAF50;">Core:</strong>
+                            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px;">
+                                {% for c in sel_data['core_product_categories'] %}
+                                <span style="padding: 2px 8px; background: #E8F5E9; color: #2E7D32; border-radius: 10px; font-size: 10px; font-weight: 600;">{{ c }}</span>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+                        {% if sel_data.get('cross_platform_capabilities') %}
+                        <div style="margin-bottom: 6px;">
+                            <strong style="font-size: 11px; color: #2196F3;">Cross-Platform:</strong>
+                            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px;">
+                                {% for c in sel_data['cross_platform_capabilities'] %}
+                                <span style="padding: 2px 8px; background: #E3F2FD; color: #1565C0; border-radius: 10px; font-size: 10px; font-weight: 600;">{{ c }}</span>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+                        {% if sel_data.get('skipped') %}
+                        <div>
+                            <strong style="font-size: 11px; color: var(--text-secondary);">Skipped:</strong>
+                            <span style="font-size: 11px; color: var(--text-secondary);">{{ sel_data['skipped'] | join(', ') }}</span>
+                        </div>
+                        {% endif %}
+                        {% else %}
+                        <p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 4 to classify categories.</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Section 5: Key Differentiators -->
+                <div class="bc-section" id="bc-section-diffs">
+                    <div class="bc-section-header" onclick="toggleBcSection('diffs')">
+                        <span class="bc-section-title">5. Key Differentiators</span>
+                        <span class="bc-section-badge" id="bc-badge-diffs">
+                            {% set skel_arts = artifacts_by_step.get(5, [])|selectattr('artifact_type', 'eq', 'pass1_skeletons')|list %}
+                            {% if skel_arts %}
+                            <span class="bc-section-badge done">{{ (skel_arts[0].artifact_metadata or {}).get('count', '?') }} items</span>
+                            {% else %}
+                            <span class="bc-section-badge pending">Pending</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="bc-section-body" id="bc-body-diffs">
+                        <div id="bc-diffs-list"></div>
+                    </div>
+                </div>
+
+                <!-- Section 6: Claims -->
+                <div class="bc-section" id="bc-section-claims">
+                    <div class="bc-section-header" onclick="toggleBcSection('claims')">
+                        <span class="bc-section-title">6. Competitive Claims</span>
+                        <span class="bc-section-badge" id="bc-badge-claims">
+                            {% set claim_arts = artifacts_by_step.get(6, [])|selectattr('artifact_type', 'in', ['pass2_claims', 'pass3_regenerated'])|list %}
+                            {% if claim_arts %}
+                            <span class="bc-section-badge done">{{ (claim_arts[0].artifact_metadata or {}).get('count', '?') }} pairs</span>
+                            {% else %}
+                            <span class="bc-section-badge pending">Pending</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="bc-section-body" id="bc-body-claims">
+                        <div id="bc-claims-list"></div>
+                    </div>
+                </div>
+
+                <!-- Section 7: Fact Checks -->
+                <div class="bc-section" id="bc-section-factchecks">
+                    <div class="bc-section-header" onclick="toggleBcSection('factchecks')">
+                        <span class="bc-section-title">7. Fact Checks</span>
+                        <span class="bc-section-badge" id="bc-badge-factchecks">
+                            {% if fact_check_summary %}
+                            <span class="bc-section-badge done">{{ fact_check_summary.verified }} verified</span>
+                            {% else %}
+                            <span class="bc-section-badge pending">Pending</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="bc-section-body collapsed" id="bc-body-factchecks">
+                        {% if fact_check_summary %}
+                        <p style="font-size: 12px; color: var(--text-secondary);">
+                            {{ fact_check_summary.total_claims }} claims checked:
+                            {{ fact_check_summary.verified }} verified,
+                            {{ fact_check_summary.unverified }} unverified,
+                            {{ fact_check_summary.disputed }} disputed,
+                            {{ fact_check_summary.outdated }} outdated
+                        </p>
+                        {% else %}
+                        <p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 7 to fact check claims.</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Section 8: Slides -->
+                <div class="bc-section" id="bc-section-slides">
+                    <div class="bc-section-header" onclick="toggleBcSection('slides')">
+                        <span class="bc-section-title">8. Google Slides</span>
+                        <span class="bc-section-badge" id="bc-badge-slides">
+                            {% if artifacts_by_step.get(8, [])|selectattr('artifact_type', 'eq', 'google_slides_url')|list %}
+                            <span class="bc-section-badge done">Generated</span>
+                            {% else %}
+                            <span class="bc-section-badge pending">Pending</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="bc-section-body collapsed" id="bc-body-slides">
+                        {% set slide_arts = artifacts_by_step.get(8, [])|selectattr('artifact_type', 'eq', 'google_slides_url')|list %}
+                        {% if slide_arts %}
+                        <a href="{{ slide_arts[0].artifact_content }}" target="_blank" style="font-size: 13px; color: var(--teal); font-weight: 600;">Open in Google Slides &rarr;</a>
+                        {% else %}
+                        <p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 8 to generate slides.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div><!-- /panel-right -->
+
+    </div><!-- /split-layout -->
+
+    <script>
+    const SESSION_ID = "{{ session.session_id }}";
+    let pollingInterval = null;
+
+    // Start polling if any step is in_progress
+    function checkAndStartPolling() {
+        {% for step in steps %}
+        {% if step.status == 'in_progress' %}
+        startPolling();
+        {% endif %}
+        {% endfor %}
+    }
+
+    function startPolling() {
+        if (pollingInterval) return;
+        pollingInterval = setInterval(pollStatus, 1500);
+    }
+
+    function stopPolling() {
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+            pollingInterval = null;
+        }
+    }
+
+    async function pollStatus() {
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/status');
+            const data = await resp.json();
+            if (!data.steps) return;
+
+            let anyInProgress = false;
+            data.steps.forEach(function(step) {
+                const n = step.step_number;
+                const badge = document.getElementById('step-badge-' + n);
+                const statusText = document.getElementById('step-status-text-' + n);
+
+                if (badge) {
+                    badge.className = 'step-status-badge ' + step.status;
+                }
+                if (statusText) {
+                    statusText.textContent = step.status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                }
+
+                // Update step number circle
+                const circle = document.querySelector('#step-block-' + n + ' .step-number');
+                if (circle) {
+                    circle.className = 'step-number ' + step.status;
+                }
+
+                // Update progress if in_progress
+                if (step.status === 'in_progress') {
+                    anyInProgress = true;
+                    let progressEl = document.getElementById('progress-' + n);
+                    if (!progressEl) {
+                        // Create progress bar with percentage
+                        const body = document.getElementById('step-body-' + n);
+                        if (body) {
+                            const existingBtns = body.querySelector('.btn-group');
+                            const html = '<div class="progress-container" id="progress-' + n + '">' +
+                                '<div class="progress-bar-bg"><div class="progress-bar-fill" id="progress-fill-' + n + '" style="width:0%"></div></div>' +
+                                '<div class="progress-text" id="progress-text-' + n + '">Working...</div>' +
+                                '<div class="progress-pct" id="progress-pct-' + n + '"></div></div>';
+                            if (existingBtns) {
+                                existingBtns.insertAdjacentHTML('beforebegin', html);
+                            } else {
+                                body.insertAdjacentHTML('afterbegin', html);
+                            }
+                        }
+                    }
+                    const fill = document.getElementById('progress-fill-' + n);
+                    const text = document.getElementById('progress-text-' + n);
+                    const pct = document.getElementById('progress-pct-' + n);
+                    if (fill && step.progress_total > 0) {
+                        const pctVal = Math.round((step.progress_current / step.progress_total) * 100);
+                        fill.style.width = pctVal + '%';
+                        if (pct) pct.textContent = pctVal + '%';
+                    }
+                    if (text && step.progress_message) {
+                        text.textContent = step.progress_message;
+                    }
+
+                    // Show inline errors during progress
+                    if (step.error_details && step.error_details.errors && step.error_details.errors.length > 0) {
+                        let errEl = document.getElementById('error-details-' + n);
+                        if (!errEl) {
+                            const body = document.getElementById('step-body-' + n);
+                            if (body) {
+                                const html = '<div class="error-details-list" id="error-details-' + n + '"><details open>' +
+                                    '<summary>' + step.error_details.errors.length + ' item(s) had errors</summary>' +
+                                    '<ul></ul></details></div>';
+                                const progressEl2 = document.getElementById('progress-' + n);
+                                if (progressEl2) {
+                                    progressEl2.insertAdjacentHTML('afterend', html);
+                                }
+                            }
+                        }
+                        errEl = document.getElementById('error-details-' + n);
+                        if (errEl) {
+                            const ul = errEl.querySelector('ul');
+                            const summary = errEl.querySelector('summary');
+                            if (ul && summary) {
+                                summary.textContent = step.error_details.errors.length + ' item(s) had errors';
+                                ul.innerHTML = step.error_details.errors.map(function(e) {
+                                    return '<li><strong>' + e.key_differentiator + '</strong>: ' + e.error + '</li>';
+                                }).join('');
+                            }
+                        }
+                    }
+                }
+
+                // If status changed from in_progress, reload the page
+                if (step.status === 'completed' || step.status === 'waiting_human' || step.status === 'failed') {
+                    const body = document.getElementById('step-body-' + n);
+                    const progressEl = document.getElementById('progress-' + n);
+                    if (progressEl && (step.status === 'completed' || step.status === 'waiting_human' || step.status === 'failed')) {
+                        // Reload page to get fresh template rendering
+                        window.location.reload();
+                    }
+                }
+            });
+
+            if (!anyInProgress) {
+                stopPolling();
+            }
+        } catch (err) {
+            console.error('Poll error:', err);
+        }
+    }
+
+    async function uploadFile(stepNum, input) {
+        if (!input.files.length) return;
+        const file = input.files[0];
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/upload', {
+                method: 'POST',
+                body: formData,
+            });
+            const data = await resp.json();
+            if (data.success) {
+                const list = document.getElementById('uploaded-files-' + stepNum);
+                if (list) {
+                    const li = document.createElement('li');
+                    li.className = 'uploaded-file-item';
+                    li.dataset.filename = data.filename;
+                    li.innerHTML = '<span style="color: var(--success);">&#x25CF;</span> ' + data.filename;
+                    list.appendChild(li);
+                }
+                fetchContextPills();
+                // Step 2: detect text files and show Use As-Is option
+                if (stepNum === 2) {
+                    updateStep2Buttons(data.filename);
+                }
+            } else {
+                alert(data.error || 'Upload failed');
+            }
+        } catch (err) {
+            alert('Upload error: ' + err.message);
+        }
+    }
+
+    function updateStep2Buttons(filename) {
+        const ext = (filename || '').split('.').pop().toLowerCase();
+        const isText = ['md', 'txt', 'csv', 'json'].includes(ext);
+        const infoBanner = document.getElementById('step2-text-info');
+        const useBtn = document.getElementById('btn-step2-use');
+        const extractBtn = document.getElementById('btn-step2-extract');
+        if (isText) {
+            if (infoBanner) infoBanner.style.display = 'block';
+            if (useBtn) useBtn.style.display = '';
+            if (extractBtn) extractBtn.textContent = 'Extract with LLM';
+        } else {
+            if (infoBanner) infoBanner.style.display = 'none';
+            if (useBtn) useBtn.style.display = 'none';
+            if (extractBtn) extractBtn.textContent = 'Extract Content';
+        }
+    }
+
+    async function step2UseAsIs() {
+        const btn = document.getElementById('btn-step2-use');
+        if (btn) btn.disabled = true;
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/2/use-as-is', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: '{}',
+            });
+            const data = await resp.json();
+            if (data.success) {
+                startPolling();
+            } else {
+                alert(data.error || 'Failed');
+                if (btn) btn.disabled = false;
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function triggerStep(stepNum, action) {
+        const btn = document.getElementById('btn-step' + stepNum + '-' + action);
+        if (btn) btn.disabled = true;
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/' + action, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: '{}',
+            });
+            const data = await resp.json();
+            if (data.success) {
+                startPolling();
+                // Step 8 completes synchronously, reload immediately
+                if (action === 'generate' && stepNum === 8) {
+                    setTimeout(function() { window.location.reload(); }, 500);
+                }
+            } else {
+                alert(data.error || 'Action failed');
+                if (btn) btn.disabled = false;
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function runFactCheck() {
+        const btn = document.getElementById('btn-step7-factcheck') || document.getElementById('btn-step7-rerun');
+        if (btn) btn.disabled = true;
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/7/generate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: '{}',
+            });
+            const data = await resp.json();
+            if (data.success) {
+                startPolling();
+            } else {
+                alert(data.error || 'Fact check failed');
+                if (btn) btn.disabled = false;
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function approveFactCheck() {
+        const btn = document.getElementById('btn-step7-approve');
+        if (btn) btn.disabled = true;
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/7/approve', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: '{}',
+            });
+            const data = await resp.json();
+            if (data.success) {
+                window.location.reload();
+            } else {
+                alert(data.error || 'Approval failed');
+                if (btn) btn.disabled = false;
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    function skipStep(stepNum) {
+        // For skippable steps, use dedicated skip endpoints (load defaults without LLM)
+        if (stepNum === 1) {
+            triggerStep(1, 'skip');
+        } else if (stepNum === 2) {
+            triggerStep(2, 'extract');
+        }
+    }
+
+    async function saveCategories() {
+        const checkboxes = document.querySelectorAll('#category-grid input[name="category"]:checked');
+        const categories = Array.from(checkboxes).map(cb => cb.value);
+        if (categories.length === 0) {
+            alert('Please select at least one category.');
+            return;
+        }
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/3/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({categories: categories}),
+            });
+            const data = await resp.json();
+            if (data.success) {
+                window.location.reload();
+            } else {
+                alert(data.error || 'Save failed');
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    }
+
+    // --- Step 4: Category Classification (form-based) ---
+
+    async function saveCategorySelections() {
+        var selections = {};
+        var form = document.getElementById('category-classification-form');
+        if (!form) { alert('Form not found'); return; }
+
+        var radios = form.querySelectorAll('input[type="radio"]:checked');
+        radios.forEach(function(r) {
+            // name is "cat_<catalog_id>", value is the inclusion_type
+            var catalogId = r.name.replace('cat_', '');
+            selections[catalogId] = r.value;
+        });
+
+        // Check that at least one non-skip selection exists
+        var hasNonSkip = Object.values(selections).some(function(v) { return v !== 'skip'; });
+        if (!hasNonSkip) {
+            alert('Please select at least one category as Core Product or Cross-Platform.');
+            return;
+        }
+
+        try {
+            var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/4/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({selections: selections}),
+            });
+            var data = await resp.json();
+            if (data.success) {
+                window.location.reload();
+            } else {
+                alert(data.error || 'Save failed');
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    }
+
+    async function approveStep(stepNum) {
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/approve', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: '{}',
+            });
+            const data = await resp.json();
+            if (data.success) {
+                window.location.reload();
+            } else {
+                alert(data.error || 'Approve failed');
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    }
+
+    async function regenerateStep(stepNum) {
+        const feedbackEl = document.getElementById('feedback-step' + stepNum);
+        const feedback = feedbackEl ? feedbackEl.value : '';
+        if (!feedback.trim()) {
+            if (!confirm('No feedback provided. Regenerate anyway?')) return;
+        }
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/regenerate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({feedback: feedback}),
+            });
+            const data = await resp.json();
+            if (data.success) {
+                startPolling();
+            } else {
+                alert(data.error || 'Regeneration failed');
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    }
+
+    // Start polling on page load
+    checkAndStartPolling();
+
+    // --- Diff card expand/collapse ---
+    function toggleDiffCard(id) {
+        var body = document.getElementById('body-' + id);
+        var expand = document.getElementById('expand-' + id);
+        if (body.classList.contains('open')) {
+            body.classList.remove('open');
+            expand.classList.remove('open');
+        } else {
+            body.classList.add('open');
+            expand.classList.add('open');
+        }
+    }
+
+    // --- Per-diff feedback (Step 5) ---
+    function setDiffFeedback(id, status, btn) {
+        if (!window._diffFeedback) return;
+        window._diffFeedback[id] = window._diffFeedback[id] || {};
+        window._diffFeedback[id].status = status;
+        // Toggle button selection
+        var btns = btn.parentElement.querySelectorAll('.score-btn');
+        btns.forEach(function(b) { b.classList.remove('selected'); });
+        btn.classList.add('selected');
+        // Set card border color
+        var card = document.getElementById('diff-card-' + id);
+        if (card) {
+            card.className = 'diff-card';
+            if (status === 'approved') card.classList.add('feedback-approved');
+            else if (status === 'needs_revision') card.classList.add('feedback-revision');
+            else if (status === 'rejected') card.classList.add('feedback-rejected');
+        }
+    }
+
+    function saveDiffComment(id, comment) {
+        if (!window._diffFeedback) return;
+        window._diffFeedback[id] = window._diffFeedback[id] || {};
+        window._diffFeedback[id].comment = comment;
+    }
+
+    // --- Per-claim feedback (Step 6) ---
+    function setClaimFeedback(id, side, status, btn) {
+        if (!window._claimFeedback) return;
+        window._claimFeedback[id] = window._claimFeedback[id] || {};
+        window._claimFeedback[id][side + '_status'] = status;
+        // Toggle button selection
+        var btns = btn.parentElement.querySelectorAll('.score-btn');
+        btns.forEach(function(b) { b.classList.remove('selected'); });
+        btn.classList.add('selected');
+    }
+
+    function saveClaimComment(id, side, comment) {
+        if (!window._claimFeedback) return;
+        window._claimFeedback[id] = window._claimFeedback[id] || {};
+        window._claimFeedback[id][side + '_comment'] = comment;
+    }
+
+    // Collect per-item feedback into the overall feedback text
+    function collectItemFeedback(stepNum) {
+        var parts = [];
+        if (stepNum === 5 && window._diffFeedback) {
+            Object.keys(window._diffFeedback).forEach(function(id) {
+                var fb = window._diffFeedback[id];
+                if (fb.status || fb.comment) {
+                    var sk = (window._skeletonData || []).find(function(s) { return (s.id || '') === id; });
+                    var name = sk ? sk.key_differentiator : id;
+                    var line = '[' + name + '] ' + (fb.status || 'no status');
+                    if (fb.comment) line += ': ' + fb.comment;
+                    parts.push(line);
+                }
+            });
+        }
+        if (stepNum === 6 && window._claimFeedback) {
+            Object.keys(window._claimFeedback).forEach(function(id) {
+                var fb = window._claimFeedback[id];
+                if (fb.db_status || fb.db_comment || fb.comp_status || fb.comp_comment) {
+                    var sk = (window._skeletonData || []).find(function(s) { return (s.id || '') === id; });
+                    var name = sk ? sk.key_differentiator : id;
+                    if (fb.db_status || fb.db_comment) {
+                        parts.push('[' + name + ' - Databricks] ' + (fb.db_status || '') + (fb.db_comment ? ': ' + fb.db_comment : ''));
+                    }
+                    if (fb.comp_status || fb.comp_comment) {
+                        parts.push('[' + name + ' - Competitor] ' + (fb.comp_status || '') + (fb.comp_comment ? ': ' + fb.comp_comment : ''));
+                    }
+                }
+            });
+        }
+        return parts.join('\n');
+    }
+
+    // Override regenerateStep to include per-item feedback
+    var _origRegenerate = regenerateStep;
+    regenerateStep = async function(stepNum) {
+        var feedbackEl = document.getElementById('feedback-step' + stepNum);
+        var overallFeedback = feedbackEl ? feedbackEl.value : '';
+        var itemFeedback = collectItemFeedback(stepNum);
+        var combined = overallFeedback;
+        if (itemFeedback) {
+            combined = (combined ? combined + '\n\n' : '') + 'Per-item feedback:\n' + itemFeedback;
+        }
+        if (!combined.trim()) {
+            if (!confirm('No feedback provided. Regenerate anyway?')) return;
+        }
+        try {
+            var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/regenerate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({feedback: combined}),
+            });
+            var data = await resp.json();
+            if (data.success) {
+                startPolling();
+            } else {
+                alert(data.error || 'Regeneration failed');
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    };
+
+    // --- View Prompt Modal ---
+    var _promptVariableMap = {};  // name -> {value, colorIndex}
+    var _promptCurrentView = 'rendered';
+
+    async function viewPrompt(stepNum) {
+        try {
+            var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/prompt');
+            var data = await resp.json();
+            var modal = document.getElementById('prompt-modal');
+
+            // Title
+            document.getElementById('prompt-modal-title').textContent = data.title || ('Step ' + stepNum + ' Prompt');
+
+            // Meta line
+            var metaHtml = '';
+            if (data.model) metaHtml += '<span><strong>Model:</strong> ' + data.model + '</span>';
+            if (data.template_file) metaHtml += '<span><strong>Template:</strong> ' + data.template_file.split('/').pop() + '</span>';
+            if (data.note) metaHtml += '<span><strong>Note:</strong> ' + data.note + '</span>';
+            if (data.description) metaHtml += '<span>' + data.description + '</span>';
+            document.getElementById('prompt-modal-meta').innerHTML = metaHtml;
+
+            // Variable pills
+            var varsSection = document.getElementById('prompt-modal-variables');
+            var pillsContainer = document.getElementById('prompt-modal-pills');
+            var toggleSection = document.getElementById('prompt-modal-toggle');
+            pillsContainer.innerHTML = '';
+            _promptVariableMap = {};
+
+            if (data.variables && typeof data.variables === 'object') {
+                var varNames = Object.keys(data.variables);
+                varNames.forEach(function(name, i) {
+                    var val = data.variables[name];
+                    var valStr = typeof val === 'object' ? JSON.stringify(val) : String(val);
+                    var colorIdx = i % 10;
+                    _promptVariableMap[name] = {value: valStr, colorIndex: colorIdx};
+
+                    var preview = valStr.length > 40 ? valStr.substring(0, 40) + '...' : valStr;
+                    var pill = document.createElement('span');
+                    pill.className = 'variable-pill color-' + colorIdx;
+                    pill.onclick = function() { showVariableDetail(name); };
+                    var nameSpan = document.createElement('span');
+                    nameSpan.className = 'variable-pill-name';
+                    nameSpan.textContent = '\u007B\u007B' + name + '\u007D\u007D';
+                    var previewSpan = document.createElement('span');
+                    previewSpan.className = 'variable-pill-preview';
+                    previewSpan.textContent = '= ' + preview;
+                    pill.appendChild(nameSpan);
+                    pill.appendChild(previewSpan);
+                    pillsContainer.appendChild(pill);
+                });
+                varsSection.style.display = '';
+                toggleSection.style.display = '';
+            } else {
+                varsSection.style.display = 'none';
+                toggleSection.style.display = 'none';
+            }
+
+            // Rendered view
+            document.getElementById('prompt-modal-body').textContent = data.prompt || 'No prompt available.';
+
+            // Template view (with highlighted variables)
+            var templateContainer = document.getElementById('prompt-modal-template');
+            var templatePre = document.getElementById('prompt-modal-template-content');
+            if (data.template) {
+                templatePre.innerHTML = highlightTemplateVars(data.template);
+                templateContainer.style.display = 'none';
+            } else {
+                templatePre.textContent = '[No template available]';
+                templateContainer.style.display = 'none';
+            }
+
+            // Reset to rendered view
+            switchPromptView('rendered');
+
+            modal.classList.add('open');
+
+            // Fetch token estimate for steps with LLM calls
+            if (stepNum === 5 || stepNum === 6) {
+                fetchTokenEstimate(stepNum);
+            } else {
+                var tokenPanel = document.getElementById('token-estimate-panel');
+                if (tokenPanel) tokenPanel.style.display = 'none';
+            }
+        } catch (err) {
+            alert('Failed to load prompt: ' + err.message);
+        }
+    }
+
+    function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    function highlightTemplateVars(template) {
+        // Escape HTML first, then replace curly-brace variables with highlighted spans
+        var escaped = escapeHtml(template);
+        var brOpen = '\u007B\u007B';
+        var brClose = '\u007D\u007D';
+        // Match double-brace variable patterns in the escaped text
+        return escaped.replace(/\u007B\u007B(\w+)\u007D\u007D/g, function(match, varName) {
+            var info = _promptVariableMap[varName];
+            var colorIdx = info ? info.colorIndex : 0;
+            return '<span class="template-var-highlight color-' + colorIdx +
+                   '" style="cursor:pointer" onclick="showVariableDetail(\'' + varName + '\')">' +
+                   brOpen + varName + brClose + '</span>';
+        });
+    }
+
+    function switchPromptView(view) {
+        _promptCurrentView = view;
+        var renderedPre = document.getElementById('prompt-modal-body');
+        var templateDiv = document.getElementById('prompt-modal-template');
+        var tabRendered = document.getElementById('tab-rendered');
+        var tabTemplate = document.getElementById('tab-template');
+
+        if (view === 'rendered') {
+            renderedPre.style.display = '';
+            templateDiv.style.display = 'none';
+            tabRendered.classList.add('active');
+            tabTemplate.classList.remove('active');
+        } else {
+            renderedPre.style.display = 'none';
+            templateDiv.style.display = '';
+            tabRendered.classList.remove('active');
+            tabTemplate.classList.add('active');
+        }
+    }
+
+    function showVariableDetail(name) {
+        var info = _promptVariableMap[name];
+        if (!info) return;
+        document.getElementById('variable-detail-name').textContent = '\u007B\u007B' + name + '\u007D\u007D';
+        document.getElementById('variable-detail-value').textContent = info.value;
+        document.getElementById('variable-detail-overlay').classList.add('open');
+    }
+
+    function closeVariableDetail() {
+        document.getElementById('variable-detail-overlay').classList.remove('open');
+    }
+
+    function closePromptModal() {
+        document.getElementById('prompt-modal').classList.remove('open');
+    }
+
+    // --- Regenerate with battlecard review feedback ---
+    async function regenerateWithReviewFeedback(stepNum) {
+        var feedbackEl = document.getElementById('feedback-step' + stepNum);
+        var overallFeedback = feedbackEl ? feedbackEl.value : '';
+        var itemFeedback = collectItemFeedback(stepNum);
+        var combined = overallFeedback;
+        if (itemFeedback) {
+            combined = (combined ? combined + '\n\n' : '') + 'Per-item feedback:\n' + itemFeedback;
+        }
+        try {
+            var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/regenerate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({feedback: combined, include_review_feedback: true}),
+            });
+            var data = await resp.json();
+            if (data.success) {
+                startPolling();
+            } else {
+                alert(data.error || 'Regeneration failed');
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    }
+
+    // --- Token estimation in prompt modal ---
+    async function fetchTokenEstimate(stepNum) {
+        var container = document.getElementById('token-estimate-panel');
+        if (!container) return;
+        container.innerHTML = '<span style="color: var(--text-secondary); font-size: 12px;">Loading token estimate...</span>';
+        container.style.display = '';
+        try {
+            var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/token-estimate');
+            var data = await resp.json();
+            if (data.error) {
+                container.innerHTML = '<span style="color: #991B1B; font-size: 12px;">Error: ' + data.error + '</span>';
+                return;
+            }
+            var bd = data.input_breakdown || {};
+            var html = '<div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); margin-bottom: 6px;">Token Usage Estimate (cl100k_base)</div>';
+            html += '<div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px;">';
+
+            // Input breakdown items
+            var breakdownEntries = Object.entries(bd);
+            breakdownEntries.forEach(function(entry) {
+                var key = entry[0];
+                var val = entry[1];
+                var label = key.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+                var isTotal = key.indexOf('total') >= 0;
+                html += '<span style="background: ' + (isTotal ? '#DBEAFE' : '#F3F4F6') + '; padding: 3px 8px; border-radius: 4px;' + (isTotal ? ' font-weight: 700; color: #1E40AF;' : '') + '">';
+                html += '<strong>' + label + ':</strong> ' + Number(val).toLocaleString();
+                html += '</span>';
+            });
+
+            // Output estimate
+            if (data.output_estimate && data.output_estimate.max_tokens) {
+                html += '<span style="background: #FEF3C7; padding: 3px 8px; border-radius: 4px;">';
+                html += '<strong>Max Output:</strong> ' + Number(data.output_estimate.max_tokens).toLocaleString();
+                html += '</span>';
+            }
+
+            // Grand total
+            if (data.total_input_tokens) {
+                html += '<span style="background: #D1FAE5; padding: 3px 8px; border-radius: 4px; font-weight: 700; color: #065F46;">';
+                html += 'Total Input: ' + Number(data.total_input_tokens).toLocaleString() + ' tokens';
+                html += '</span>';
+            }
+
+            html += '</div>';
+            container.innerHTML = html;
+        } catch (err) {
+            container.innerHTML = '<span style="color: #991B1B; font-size: 12px;">Failed to load: ' + err.message + '</span>';
+        }
+    }
+    </script>
+
+    <!-- Prompt Preview Modal -->
+    <div class="modal-overlay" id="prompt-modal" onclick="if(event.target===this)closePromptModal()">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title" id="prompt-modal-title">Prompt Preview</span>
+                <button class="modal-close" onclick="closePromptModal()">&times;</button>
+            </div>
+            <div class="modal-meta" id="prompt-modal-meta"></div>
+            <div id="token-estimate-panel" style="display:none; padding: 10px 20px; background: #fff; border-bottom: 1px solid var(--border);"></div>
+            <div class="modal-variables" id="prompt-modal-variables" style="display:none">
+                <div class="modal-variables-label">Template Variables</div>
+                <div class="variable-pills" id="prompt-modal-pills"></div>
+            </div>
+            <div class="modal-view-toggle" id="prompt-modal-toggle" style="display:none">
+                <button class="modal-view-tab active" id="tab-rendered" onclick="switchPromptView('rendered')">Rendered</button>
+                <button class="modal-view-tab" id="tab-template" onclick="switchPromptView('template')">Template</button>
+            </div>
+            <div class="modal-body">
+                <pre id="prompt-modal-body"></pre>
+                <div id="prompt-modal-template" style="display:none">
+                    <pre id="prompt-modal-template-content"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Variable Detail Overlay -->
+    <div class="variable-detail-overlay" id="variable-detail-overlay" onclick="if(event.target===this)closeVariableDetail()">
+        <div class="variable-detail-panel">
+            <div class="variable-detail-header">
+                <span class="variable-detail-name" id="variable-detail-name"></span>
+                <button class="modal-close" onclick="closeVariableDetail()">&times;</button>
+            </div>
+            <div class="variable-detail-body">
+                <pre id="variable-detail-value"></pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- Context Detail Modal -->
+    <div class="context-modal-overlay" id="context-modal" onclick="if(event.target===this)closeContextModal()">
+        <div class="context-modal">
+            <div class="context-modal-header">
+                <div class="context-modal-header-left">
+                    <span class="context-pill" id="context-modal-pill"></span>
+                    <span class="context-modal-title" id="context-modal-title"></span>
+                </div>
+                <button class="modal-close" onclick="closeContextModal()">&times;</button>
+            </div>
+            <div class="context-modal-meta" id="context-modal-meta"></div>
+            <div class="context-modal-body" id="context-modal-body">
+                <div class="context-modal-loading" id="context-modal-loading">
+                    <div class="spinner"></div> Loading content...
+                </div>
+                <pre id="context-modal-content" style="display:none"></pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // ---- Context Window Functions ----
+    const ROLE_ICONS = {user: '\u2B06', assistant: '\u2B07', system: '\u2699'};
+    const TYPE_LABELS = {user_input: 'Input', model_output: 'Output', system_prompt: 'Prompt', tool_result: 'Result'};
+
+    function formatTokens(n) {
+        if (!n || n === 0) return '0';
+        if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+        return String(n);
+    }
+
+    async function fetchContextPills() {
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/context');
+            if (!resp.ok) {
+                console.error('Context fetch failed:', resp.status);
+                return;
+            }
+            const data = await resp.json();
+            renderContextPills(data.pills || []);
+        } catch (err) {
+            console.error('Failed to fetch context pills:', err);
+        }
+    }
+
+    function renderContextPills(pills) {
+        const container = document.getElementById('context-pills');
+        const countBadge = document.getElementById('context-count');
+        const tokensLabel = document.getElementById('context-total-tokens');
+        const emptyEl = document.getElementById('context-empty');
+
+        if (!pills.length) {
+            if (emptyEl) emptyEl.style.display = 'inline';
+            countBadge.textContent = '0';
+            tokensLabel.textContent = '';
+            container.querySelectorAll('.context-pill').forEach(el => el.remove());
+            return;
+        }
+
+        if (emptyEl) emptyEl.style.display = 'none';
+        countBadge.textContent = pills.length;
+
+        // Total tokens
+        const totalTokens = pills.reduce((sum, p) => sum + (p.token_count || 0), 0);
+        tokensLabel.innerHTML = totalTokens > 0
+            ? '<strong>' + Number(totalTokens).toLocaleString() + '</strong> tokens total'
+            : '';
+
+        // Clear existing pills
+        container.querySelectorAll('.context-pill').forEach(el => el.remove());
+
+        pills.forEach(function(pill) {
+            const el = document.createElement('span');
+            el.className = 'context-pill color-' + (pill.color_index || 0);
+
+            const icon = ROLE_ICONS[pill.role] || '\u2699';
+            const stepLabel = 'S' + pill.step_number;
+            const tokenCount = pill.token_count || 0;
+            const tokenStr = Number(tokenCount).toLocaleString();
+
+            el.innerHTML =
+                '<span class="pill-icon">' + icon + '</span>' +
+                '<span class="pill-step">' + stepLabel + '</span>' +
+                ' ' + (pill.label || pill.content_type) +
+                '<span class="pill-tokens">' + tokenStr + '</span>';
+
+            el.title = pill.label + ' (' + (TYPE_LABELS[pill.turn_type] || pill.turn_type) + ') — ' + tokenStr + ' tokens. Click to view content.';
+
+            el.addEventListener('click', function() {
+                openContextModal(pill);
+            });
+
+            container.appendChild(el);
+        });
+    }
+
+    async function openContextModal(pill) {
+        const overlay = document.getElementById('context-modal');
+        const pillBadge = document.getElementById('context-modal-pill');
+        const title = document.getElementById('context-modal-title');
+        const meta = document.getElementById('context-modal-meta');
+        const loading = document.getElementById('context-modal-loading');
+        const content = document.getElementById('context-modal-content');
+
+        // Set header
+        pillBadge.className = 'context-pill color-' + (pill.color_index || 0);
+        pillBadge.textContent = (ROLE_ICONS[pill.role] || '') + ' ' + (pill.label || pill.content_type);
+        title.textContent = pill.label || pill.content_type;
+
+        // Show modal with loading state
+        overlay.classList.add('open');
+        loading.style.display = 'flex';
+        content.style.display = 'none';
+
+        // Build meta row
+        let metaHtml = '<span><strong>Step:</strong> ' + pill.step_number + '</span>';
+        metaHtml += '<span><strong>Type:</strong> ' + (TYPE_LABELS[pill.turn_type] || pill.turn_type) + '</span>';
+        metaHtml += '<span><strong>Role:</strong> ' + pill.role + '</span>';
+        if (pill.token_count) metaHtml += '<span><strong>Tokens:</strong> ' + Number(pill.token_count).toLocaleString() + '</span>';
+        if (pill.model_name) metaHtml += '<span><strong>Model:</strong> ' + pill.model_name + '</span>';
+        if (pill.created_at) metaHtml += '<span><strong>Time:</strong> ' + pill.created_at + '</span>';
+        meta.innerHTML = metaHtml;
+
+        // Fetch full content if we have an artifact_id
+        if (pill.artifact_id) {
+            try {
+                const resp = await fetch('/api/workflow/' + SESSION_ID + '/artifact/' + pill.artifact_id);
+                const data = await resp.json();
+                content.textContent = data.content || '(empty)';
+                // Update token count in meta if we got a fresh one
+                if (data.token_count) {
+                    meta.innerHTML = metaHtml.replace(
+                        /<span><strong>Tokens:<\/strong>[^<]*<\/span>/,
+                        '<span><strong>Tokens:</strong> ' + Number(data.token_count).toLocaleString() + '</span>'
+                    );
+                }
+            } catch (err) {
+                content.textContent = 'Failed to load content: ' + err.message;
+            }
+        } else {
+            // Use the preview from the pill data
+            content.textContent = pill.content_preview || '(no content available)';
+        }
+
+        loading.style.display = 'none';
+        content.style.display = 'block';
+    }
+
+    function closeContextModal() {
+        document.getElementById('context-modal').classList.remove('open');
+    }
+
+    // Close on Escape key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeContextModal();
+        }
+    });
+
+    // Fetch context pills on page load
+    fetchContextPills();
+
+    // Detect already-uploaded Step 2 files on page load
+    (function() {
+        const items = document.querySelectorAll('#uploaded-files-2 .uploaded-file-item');
+        if (items.length > 0) {
+            const lastFile = items[items.length - 1].dataset.filename;
+            if (lastFile) updateStep2Buttons(lastFile);
+        }
+    })();
+
+    // ---- Resize Handle ----
+    (function() {
+        const handle = document.getElementById('resize-handle');
+        const panelLeft = document.getElementById('panel-left');
+        const panelRight = document.getElementById('panel-right');
+        const layout = document.getElementById('split-layout');
+        let isDragging = false;
+
+        handle.addEventListener('mousedown', function(e) {
+            isDragging = true;
+            handle.classList.add('active');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            if (!isDragging) return;
+            const layoutRect = layout.getBoundingClientRect();
+            const offsetX = e.clientX - layoutRect.left;
+            const totalWidth = layoutRect.width;
+            const handleWidth = 6;
+
+            // Clamp between 25% and 75%
+            let leftPct = (offsetX / totalWidth) * 100;
+            leftPct = Math.max(25, Math.min(75, leftPct));
+
+            panelLeft.style.flex = 'none';
+            panelLeft.style.width = leftPct + '%';
+            panelRight.style.flex = 'none';
+            panelRight.style.width = (100 - leftPct) + '%';
+        });
+
+        document.addEventListener('mouseup', function() {
+            if (isDragging) {
+                isDragging = false;
+                handle.classList.remove('active');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+        });
+    })();
+
+    // ---- Battlecard Preview Section Toggle ----
+    function toggleBcSection(sectionId) {
+        var body = document.getElementById('bc-body-' + sectionId);
+        if (body) {
+            body.classList.toggle('collapsed');
+        }
+    }
+
+    {% if not battlecard_id %}
+    // ---- Populate Battlecard Preview: Key Differentiators (from Step 5 data) ----
+    (function() {
+        var container = document.getElementById('bc-diffs-list');
+        if (!container) return;
+
+        // Try to get skeleton data from window._skeletonData (set by left panel's Step 5 script)
+        // or parse directly from artifact
+        function renderDiffs(data) {
+            if (!data || !data.length) {
+                container.innerHTML = '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 5 to generate key differentiators.</p>';
+                return;
+            }
+            container.innerHTML = '';
+            data.forEach(function(sk, i) {
+                var dbRating = sk.databricks_rating || '';
+                var compRating = sk.competitor_rating || '';
+                var item = document.createElement('div');
+                item.className = 'bc-diff-item';
+                item.innerHTML =
+                    '<div class="bc-diff-header">' +
+                        '<span class="bc-diff-category">' + (sk.category || '') + '</span>' +
+                        '<span>' + (sk.key_differentiator || '') + '</span>' +
+                        '<div class="bc-diff-ratings">' +
+                            '<span class="rating-badge ' + dbRating + '" style="font-size:9px">' + dbRating + '</span>' +
+                            '<span class="rating-badge ' + compRating + '" style="font-size:9px">' + compRating + '</span>' +
+                        '</div>' +
+                    '</div>';
+                container.appendChild(item);
+            });
+        }
+
+        // Wait a tick for left panel's script to set window._skeletonData
+        setTimeout(function() {
+            if (window._skeletonData) {
+                renderDiffs(window._skeletonData);
+            } else {
+                // Try from artifact data passed by Jinja
+                {% set skel_arts = artifacts_by_step.get(5, [])|selectattr('artifact_type', 'eq', 'pass1_skeletons')|list %}
+                {% if skel_arts %}
+                try {
+                    var skelData = {{ skel_arts[0].artifact_content | safe }};
+                    renderDiffs(skelData);
+                } catch(e) {
+                    container.innerHTML = '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 5 to generate key differentiators.</p>';
+                }
+                {% else %}
+                container.innerHTML = '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 5 to generate key differentiators.</p>';
+                {% endif %}
+            }
+        }, 100);
+    })();
+
+    // ---- Populate Battlecard Preview: Claims (from Step 6 data) ----
+    (function() {
+        var container = document.getElementById('bc-claims-list');
+        if (!container) return;
+        var competitor = "{{ session.competitor_name }}";
+
+        function renderClaims(claims, skeletons) {
+            if (!claims || !claims.length) {
+                container.innerHTML = '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 6 to generate competitive claims.</p>';
+                return;
+            }
+            container.innerHTML = '';
+            claims.forEach(function(claim, i) {
+                var sk = (skeletons && skeletons[i]) || {};
+                var dbRating = sk.databricks_rating || '';
+                var compRating = sk.competitor_rating || '';
+                var item = document.createElement('div');
+                item.className = 'bc-diff-item';
+                item.innerHTML =
+                    '<div class="bc-diff-header">' +
+                        '<span class="bc-diff-category">' + (sk.category || '') + '</span>' +
+                        '<span>' + (sk.key_differentiator || 'Diff ' + (i+1)) + '</span>' +
+                        '<div class="bc-diff-ratings">' +
+                            '<span class="rating-badge ' + dbRating + '" style="font-size:9px">' + dbRating + '</span>' +
+                            '<span class="rating-badge ' + compRating + '" style="font-size:9px">' + compRating + '</span>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="bc-diff-body">' +
+                        '<div class="bc-vendor-col databricks">' +
+                            '<div class="bc-vendor-col-label">Databricks</div>' +
+                            '<div class="bc-vendor-headline">' + (claim.databricks_headline || '') + '</div>' +
+                            '<div class="bc-vendor-details">' + (claim.databricks_details || '') + '</div>' +
+                        '</div>' +
+                        '<div class="bc-vendor-col competitor">' +
+                            '<div class="bc-vendor-col-label">' + competitor + '</div>' +
+                            '<div class="bc-vendor-headline">' + (claim.competitor_headline || '') + '</div>' +
+                            '<div class="bc-vendor-details">' + (claim.competitor_details || '') + '</div>' +
+                        '</div>' +
+                    '</div>';
+                container.appendChild(item);
+            });
+        }
+
+        // Wait a tick for left panel scripts to populate window data
+        setTimeout(function() {
+            if (window._claimsData) {
+                renderClaims(window._claimsData, window._skeletonData || []);
+            } else {
+                {% set claim_arts = artifacts_by_step.get(6, [])|selectattr('artifact_type', 'in', ['pass2_claims', 'pass3_regenerated'])|list %}
+                {% set skel_arts2 = artifacts_by_step.get(5, [])|selectattr('artifact_type', 'eq', 'pass1_skeletons')|list %}
+                {% if claim_arts %}
+                try {
+                    var claimsData = {{ claim_arts[0].artifact_content | safe }};
+                    var skelData2 = {% if skel_arts2 %}{{ skel_arts2[0].artifact_content | safe }}{% else %}[]{% endif %};
+                    renderClaims(claimsData, skelData2);
+                } catch(e) {
+                    container.innerHTML = '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 6 to generate competitive claims.</p>';
+                }
+                {% else %}
+                container.innerHTML = '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 6 to generate competitive claims.</p>';
+                {% endif %}
+            }
+        }, 150);
+    })();
+    {% endif %}
+
+    // ---- Panel Collapse/Expand ----
+    function togglePanelCollapse() {
+        var panel = document.getElementById('panel-left');
+        var arrow = document.getElementById('collapse-arrow');
+        var panelRight = document.getElementById('panel-right');
+        var isCollapsed = panel.classList.toggle('collapsed');
+
+        // Flip arrow direction
+        arrow.innerHTML = isCollapsed ? '&#9654;' : '&#9664;';
+
+        // Reset right panel flex to fill space
+        if (isCollapsed) {
+            panelRight.style.flex = '1 1 auto';
+            panelRight.style.width = '';
+        } else {
+            // Restore default 50/50 split
+            panel.style.flex = '';
+            panel.style.width = '';
+            panelRight.style.flex = '';
+            panelRight.style.width = '';
+        }
+
+        // Persist state
+        try {
+            localStorage.setItem('workflow_panel_collapsed', isCollapsed ? '1' : '0');
+        } catch(e) {}
+    }
+
+    function expandPanel() {
+        var panel = document.getElementById('panel-left');
+        if (panel.classList.contains('collapsed')) {
+            togglePanelCollapse();
+        }
+    }
+
+    // Restore collapsed state on load
+    (function() {
+        try {
+            if (localStorage.getItem('workflow_panel_collapsed') === '1') {
+                var panel = document.getElementById('panel-left');
+                var arrow = document.getElementById('collapse-arrow');
+                var panelRight = document.getElementById('panel-right');
+                panel.classList.add('collapsed');
+                arrow.innerHTML = '&#9654;';
+                panelRight.style.flex = '1 1 auto';
+            }
+        } catch(e) {}
+    })();
+    </script>
+</body>
+</html>

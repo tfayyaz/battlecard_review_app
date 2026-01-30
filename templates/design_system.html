@@ -1,0 +1,1462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Battlecard Design System</title>
+    <style>
+        :root {
+            --primary: #FF3621;
+            --primary-dark: #E02E1B;
+            --success: #00A972;
+            --success-light: #E6F7F1;
+            --warning: #F5A623;
+            --warning-light: #FEF6E6;
+            --danger: #E02E1B;
+            --danger-light: #FDECEA;
+            --info: #2196F3;
+            --info-light: #E3F2FD;
+            --bg: #F9FAFB;
+            --card-bg: #ffffff;
+            --text: #1F2937;
+            --text-secondary: #6B7280;
+            --border: #E5E7EB;
+            --gray-100: #F3F4F6;
+            --gray-200: #E5E7EB;
+            --gray-400: #9CA3AF;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: text; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            color: var(--text);
+            background: var(--bg);
+        }
+
+        .design-system {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            width: 260px;
+            background: var(--card-bg);
+            border-right: 1px solid var(--border);
+            padding: 24px;
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            overflow-y: auto;
+        }
+
+        .sidebar-header {
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .sidebar-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .sidebar-subtitle {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .nav-section {
+            margin-bottom: 20px;
+        }
+
+        .nav-section-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--gray-400);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .nav-link {
+            display: block;
+            padding: 8px 12px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 13px;
+            transition: all 0.15s ease;
+        }
+
+        .nav-link:hover {
+            background: var(--gray-100);
+            color: var(--text);
+        }
+
+        .nav-link.active {
+            background: var(--primary);
+            color: white;
+        }
+
+        .main-content {
+            flex: 1;
+            margin-left: 260px;
+            padding: 32px;
+        }
+
+        .section {
+            margin-bottom: 48px;
+        }
+
+        .section-header {
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 2px solid var(--border);
+        }
+
+        .section-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .section-description {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-top: 8px;
+        }
+
+        .component-group {
+            margin-bottom: 32px;
+        }
+
+        .component-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 12px;
+        }
+
+        .component-description {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+        }
+
+        .component-demo {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 12px;
+        }
+
+        /* Card Components */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            transition: all 0.2s ease;
+        }
+
+        .card:hover {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .card-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg);
+        }
+
+        .card-header-primary {
+            background: var(--primary);
+            color: white;
+            border-bottom: none;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin: 0;
+        }
+
+        .card-subtitle {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .card-header-primary .card-subtitle {
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .card-body {
+            padding: 20px;
+        }
+
+        /* Executive Summary Card */
+        .executive-card {
+            border-left: 4px solid var(--primary);
+        }
+
+        .executive-headline {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 12px;
+        }
+
+        .executive-statement {
+            font-size: 14px;
+            color: var(--text-secondary);
+            line-height: 1.75;
+        }
+
+        /* Badges */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 8px;
+            border-radius: 9999px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .badge-primary { background: var(--primary); color: white; }
+        .badge-success { background: var(--success); color: white; }
+        .badge-warning { background: var(--warning); color: var(--text); }
+        .badge-danger { background: var(--danger); color: white; }
+        .badge-info { background: var(--info); color: white; }
+        .badge-gray { background: var(--gray-200); color: var(--text-secondary); }
+
+        /* Score Indicators */
+        .score-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .score-badge-1, .score-badge-2 { background: var(--danger-light); color: var(--danger); }
+        .score-badge-3 { background: var(--warning-light); color: var(--warning); }
+        .score-badge-4, .score-badge-5 { background: var(--success-light); color: var(--success); }
+
+        /* Comparison Table */
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .comparison-table th {
+            padding: 12px 16px;
+            text-align: left;
+            background: var(--gray-100);
+            font-weight: 600;
+            border-bottom: 2px solid var(--border);
+        }
+
+        .comparison-table td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+
+        .comparison-table tr:hover td {
+            background: var(--bg);
+        }
+
+        /* Strength/Weakness Lists */
+        .strength-list, .weakness-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .strength-list li, .weakness-list li {
+            padding: 12px 16px;
+            margin-bottom: 8px;
+            border-radius: 8px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+        .strength-list li {
+            background: var(--success-light);
+            border-left: 3px solid var(--success);
+        }
+
+        .weakness-list li {
+            background: var(--danger-light);
+            border-left: 3px solid var(--danger);
+        }
+
+        .list-icon {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            font-size: 11px;
+        }
+
+        .list-icon-success { background: var(--success); color: white; }
+        .list-icon-danger { background: var(--danger); color: white; }
+
+        /* Grids */
+        .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+
+        @media (max-width: 768px) {
+            .grid-2, .grid-3 { grid-template-columns: 1fr; }
+            .sidebar { display: none; }
+            .main-content { margin-left: 0; }
+        }
+
+        /* Rubric Evaluation */
+        .rubric-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+
+        .rubric-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .rubric-name {
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .rubric-weight {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .rubric-criteria {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        .rubric-score-buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .rubric-score-btn {
+            flex: 1;
+            padding: 8px;
+            border: 2px solid var(--border);
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .rubric-score-btn:hover {
+            border-color: var(--primary);
+        }
+
+        .rubric-score-btn.selected {
+            border-color: var(--primary);
+            background: rgba(255, 54, 33, 0.05);
+        }
+
+        /* Toggle Container */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 12px;
+            background: var(--gray-100);
+            border-radius: 6px;
+        }
+
+        .toggle-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 40px;
+            height: 22px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: 0.3s;
+            border-radius: 22px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: var(--primary);
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(18px);
+        }
+
+        /* JSON view */
+        .json-view {
+            display: none;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 16px;
+            border-radius: 8px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .json-view.visible {
+            display: block;
+        }
+
+        .rendered-content.hidden {
+            display: none;
+        }
+
+        .json-key { color: #9cdcfe; }
+        .json-string { color: #ce9178; }
+        .json-number { color: #b5cea8; }
+        .json-boolean { color: #569cd6; }
+
+        /* Back Button */
+        .back-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: var(--primary);
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 24px;
+        }
+
+        .back-btn:hover {
+            background: var(--primary-dark);
+        }
+    </style>
+</head>
+<body>
+    <div class="design-system">
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-title">Battlecard Design System</div>
+                <div class="sidebar-subtitle">Component library & guidelines</div>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-section-title">Slide Types</div>
+                <a href="#executive" class="nav-link active">Executive Summary</a>
+                <a href="#competitor-overview" class="nav-link">Competitor Overview</a>
+                <a href="#comparison" class="nav-link">Feature Comparison</a>
+                <a href="#strengths" class="nav-link">Strengths & Weaknesses</a>
+                <a href="#objections" class="nav-link">Objection Handlers</a>
+                <a href="#pricing" class="nav-link">Pricing Comparison</a>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-section-title">JSON Schemas</div>
+                <a href="#schema-l200" class="nav-link">L200 Critical Diff</a>
+                <a href="#schema-exec-summary" class="nav-link">Executive Summary</a>
+                <a href="#schema-key-diff" class="nav-link">Key Differentiator</a>
+                <a href="#schema-citations" class="nav-link">Citations & Index Ranges</a>
+                <a href="#schema-fact-check" class="nav-link">Fact Check Result</a>
+                <a href="#schema-review" class="nav-link">Human Review</a>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-section-title">Evaluation</div>
+                <a href="#rubrics" class="nav-link">Rubric Criteria</a>
+                <a href="#scoring" class="nav-link">Scoring System</a>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-section-title">Components</div>
+                <a href="#cards" class="nav-link">Cards</a>
+                <a href="#badges" class="nav-link">Badges</a>
+                <a href="#tables" class="nav-link">Tables</a>
+                <a href="#lists" class="nav-link">Lists</a>
+            </div>
+        </nav>
+
+        <main class="main-content">
+            <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 24px;">
+                <a href="/" class="back-btn" style="margin-bottom: 0;">&#8592; Back to Review App</a>
+                <div class="toggle-container">
+                    <span class="toggle-label">Raw JSON</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="json-toggle" onchange="toggleJsonView()">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- JSON View (hidden by default) -->
+            <div class="json-view" id="jsonView"></div>
+
+            <!-- Rendered Content -->
+            <div class="rendered-content" id="renderedContent">
+
+            <!-- Executive Summary -->
+            <section id="executive" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Executive Summary</h1>
+                    <p class="section-description">The opening slide that provides a high-level overview of the competitive landscape.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Executive Summary Card</h3>
+                    <p class="component-description">Should have a compelling headline and 2-3 key points about the competitor's positioning.</p>
+
+                    <div class="component-demo">
+                        <div class="card executive-card">
+                            <div class="card-body">
+                                <div class="executive-headline">Microsoft Fabric: Azure-Native but Limited Open Standards</div>
+                                <p class="executive-statement">
+                                    Microsoft Fabric positions itself as an all-in-one analytics solution deeply integrated with Azure.
+                                    While it offers seamless Microsoft ecosystem integration, it lacks the open lakehouse architecture
+                                    and multi-cloud flexibility that enterprise customers increasingly demand.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Competitor Overview -->
+            <section id="competitor-overview" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Competitor Overview</h1>
+                    <p class="section-description">Background information about the competitor's product and market position.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Overview Card with Stats</h3>
+                    <div class="component-demo">
+                        <div class="card">
+                            <div class="card-header card-header-primary">
+                                <h4 class="card-title">Microsoft Fabric</h4>
+                                <p class="card-subtitle">Launched November 2023</p>
+                            </div>
+                            <div class="card-body">
+                                <div class="grid-3" style="margin-bottom: 16px;">
+                                    <div style="text-align: center;">
+                                        <div style="font-size: 24px; font-weight: 700; color: var(--primary);">$33B+</div>
+                                        <div style="font-size: 12px; color: var(--text-secondary);">Cloud Revenue (FY23)</div>
+                                    </div>
+                                    <div style="text-align: center;">
+                                        <div style="font-size: 24px; font-weight: 700; color: var(--primary);">60+</div>
+                                        <div style="font-size: 12px; color: var(--text-secondary);">Azure Regions</div>
+                                    </div>
+                                    <div style="text-align: center;">
+                                        <div style="font-size: 24px; font-weight: 700; color: var(--primary);">#2</div>
+                                        <div style="font-size: 12px; color: var(--text-secondary);">Cloud Market Share</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Feature Comparison -->
+            <section id="comparison" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Feature Comparison</h1>
+                    <p class="section-description">Side-by-side comparison of key features and capabilities.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Comparison Table</h3>
+                    <div class="component-demo">
+                        <table class="comparison-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 25%;">Feature</th>
+                                    <th style="width: 15%; text-align: center;">Databricks</th>
+                                    <th style="width: 15%; text-align: center;">Fabric</th>
+                                    <th style="width: 45%;">Details</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td style="font-weight: 500;">Delta Lake Support</td>
+                                    <td style="text-align: center;"><span class="score-badge score-badge-5">&#10003;</span></td>
+                                    <td style="text-align: center;"><span class="score-badge score-badge-3">~</span></td>
+                                    <td>Databricks has native Delta Lake; Fabric uses Delta tables but with limited features</td>
+                                </tr>
+                                <tr>
+                                    <td style="font-weight: 500;">Multi-Cloud</td>
+                                    <td style="text-align: center;"><span class="score-badge score-badge-5">&#10003;</span></td>
+                                    <td style="text-align: center;"><span class="score-badge score-badge-1">&#10007;</span></td>
+                                    <td>Databricks runs on AWS, Azure, GCP; Fabric is Azure-only</td>
+                                </tr>
+                                <tr>
+                                    <td style="font-weight: 500;">Unity Catalog</td>
+                                    <td style="text-align: center;"><span class="score-badge score-badge-5">&#10003;</span></td>
+                                    <td style="text-align: center;"><span class="score-badge score-badge-2">~</span></td>
+                                    <td>Unified governance across data and AI assets</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Strengths & Weaknesses -->
+            <section id="strengths" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Strengths & Weaknesses</h1>
+                    <p class="section-description">Clear listing of competitor advantages and vulnerabilities.</p>
+                </div>
+
+                <div class="component-group">
+                    <div class="grid-2">
+                        <div>
+                            <h3 class="component-title" style="color: var(--success);">Databricks Strengths</h3>
+                            <ul class="strength-list">
+                                <li>
+                                    <span class="list-icon list-icon-success">&#10003;</span>
+                                    <span>Open lakehouse architecture with Delta Lake</span>
+                                </li>
+                                <li>
+                                    <span class="list-icon list-icon-success">&#10003;</span>
+                                    <span>True multi-cloud deployment flexibility</span>
+                                </li>
+                                <li>
+                                    <span class="list-icon list-icon-success">&#10003;</span>
+                                    <span>Unified data and AI governance with Unity Catalog</span>
+                                </li>
+                            </ul>
+                        </div>
+                        <div>
+                            <h3 class="component-title" style="color: var(--danger);">Competitor Weaknesses</h3>
+                            <ul class="weakness-list">
+                                <li>
+                                    <span class="list-icon list-icon-danger">&#10007;</span>
+                                    <span>Azure lock-in limits multi-cloud strategies</span>
+                                </li>
+                                <li>
+                                    <span class="list-icon list-icon-danger">&#10007;</span>
+                                    <span>Limited open-source compatibility</span>
+                                </li>
+                                <li>
+                                    <span class="list-icon list-icon-danger">&#10007;</span>
+                                    <span>Newer platform with less enterprise adoption</span>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============================================== -->
+            <!-- JSON SCHEMA SECTIONS                          -->
+            <!-- ============================================== -->
+
+            <!-- L200 Critical Differentiator Schema -->
+            <section id="schema-l200" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">L200 Critical Differentiator</h1>
+                    <p class="section-description">JSON structure for L200 slides comparing Databricks to a competitor on a single critical differentiator. Stored in <code>battlecard_cards</code> table with <code>card_type = 'L200_critical_differentiator'</code>.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Full Schema</h3>
+                    <p class="component-description">Each L200 slide contains ranking, ratings, a statement, evidence, talking points, and metadata.</p>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;">{
+  <span class="json-key">"critical_differentiator"</span>: {
+    <span class="json-key">"ranking"</span>: <span class="json-number">1</span>,                         <span style="color:#6a9955">// Priority 1-10 (1 = highest)</span>
+    <span class="json-key">"main_text"</span>: <span class="json-string">"Native Lakehouse Architecture"</span>,  <span style="color:#6a9955">// Headline (4-8 words)</span>
+    <span class="json-key">"benefit_subtext"</span>: <span class="json-string">"Unified storage eliminates ETL complexity"</span>
+  },
+  <span class="json-key">"ratings"</span>: {
+    <span class="json-key">"databricks"</span>: {
+      <span class="json-key">"score"</span>: <span class="json-number">5</span>,                       <span style="color:#6a9955">// 1-5 scale</span>
+      <span class="json-key">"justification"</span>: <span class="json-string">"Delta Lake is native with full ACID..."</span>
+    },
+    <span class="json-key">"competitor"</span>: {
+      <span class="json-key">"score"</span>: <span class="json-number">3</span>,
+      <span class="json-key">"justification"</span>: <span class="json-string">"Iceberg Tables new (2024), proprietary format"</span>
+    }
+  },
+  <span class="json-key">"statement"</span>: {
+    <span class="json-key">"header"</span>: <span class="json-string">"Databricks Lakehouse: Unified Data Storage"</span>,
+    <span class="json-key">"text"</span>: <span class="json-string">"Databricks lakehouse stores structured, semi-structured, and unstructured data in open Delta Lake format..."</span>
+  },
+  <span class="json-key">"evidence"</span>: {
+    <span class="json-key">"databricks_capability"</span>: <span class="json-string">"Delta Lake with Photon engine, Unity Catalog"</span>,
+    <span class="json-key">"competitor_limitation"</span>: <span class="json-string">"Proprietary format; Iceberg not native"</span>,
+    <span class="json-key">"technical_details"</span>: <span class="json-string">"Delta Lake uses Parquet + transaction log..."</span>,
+    <span class="json-key">"customer_impact"</span>: <span class="json-string">"40% reduction in pipeline complexity"</span>
+  },
+  <span class="json-key">"talking_points"</span>: [
+    <span class="json-string">"Opening: Databricks stores all data in open Delta Lake..."</span>,
+    <span class="json-string">"Deep dive: Delta Lake gives ACID transactions..."</span>,
+    <span class="json-string">"Objection: Snowflake Iceberg is external integration..."</span>
+  ],
+  <span class="json-key">"metadata"</span>: {
+    <span class="json-key">"confidence"</span>: <span class="json-string">"high"</span>,              <span style="color:#6a9955">// high | medium | low</span>
+    <span class="json-key">"needs_fact_check"</span>: <span class="json-boolean">true</span>,
+    <span class="json-key">"source_hints"</span>: [<span class="json-string">"directive: Technical Differentiators"</span>],
+    <span class="json-key">"tags"</span>: [<span class="json-string">"architecture"</span>, <span class="json-string">"storage"</span>, <span class="json-string">"lakehouse"</span>]
+  }
+}</pre>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Executive Summary Schema -->
+            <section id="schema-exec-summary" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Executive Summary</h1>
+                    <p class="section-description">JSON structure for the executive summary section of a battlecard. Provides high-level positioning and win themes.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Full Schema</h3>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;">{
+  <span class="json-key">"section_type"</span>: <span class="json-string">"executive_summary"</span>,
+  <span class="json-key">"headline"</span>: <span class="json-string">"Microsoft Fabric: Azure-Native but Limited Open Standards"</span>,
+  <span class="json-key">"positioning_statement"</span>: <span class="json-string">"While Fabric offers seamless Microsoft ecosystem integration, it lacks the open lakehouse architecture and multi-cloud flexibility that enterprise customers demand."</span>,
+  <span class="json-key">"win_themes"</span>: [
+    {
+      <span class="json-key">"theme"</span>: <span class="json-string">"Open Lakehouse Architecture"</span>,
+      <span class="json-key">"description"</span>: <span class="json-string">"Delta Lake provides open, vendor-neutral storage"</span>,
+      <span class="json-key">"impact"</span>: <span class="json-string">"high"</span>
+    },
+    {
+      <span class="json-key">"theme"</span>: <span class="json-string">"Multi-Cloud Flexibility"</span>,
+      <span class="json-key">"description"</span>: <span class="json-string">"Run on AWS, Azure, or GCP without lock-in"</span>,
+      <span class="json-key">"impact"</span>: <span class="json-string">"high"</span>
+    },
+    {
+      <span class="json-key">"theme"</span>: <span class="json-string">"Unified Data + AI Governance"</span>,
+      <span class="json-key">"description"</span>: <span class="json-string">"Unity Catalog governs all assets in one place"</span>,
+      <span class="json-key">"impact"</span>: <span class="json-string">"medium"</span>
+    }
+  ],
+  <span class="json-key">"key_buyers"</span>: [<span class="json-string">"CDO"</span>, <span class="json-string">"VP Data Engineering"</span>, <span class="json-string">"CTO"</span>],
+  <span class="json-key">"user_personas"</span>: [<span class="json-string">"Data Engineers"</span>, <span class="json-string">"ML Engineers"</span>, <span class="json-string">"Data Analysts"</span>],
+  <span class="json-key">"market_context"</span>: <span class="json-string">"Enterprise data platform market converging on lakehouse architecture..."</span>,
+  <span class="json-key">"citations"</span>: {
+    <span class="json-key">"positioning_statement"</span>: [
+      {
+        <span class="json-key">"start_index"</span>: <span class="json-number">6</span>,
+        <span class="json-key">"end_index"</span>: <span class="json-number">12</span>,
+        <span class="json-key">"source_index"</span>: <span class="json-number">1</span>,
+        <span class="json-key">"source_title"</span>: <span class="json-string">"Microsoft Fabric GA Announcement"</span>,
+        <span class="json-key">"source_url"</span>: <span class="json-string">"https://azure.microsoft.com/blog/..."</span>,
+        <span class="json-key">"source_quote"</span>: <span class="json-string">"Fabric brings together all analytics workloads..."</span>
+      }
+    ]
+  }
+}</pre>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Key Differentiator Schema -->
+            <section id="schema-key-diff" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Key Differentiator (Trial Eval)</h1>
+                    <p class="section-description">JSON structure for each key differentiator row in the trial evaluation table. Each row compares Databricks vs. a competitor on one differentiator.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Current Schema (v1)</h3>
+                    <p class="component-description">This is the actual data format produced by the generation agent today.</p>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;">{
+  <span class="json-key">"id"</span>: <span class="json-string">"AI_and_Machine_Learning_Unified_ML_Platform"</span>,
+  <span class="json-key">"category"</span>: <span class="json-string">"AI & Machine Learning"</span>,
+  <span class="json-key">"rank"</span>: <span class="json-number">1</span>,
+  <span class="json-key">"key_differentiator"</span>: <span class="json-string">"Unified ML Platform"</span>,
+  <span class="json-key">"description"</span>: <span class="json-string">"Complete ML lifecycle in one platform"</span>,
+
+  <span style="color:#6a9955">// Why this differentiator was selected</span>
+  <span class="json-key">"selection_reasoning"</span>: <span class="json-string">"Fragmented ML tools create governance gaps and operational complexity."</span>,
+
+  <span style="color:#6a9955">// Why this rank position</span>
+  <span class="json-key">"rank_reasoning"</span>: <span class="json-string">"DIRECTIVE positions Databricks as the AI platform for production. Unified approach is key."</span>,
+
+  <span style="color:#6a9955">// Directive alignment (string, not array)</span>
+  <span class="json-key">"directive_alignment"</span>: <span class="json-string">"DIRECTIVE point #23-25: 'Only Azure Databricks is fit for production today AND future-proofed for tomorrow'"</span>,
+
+  <span style="color:#6a9955">// Databricks position</span>
+  <span class="json-key">"databricks_rating"</span>: <span class="json-string">"strong_advantage"</span>,     <span style="color:#6a9955">// strong_advantage | advantage | partial | disadvantage</span>
+  <span class="json-key">"databricks_headline"</span>: <span class="json-string">"End-to-end ML platform"</span>,
+  <span class="json-key">"databricks_details"</span>: <span class="json-string">"MLflow 3 for tracking, Model Serving for deployment, Unity Catalog for governance - all integrated."</span>,
+  <span class="json-key">"databricks_reasoning"</span>: <span class="json-string">"Single platform for feature engineering, training, serving, and governance"</span>,
+
+  <span style="color:#6a9955">// Databricks citation (source + quote)</span>
+  <span class="json-key">"databricks_citation"</span>: {
+    <span class="json-key">"source"</span>: <span class="json-string">"https://docs.databricks.com/aws/en/mlflow/"</span>,
+    <span class="json-key">"quote"</span>: <span class="json-string">"MLflow 3 on Databricks delivers state-of-the-art experiment tracking, observability, and performance evaluation..."</span>
+  },
+
+  <span style="color:#6a9955">// Competitor position</span>
+  <span class="json-key">"fabric_rating"</span>: <span class="json-string">"partial"</span>,
+  <span class="json-key">"fabric_headline"</span>: <span class="json-string">"Azure ML integration required"</span>,
+  <span class="json-key">"fabric_details"</span>: <span class="json-string">"Fabric Data Science for basic ML. Enterprise MLOps requires separate Azure Machine Learning integration."</span>,
+  <span class="json-key">"fabric_reasoning"</span>: <span class="json-string">"DIRECTIVE notes Fabric requires 'Azure ML, Azure AI Foundry' separately"</span>,
+
+  <span style="color:#6a9955">// Competitor citation (source + quote)</span>
+  <span class="json-key">"fabric_citation"</span>: {
+    <span class="json-key">"source"</span>: <span class="json-string">"https://learn.microsoft.com/en-us/fabric/data-science/synapseml-first-model"</span>,
+    <span class="json-key">"quote"</span>: <span class="json-string">"Fabric integrates with Azure Machine Learning to provide built-in experiment tracking and model registry"</span>
+  },
+
+  <span style="color:#6a9955">// All research URLs used</span>
+  <span class="json-key">"research_sources"</span>: [
+    <span class="json-string">"https://docs.databricks.com/aws/en/mlflow/"</span>,
+    <span class="json-string">"https://learn.microsoft.com/en-us/fabric/data-science/synapseml-first-model"</span>
+  ],
+
+  <span style="color:#6a9955">// Review feedback (populated by human review)</span>
+  <span class="json-key">"feedback"</span>: {
+    <span class="json-key">"key_diff"</span>: {},           <span style="color:#6a9955">// { status: "approved"|"needs_revision", comment, timestamp }</span>
+    <span class="json-key">"databricks"</span>: {},         <span style="color:#6a9955">// { status, comment, timestamp }</span>
+    <span class="json-key">"fabric"</span>: {},             <span style="color:#6a9955">// { status, comment, timestamp }</span>
+    <span class="json-key">"reorder"</span>: <span class="json-boolean">null</span>            <span style="color:#6a9955">// { original_rank, new_rank, timestamp } or null</span>
+  }
+}</pre>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Field Reference</h3>
+                    <div class="component-demo">
+                        <table class="comparison-table">
+                            <thead>
+                                <tr>
+                                    <th>Field</th>
+                                    <th>Type</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><code>id</code></td><td>string</td><td>Unique ID: <code>{Category}_{Differentiator}</code> (underscored)</td></tr>
+                                <tr><td><code>category</code></td><td>string</td><td>Category group (e.g., "AI & Machine Learning", "Data Governance & Security")</td></tr>
+                                <tr><td><code>rank</code></td><td>int</td><td>Priority within category (1 = highest)</td></tr>
+                                <tr><td><code>key_differentiator</code></td><td>string</td><td>Short differentiator name</td></tr>
+                                <tr><td><code>description</code></td><td>string</td><td>One-line description</td></tr>
+                                <tr><td><code>selection_reasoning</code></td><td>string</td><td>Why this differentiator matters to buyers</td></tr>
+                                <tr><td><code>rank_reasoning</code></td><td>string</td><td>Why this rank position was chosen</td></tr>
+                                <tr><td><code>directive_alignment</code></td><td>string</td><td>Which directive points this aligns with</td></tr>
+                                <tr><td><code>databricks_rating</code></td><td>string</td><td><code>strong_advantage</code> | <code>advantage</code> | <code>partial</code> | <code>disadvantage</code></td></tr>
+                                <tr><td><code>databricks_headline</code></td><td>string</td><td>Short Databricks position headline</td></tr>
+                                <tr><td><code>databricks_details</code></td><td>string</td><td>Detailed Databricks capability description</td></tr>
+                                <tr><td><code>databricks_reasoning</code></td><td>string</td><td>Why Databricks gets this rating</td></tr>
+                                <tr><td><code>databricks_citation</code></td><td>object</td><td><code>{ source: url, quote: string }</code> - supporting evidence</td></tr>
+                                <tr><td><code>fabric_rating</code></td><td>string</td><td>Competitor rating (same enum as databricks)</td></tr>
+                                <tr><td><code>fabric_headline</code></td><td>string</td><td>Short competitor position headline</td></tr>
+                                <tr><td><code>fabric_details</code></td><td>string</td><td>Detailed competitor description</td></tr>
+                                <tr><td><code>fabric_reasoning</code></td><td>string</td><td>Why competitor gets this rating</td></tr>
+                                <tr><td><code>fabric_citation</code></td><td>object</td><td><code>{ source: url, quote: string }</code> - supporting evidence</td></tr>
+                                <tr><td><code>research_sources</code></td><td>array</td><td>All URLs used during research</td></tr>
+                                <tr><td><code>feedback</code></td><td>object</td><td>Human review state for key_diff, databricks, fabric, reorder</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Target Schema (v2) - With Text Index Range Citations</h3>
+                    <p class="component-description">Future format adds per-field inline citations with character offsets, enabling exact text-to-source highlighting. See <a href="#schema-citations">Citations & Index Ranges</a> for the full citation spec.</p>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;"><span style="color:#6a9955">// v2 adds a "citations" object alongside existing fields</span>
+<span style="color:#6a9955">// All v1 fields remain the same, plus:</span>
+
+  <span class="json-key">"citations"</span>: {
+    <span class="json-key">"databricks_details"</span>: [       <span style="color:#6a9955">// Field name matches text field</span>
+      {
+        <span class="json-key">"start_index"</span>: <span class="json-number">0</span>,              <span style="color:#6a9955">// "MLflow 3" starts at char 0</span>
+        <span class="json-key">"end_index"</span>: <span class="json-number">8</span>,
+        <span class="json-key">"source_index"</span>: <span class="json-number">1</span>,
+        <span class="json-key">"source_title"</span>: <span class="json-string">"MLflow on Databricks"</span>,
+        <span class="json-key">"source_url"</span>: <span class="json-string">"https://docs.databricks.com/aws/en/mlflow/"</span>,
+        <span class="json-key">"source_quote"</span>: <span class="json-string">"MLflow 3 on Databricks delivers state-of-the-art experiment tracking..."</span>
+      },
+      {
+        <span class="json-key">"start_index"</span>: <span class="json-number">27</span>,             <span style="color:#6a9955">// "Model Serving" at char 27</span>
+        <span class="json-key">"end_index"</span>: <span class="json-number">41</span>,
+        <span class="json-key">"source_index"</span>: <span class="json-number">2</span>,
+        <span class="json-key">"source_title"</span>: <span class="json-string">"Databricks Model Serving"</span>,
+        <span class="json-key">"source_url"</span>: <span class="json-string">"https://docs.databricks.com/aws/en/machine-learning/model-serving/"</span>,
+        <span class="json-key">"source_quote"</span>: <span class="json-string">"Model Serving provides real-time and batch inference..."</span>
+      }
+    ],
+    <span class="json-key">"fabric_details"</span>: [
+      {
+        <span class="json-key">"start_index"</span>: <span class="json-number">0</span>,
+        <span class="json-key">"end_index"</span>: <span class="json-number">20</span>,
+        <span class="json-key">"source_index"</span>: <span class="json-number">3</span>,
+        <span class="json-key">"source_title"</span>: <span class="json-string">"Fabric Data Science"</span>,
+        <span class="json-key">"source_url"</span>: <span class="json-string">"https://learn.microsoft.com/en-us/fabric/data-science/"</span>,
+        <span class="json-key">"source_quote"</span>: <span class="json-string">"Fabric integrates with Azure Machine Learning..."</span>
+      }
+    ]
+  }</pre>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Citations & Index Ranges Schema -->
+            <section id="schema-citations" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Citations with Text Index Ranges</h1>
+                    <p class="section-description">Every text field in the battlecard can have inline citations that map exact character ranges to source documents. This enables highlighting which part of the text is backed by which source.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Citation Object Schema</h3>
+                    <p class="component-description">Each citation maps a character range <code>[start_index, end_index)</code> in the parent text to a source document.</p>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;">{
+  <span class="json-key">"start_index"</span>: <span class="json-number">0</span>,           <span style="color:#6a9955">// Start character offset (inclusive)</span>
+  <span class="json-key">"end_index"</span>: <span class="json-number">13</span>,             <span style="color:#6a9955">// End character offset (exclusive)</span>
+  <span class="json-key">"source_index"</span>: <span class="json-number">1</span>,           <span style="color:#6a9955">// Citation number for display [1], [2], etc.</span>
+  <span class="json-key">"source_title"</span>: <span class="json-string">"Databricks Unity Catalog Documentation"</span>,
+  <span class="json-key">"source_url"</span>: <span class="json-string">"https://docs.databricks.com/..."</span>,
+  <span class="json-key">"source_quote"</span>: <span class="json-string">"Unity Catalog is a unified governance solution for all data and AI assets"</span>
+}</pre>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">How It Works</h3>
+                    <p class="component-description">Citations are organized per-field in a <code>citations</code> object at the same level as the text fields they annotate.</p>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;"><span style="color:#6a9955">// Example: text field with 2 citations</span>
+<span class="json-key">"databricks_details"</span>: <span class="json-string">"Unity Catalog provides centralized access control across all assets with ANSI SQL permissions"</span>,
+                         <span style="color:#569cd6; font-weight:bold;">|&lt;-- [0,13) --&gt;|</span>                                            <span style="color:#569cd6; font-weight:bold;">|&lt;-- [65,87) --&gt;|</span>
+
+<span class="json-key">"citations"</span>: {
+  <span class="json-key">"databricks_details"</span>: [                    <span style="color:#6a9955">// Field name matches the text field</span>
+    {
+      <span class="json-key">"start_index"</span>: <span class="json-number">0</span>,   <span class="json-key">"end_index"</span>: <span class="json-number">13</span>,    <span style="color:#6a9955">// "Unity Catalog"</span>
+      <span class="json-key">"source_index"</span>: <span class="json-number">1</span>,
+      <span class="json-key">"source_title"</span>: <span class="json-string">"Unity Catalog Docs"</span>,
+      <span class="json-key">"source_url"</span>: <span class="json-string">"https://docs.databricks.com/..."</span>,
+      <span class="json-key">"source_quote"</span>: <span class="json-string">"Unity Catalog is a unified governance..."</span>
+    },
+    {
+      <span class="json-key">"start_index"</span>: <span class="json-number">65</span>,  <span class="json-key">"end_index"</span>: <span class="json-number">87</span>,    <span style="color:#6a9955">// "ANSI SQL permissions"</span>
+      <span class="json-key">"source_index"</span>: <span class="json-number">2</span>,
+      <span class="json-key">"source_title"</span>: <span class="json-string">"UC Privileges Guide"</span>,
+      <span class="json-key">"source_url"</span>: <span class="json-string">"https://docs.databricks.com/..."</span>,
+      <span class="json-key">"source_quote"</span>: <span class="json-string">"GRANT/REVOKE syntax for privileges"</span>
+    }
+  ]
+}</pre>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Rendering: Highlighted Text</h3>
+                    <p class="component-description">Cited text ranges are rendered with blue highlights, superscript citation numbers, and hover tooltips showing the source.</p>
+                    <div class="component-demo">
+                        <div style="font-size: 13px; line-height: 1.7; background: #f9fafb; padding: 12px 14px; border-radius: 6px; border: 1px solid #e5e7eb;">
+                            <span style="background: rgba(59, 130, 246, 0.12); border-bottom: 2px solid #3b82f6; padding: 1px 2px; border-radius: 2px; cursor: pointer;">Unity Catalog<span style="font-size: 9px; font-weight: 700; color: #3b82f6; vertical-align: super; margin-left: 1px;">[1]</span></span> provides centralized access control across files, tables, ML models, and AI assets with <span style="background: rgba(59, 130, 246, 0.12); border-bottom: 2px solid #3b82f6; padding: 1px 2px; border-radius: 2px; cursor: pointer;">ANSI SQL-based permissions<span style="font-size: 9px; font-weight: 700; color: #3b82f6; vertical-align: super; margin-left: 1px;">[2]</span></span> at account level
+                        </div>
+                        <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid #e5e7eb;">
+                            <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #6b7280; margin-bottom: 8px;">Sources</div>
+                            <div style="display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; font-size: 11px; border-bottom: 1px solid #f3f4f6;">
+                                <span style="flex-shrink: 0; width: 18px; height: 18px; background: #3b82f6; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700;">1</span>
+                                <div>
+                                    <div style="font-weight: 600;">Databricks Unity Catalog Docs</div>
+                                    <div style="color: #3b82f6; font-size: 10px;">docs.databricks.com/en/data-governance/unity-catalog/</div>
+                                    <div style="color: #9ca3af; font-family: monospace; font-size: 10px;">chars 0-13</div>
+                                </div>
+                            </div>
+                            <div style="display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; font-size: 11px;">
+                                <span style="flex-shrink: 0; width: 18px; height: 18px; background: #3b82f6; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700;">2</span>
+                                <div>
+                                    <div style="font-weight: 600;">Unity Catalog ANSI SQL Permissions</div>
+                                    <div style="color: #3b82f6; font-size: 10px;">docs.databricks.com/en/.../manage-privileges/</div>
+                                    <div style="color: #9ca3af; font-family: monospace; font-size: 10px;">chars 65-87</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Supported Fields</h3>
+                    <p class="component-description">Any text field in the data model can have citations. The <code>citations</code> object uses field names as keys.</p>
+                    <div class="component-demo">
+                        <table class="comparison-table">
+                            <thead>
+                                <tr>
+                                    <th>Field Name</th>
+                                    <th>Description</th>
+                                    <th>Example</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>description</code></td>
+                                    <td>Key differentiator description</td>
+                                    <td>"Set permissions once, enforced everywhere"</td>
+                                </tr>
+                                <tr>
+                                    <td><code>key_diff_reasoning</code></td>
+                                    <td>Why this differentiator was selected</td>
+                                    <td>"C-suite buyers need assurance..."</td>
+                                </tr>
+                                <tr>
+                                    <td><code>databricks_details</code></td>
+                                    <td>Databricks position details</td>
+                                    <td>"Unity Catalog provides centralized..."</td>
+                                </tr>
+                                <tr>
+                                    <td><code>databricks_reasoning</code></td>
+                                    <td>Reasoning for Databricks rating</td>
+                                    <td>"Unity Catalog's architecture inherently..."</td>
+                                </tr>
+                                <tr>
+                                    <td><code>fabric_details</code></td>
+                                    <td>Competitor position details</td>
+                                    <td>"OneLake Security (Preview), SQL Permissions..."</td>
+                                </tr>
+                                <tr>
+                                    <td><code>fabric_reasoning</code></td>
+                                    <td>Reasoning for competitor rating</td>
+                                    <td>"DIRECTIVE accurately describes..."</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Fact Check Result Schema -->
+            <section id="schema-fact-check" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Fact Check Result</h1>
+                    <p class="section-description">JSON structure for fact-check results. Each claim is verified against web search providers (exa.ai, you.com) and evaluated by an LLM judge.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Full Schema</h3>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;">{
+  <span class="json-key">"fact_check_id"</span>: <span class="json-string">"fc-001"</span>,
+  <span class="json-key">"card_id"</span>: <span class="json-string">"diff-security-unified-access-001"</span>,
+  <span class="json-key">"hierarchy_path"</span>: <span class="json-string">"section:governance/card:access-control/component:0"</span>,
+  <span class="json-key">"claim_text"</span>: <span class="json-string">"Unity Catalog provides centralized access control across files, tables, ML models, and AI assets"</span>,
+  <span class="json-key">"claim_type"</span>: <span class="json-string">"feature_claim"</span>,           <span style="color:#6a9955">// feature_claim | statistic | comparison | market_position</span>
+  <span class="json-key">"verdict"</span>: <span class="json-string">"verified"</span>,                   <span style="color:#6a9955">// verified | unverified | disputed | outdated</span>
+  <span class="json-key">"confidence"</span>: <span class="json-number">0.92</span>,                     <span style="color:#6a9955">// 0.0-1.0</span>
+  <span class="json-key">"rationale"</span>: <span class="json-string">"Multiple authoritative sources confirm Unity Catalog's unified governance capabilities."</span>,
+  <span class="json-key">"search_results"</span>: [
+    {
+      <span class="json-key">"provider"</span>: <span class="json-string">"exa.ai"</span>,
+      <span class="json-key">"url"</span>: <span class="json-string">"https://docs.databricks.com/en/data-governance/unity-catalog/"</span>,
+      <span class="json-key">"title"</span>: <span class="json-string">"Unity Catalog Documentation"</span>,
+      <span class="json-key">"quote"</span>: <span class="json-string">"Unity Catalog is a unified governance solution for all data and AI assets"</span>,
+      <span class="json-key">"relevance_score"</span>: <span class="json-number">0.98</span>
+    },
+    {
+      <span class="json-key">"provider"</span>: <span class="json-string">"you.com"</span>,
+      <span class="json-key">"url"</span>: <span class="json-string">"https://www.databricks.com/product/unity-catalog"</span>,
+      <span class="json-key">"title"</span>: <span class="json-string">"Unity Catalog Product Page"</span>,
+      <span class="json-key">"quote"</span>: <span class="json-string">"Centralized governance for data, analytics, and AI"</span>,
+      <span class="json-key">"relevance_score"</span>: <span class="json-number">0.95</span>
+    }
+  ],
+  <span class="json-key">"judge_model"</span>: <span class="json-string">"claude-sonnet-4-20250514"</span>,
+  <span class="json-key">"checked_at"</span>: <span class="json-string">"2026-01-20T15:30:00Z"</span>
+}</pre>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Verdict Types</h3>
+                    <div class="component-demo">
+                        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                            <div style="display: flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--success-light); border-radius: 6px;">
+                                <span style="color: var(--success); font-weight: 600;">&#10003; verified</span>
+                                <span style="color: var(--text-secondary); font-size: 12px;">Multiple sources confirm</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--gray-100); border-radius: 6px;">
+                                <span style="color: var(--text-secondary); font-weight: 600;">? unverified</span>
+                                <span style="color: var(--text-secondary); font-size: 12px;">No supporting evidence found</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--warning-light); border-radius: 6px;">
+                                <span style="color: #b45309; font-weight: 600;">&#9888; disputed</span>
+                                <span style="color: var(--text-secondary); font-size: 12px;">Sources disagree</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--danger-light); border-radius: 6px;">
+                                <span style="color: var(--danger); font-weight: 600;">&#10007; outdated</span>
+                                <span style="color: var(--text-secondary); font-size: 12px;">Information may have changed</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Human Review Schema -->
+            <section id="schema-review" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Human Review</h1>
+                    <p class="section-description">JSON structure for human review feedback. Reviews can be submitted at any hierarchy level (battlecard, section, card, component).</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Review Feedback Schema</h3>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;">{
+  <span class="json-key">"review_id"</span>: <span class="json-string">"rev-001"</span>,
+  <span class="json-key">"battlecard_id"</span>: <span class="json-string">"bc-fabric-2026-01"</span>,
+  <span class="json-key">"hierarchy_level"</span>: <span class="json-string">"card"</span>,           <span style="color:#6a9955">// battlecard | section | card | component</span>
+  <span class="json-key">"element_id"</span>: <span class="json-string">"diff-security-unified-access-001"</span>,
+  <span class="json-key">"hierarchy_path"</span>: [<span class="json-string">"Data Governance & Security"</span>, <span class="json-string">"Unified Access Control"</span>],
+
+  <span style="color:#6a9955">// Three-level evaluation (key_diff, databricks, fabric)</span>
+  <span class="json-key">"key_diff"</span>: {
+    <span class="json-key">"status"</span>: <span class="json-string">"approved"</span>,            <span style="color:#6a9955">// approved | needs_revision | rejected</span>
+    <span class="json-key">"comment"</span>: <span class="json-string">"Clear and impactful differentiator"</span>,
+    <span class="json-key">"timestamp"</span>: <span class="json-string">"2026-01-20T16:00:00Z"</span>
+  },
+  <span class="json-key">"databricks"</span>: {
+    <span class="json-key">"status"</span>: <span class="json-string">"approved"</span>,
+    <span class="json-key">"comment"</span>: <span class="json-string">"Accurate positioning, well-cited"</span>,
+    <span class="json-key">"timestamp"</span>: <span class="json-string">"2026-01-20T16:01:00Z"</span>
+  },
+  <span class="json-key">"fabric"</span>: {
+    <span class="json-key">"status"</span>: <span class="json-string">"needs_revision"</span>,
+    <span class="json-key">"comment"</span>: <span class="json-string">"OneLake Security is now GA, update needed"</span>,
+    <span class="json-key">"timestamp"</span>: <span class="json-string">"2026-01-20T16:02:00Z"</span>
+  },
+
+  <span style="color:#6a9955">// Optional reorder tracking</span>
+  <span class="json-key">"reorder"</span>: {
+    <span class="json-key">"original_rank"</span>: <span class="json-number">3</span>,
+    <span class="json-key">"new_rank"</span>: <span class="json-number">1</span>,
+    <span class="json-key">"timestamp"</span>: <span class="json-string">"2026-01-20T16:05:00Z"</span>
+  },
+
+  <span class="json-key">"reviewer"</span>: <span class="json-string">"analyst@databricks.com"</span>,
+  <span class="json-key">"created_at"</span>: <span class="json-string">"2026-01-20T16:00:00Z"</span>
+}</pre>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Rubric Evaluation Schema</h3>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;">{
+  <span class="json-key">"rubric_id"</span>: <span class="json-string">"rubric-battlecard-level"</span>,
+  <span class="json-key">"level"</span>: <span class="json-string">"battlecard"</span>,
+  <span class="json-key">"category"</span>: <span class="json-boolean">null</span>,
+  <span class="json-key">"criteria"</span>: [
+    {
+      <span class="json-key">"name"</span>: <span class="json-string">"completeness"</span>,
+      <span class="json-key">"description"</span>: <span class="json-string">"All required sections present with sufficient detail"</span>,
+      <span class="json-key">"weight"</span>: <span class="json-number">0.20</span>,
+      <span class="json-key">"score"</span>: <span class="json-number">4</span>,                <span style="color:#6a9955">// 1-5 scale</span>
+      <span class="json-key">"rationale"</span>: <span class="json-string">"All major sections present, minor gaps in win/loss patterns"</span>
+    },
+    {
+      <span class="json-key">"name"</span>: <span class="json-string">"accuracy"</span>,
+      <span class="json-key">"description"</span>: <span class="json-string">"Claims are factually correct and up-to-date"</span>,
+      <span class="json-key">"weight"</span>: <span class="json-number">0.25</span>,
+      <span class="json-key">"score"</span>: <span class="json-number">5</span>,
+      <span class="json-key">"rationale"</span>: <span class="json-string">"All claims verified, sources cited"</span>
+    }
+  ],
+  <span class="json-key">"overall_score"</span>: <span class="json-number">4.25</span>             <span style="color:#6a9955">// Weighted average</span>
+}</pre>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Rubrics Section -->
+            <section id="rubrics" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Evaluation Rubrics</h1>
+                    <p class="section-description">Criteria used for evaluating battlecard content quality.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Content Quality Rubrics</h3>
+
+                    {% for rubric in rubrics %}
+                    <div class="rubric-card" id="rubric-{{ rubric.id }}">
+                        <div class="rubric-header">
+                            <span class="rubric-name">{{ rubric.name }}</span>
+                            <span class="rubric-weight">Weight: {{ rubric.weight }}x</span>
+                        </div>
+                        <p class="rubric-criteria">{{ rubric.criteria }}</p>
+                        <div class="rubric-score-buttons">
+                            <button class="rubric-score-btn">1 - Poor</button>
+                            <button class="rubric-score-btn">2 - Below Avg</button>
+                            <button class="rubric-score-btn">3 - Average</button>
+                            <button class="rubric-score-btn">4 - Good</button>
+                            <button class="rubric-score-btn">5 - Excellent</button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <!-- Scoring System -->
+            <section id="scoring" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Scoring System</h1>
+                    <p class="section-description">Visual indicators for evaluation scores.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Score Badges</h3>
+                    <div class="component-demo">
+                        <div style="display: flex; gap: 16px; align-items: center;">
+                            <div style="text-align: center;">
+                                <span class="score-badge score-badge-1">1</span>
+                                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">Poor</div>
+                            </div>
+                            <div style="text-align: center;">
+                                <span class="score-badge score-badge-2">2</span>
+                                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">Below Avg</div>
+                            </div>
+                            <div style="text-align: center;">
+                                <span class="score-badge score-badge-3">3</span>
+                                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">Average</div>
+                            </div>
+                            <div style="text-align: center;">
+                                <span class="score-badge score-badge-4">4</span>
+                                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">Good</div>
+                            </div>
+                            <div style="text-align: center;">
+                                <span class="score-badge score-badge-5">5</span>
+                                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">Excellent</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Status Badges</h3>
+                    <div class="component-demo">
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                            <span class="badge badge-success">Approved</span>
+                            <span class="badge badge-warning">Needs Revision</span>
+                            <span class="badge badge-danger">Rejected</span>
+                            <span class="badge badge-info">In Progress</span>
+                            <span class="badge badge-gray">Pending</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Cards Section -->
+            <section id="cards" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Cards</h1>
+                    <p class="section-description">Card components for displaying content.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Basic Card</h3>
+                    <div class="component-demo">
+                        <div class="card" style="max-width: 400px;">
+                            <div class="card-header">
+                                <h4 class="card-title">Card Title</h4>
+                                <p class="card-subtitle">Optional subtitle</p>
+                            </div>
+                            <div class="card-body">
+                                <p>Card body content goes here. Use cards to group related information.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Primary Header Card</h3>
+                    <div class="component-demo">
+                        <div class="card" style="max-width: 400px;">
+                            <div class="card-header card-header-primary">
+                                <h4 class="card-title">Primary Card</h4>
+                                <p class="card-subtitle">With branded header</p>
+                            </div>
+                            <div class="card-body">
+                                <p>Use for key information or featured content.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Badges Section -->
+            <section id="badges" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Badges</h1>
+                    <p class="section-description">Small status indicators and labels.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">All Badge Variants</h3>
+                    <div class="component-demo">
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                            <span class="badge badge-primary">Primary</span>
+                            <span class="badge badge-success">Success</span>
+                            <span class="badge badge-warning">Warning</span>
+                            <span class="badge badge-danger">Danger</span>
+                            <span class="badge badge-info">Info</span>
+                            <span class="badge badge-gray">Gray</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            </div><!-- end rendered-content -->
+
+        </main>
+    </div>
+
+    <script>
+        // Rubrics data for JSON view
+        const rubricsData = {{ rubrics | tojson }};
+
+        // Toggle JSON view
+        function toggleJsonView() {
+            const checkbox = document.getElementById('json-toggle');
+            const jsonView = document.getElementById('jsonView');
+            const renderedContent = document.getElementById('renderedContent');
+
+            if (checkbox.checked) {
+                // Show JSON, hide rendered
+                jsonView.classList.add('visible');
+                renderedContent.classList.add('hidden');
+                jsonView.innerHTML = syntaxHighlight(JSON.stringify(rubricsData, null, 2));
+            } else {
+                // Show rendered, hide JSON
+                jsonView.classList.remove('visible');
+                renderedContent.classList.remove('hidden');
+            }
+        }
+
+        // Syntax highlight JSON
+        function syntaxHighlight(json) {
+            json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+                let cls = 'json-number';
+                if (/^"/.test(match)) {
+                    if (/:$/.test(match)) {
+                        cls = 'json-key';
+                    } else {
+                        cls = 'json-string';
+                    }
+                } else if (/true|false/.test(match)) {
+                    cls = 'json-boolean';
+                }
+                return '<span class="' + cls + '">' + match + '</span>';
+            });
+        }
+
+        // Smooth scroll for navigation links
+        document.querySelectorAll('.nav-link').forEach(link => {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                const targetId = this.getAttribute('href').substring(1);
+                const target = document.getElementById(targetId);
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth' });
+                    // Update active state
+                    document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+                    this.classList.add('active');
+                }
+            });
+        });
+
+        // Update active nav on scroll
+        window.addEventListener('scroll', function() {
+            const sections = document.querySelectorAll('.section');
+            let current = '';
+
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                if (scrollY >= sectionTop - 100) {
+                    current = section.getAttribute('id');
+                }
+            });
+
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('active');
+                if (link.getAttribute('href') === '#' + current) {
+                    link.classList.add('active');
+                }
+            });
+        });
+
+        // Rubric score button selection
+        document.querySelectorAll('.rubric-score-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const siblings = this.parentElement.querySelectorAll('.rubric-score-btn');
+                siblings.forEach(s => s.classList.remove('selected'));
+                this.classList.add('selected');
+            });
+        });
+    </script>
+</body>
+</html>

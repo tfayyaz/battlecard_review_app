@@ -1,0 +1,5 @@
+name: battlecards-review-pg
+command: ["python", "app.py"]
+env:
+  - name: DATABRICKS_HOST
+    value: https://fe-vm-pmt.cloud.databricks.com

@@ -1,0 +1,9 @@
+databricks-sdk>=0.50.0
+exa-py>=1.0.0
+flask>=3.1.2
+flask-cors>=6.0.2
+openai>=1.0.0
+psycopg[binary]>=3.3.2
+python-dotenv>=1.0.0
+sqlalchemy>=2.0.46
+tiktoken>=0.7.0

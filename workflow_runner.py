@@ -283,7 +283,9 @@ def render_template(template: str, **kwargs) -> str:
 def load_template_from_db(engine, template_type: str, display_order: int):
     """Load a prompt template from the DB by type and display_order.
 
-    Returns (template_text, template_name) or None if not found / inactive.
+    Returns (template_text, template_name) or None if not found.
+    Note: does NOT filter by is_active — that flag controls admin UI visibility,
+    not whether the workflow runner can use the template.
     """
     if engine is None:
         return None
@@ -292,12 +294,12 @@ def load_template_from_db(engine, template_type: str, display_order: int):
             row = conn.execute(
                 text(
                     "SELECT template_text, template_name FROM prompt_templates "
-                    "WHERE template_type = :ttype AND display_order = :dorder AND is_active = TRUE "
+                    "WHERE template_type = :ttype AND display_order = :dorder "
                     "LIMIT 1"
                 ),
                 {"ttype": template_type, "dorder": display_order},
             ).mappings().first()
-        if row:
+        if row and row["template_text"] and not row["template_text"].startswith("[Placeholder"):
             return row["template_text"], row["template_name"]
     except Exception as e:
         logger.warning("Failed to load template from DB (type=%s, order=%d): %s", template_type, display_order, e)
@@ -316,11 +318,11 @@ def load_directive_template(engine=None) -> str:
                 row = conn.execute(
                     text(
                         "SELECT template_text FROM prompt_templates "
-                        "WHERE template_type = 'directive' AND is_default = TRUE AND is_active = TRUE "
+                        "WHERE template_type = 'directive' AND is_default = TRUE "
                         "LIMIT 1"
                     ),
                 ).scalar()
-            if row:
+            if row and not row.startswith("[Placeholder"):
                 return row
         except Exception as e:
             logger.warning("Failed to load directive template from DB: %s", e)

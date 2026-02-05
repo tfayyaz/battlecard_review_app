@@ -849,13 +849,12 @@ def _seed_product_category_catalog():
 
 
 def _seed_prompt_templates():
-    """Populate prompt_templates with built-in templates if empty."""
-    import re
+    """Populate prompt_templates with built-in templates if empty.
 
-    with ENGINE.begin() as conn:
-        count = conn.execute(text("SELECT COUNT(*) FROM prompt_templates")).scalar()
-        if count and int(count) > 0:
-            return
+    Also repairs existing placeholder rows (from earlier seeds where template
+    files were missing) by replacing them with inline fallback content.
+    """
+    import re
 
     def _read_file_safe(path):
         """Read file contents or return None if missing."""
@@ -867,32 +866,308 @@ def _seed_prompt_templates():
             pass
         return None
 
-    # Collect seed templates
+    # ── Inline fallback templates ──
+    # These are embedded directly so the seed works even when template files
+    # don't exist on disk (e.g. on the Databricks Apps platform).
+
+    _PASS1_V1_INLINE = """\
+You plan L200 critical differentiator slides for a **platform battlecard** comparing Databricks to {{competitor}}.
+
+## Context
+Competitor: {{competitor}}
+Product area: {{product_area}}
+Comparison: {{comparison}}
+
+## Audience
+This battlecard is for **C-suite executives** (CIO, CTO, CDO, VP Data/AI) and **data/ML/AI practitioners** (data engineers, ML engineers, analytics engineers, data scientists). Key differentiators must resonate with both audiences:
+- C-suite cares about: strategic platform direction, total cost of ownership, vendor risk, governance posture, time-to-value, and AI/ML readiness.
+- Practitioners care about: performance benchmarks, developer experience, tooling maturity, open standards, and operational reliability.
+
+## Product Categories
+The following product categories define the structure of this platform battlecard. You MUST generate exactly **{{diffs_per_category}} key differentiators per category**, for a total of {{total_diffs}} differentiators.
+
+{{product_categories}}
+
+## Directives
+{{directives}}
+
+## Additional Context
+The following context documents are provided as XML-tagged sections.
+Each tag indicates the document type (competitive_directive, battlecard_archive, product_categories, key_differentiator_themes, or context).
+Attributes include the document name, type classification, scope, and whether it was human_provided or agent_generated.
+Use these documents to inform your analysis. Cite them as sources where relevant.
+
+{{context}}
+
+## Task
+Generate exactly **{{diffs_per_category}} key differentiators per product category** ({{total_diffs}} total).
+For each, provide ONLY the planning skeleton — detailed headlines, details, reasoning, citations, and sources will be generated separately in a second pass.
+
+## Output Format
+Return ONLY a JSON array. Each object must have this exact shape:
+
+```json
+{
+  "id": "<Category>_<Differentiator> with underscores",
+  "competitor": "{{competitor}}",
+  "category": "<product category from the list above>",
+  "rank": 1,
+  "key_differentiator": "<3-6 word differentiator name — NO brand names or product names>",
+  "description": "<short buyer-focused description: why this capability matters to end users/buyers — NO brand names, NO vendor comparisons>",
+  "selection_reasoning": "<why this differentiator was selected — reference audience needs>",
+  "rank_reasoning": "<why this rank position within its category>",
+  "directive_alignment": "<which directive points this aligns with, or 'N/A'>",
+  "databricks_rating": "strong_advantage|advantage|partial|disadvantage",
+  "competitor_rating": "strong_advantage|advantage|partial|disadvantage"
+}
+```
+
+## Rules
+1. Generate exactly **{{diffs_per_category}} differentiators per product category**. The total count MUST equal {{total_diffs}}.
+2. The `category` field MUST be one of the product categories listed above. Every category must have exactly {{diffs_per_category}} differentiators.
+3. Within each category, rank differentiators 1-{{diffs_per_category}} by importance. The `rank` field resets to 1 for each category.
+4. Databricks rating must be >= competitor rating for the majority of differentiators.
+5. Be fair — include 1-2 areas per category where the competitor has genuine strengths.
+6. Balance differentiators between what matters to C-suite (TCO, governance, strategic direction, vendor risk) and practitioners (performance, DX, tooling, open standards).
+7. Align differentiators with the provided directives where applicable. Reference specific directive points in the `directive_alignment` field.
+8. Each differentiator must have a unique `id` (format: Category_KeyDiff with underscores replacing spaces).
+9. **NO BRAND NAMES**: The `key_differentiator` and `description` fields must NOT contain any brand names, product names, or branded feature names. Use generic capability descriptions instead.
+10. **BUYER-FOCUSED descriptions**: The `description` field should be short (under 15 words) and explain why this capability matters to the end buyer/user.
+
+Return ONLY the JSON array. No markdown fences, no explanation text.
+"""
+
+    _PASS1_V2_INLINE = """\
+You plan L200 critical differentiator slides for a **platform battlecard** comparing Databricks to {{competitor}}.
+
+## Context
+Competitor: {{competitor}}
+Product area: {{product_area}}
+Comparison: {{comparison}}
+
+## Audience
+This battlecard is for **C-suite executives** (CIO, CTO, CDO, VP Data/AI) and **data/ML/AI practitioners** (data engineers, ML engineers, analytics engineers, data scientists). Key differentiators must resonate with both audiences:
+- C-suite cares about: strategic platform direction, total cost of ownership, vendor risk, governance posture, time-to-value, and AI/ML readiness.
+- Practitioners care about: performance benchmarks, developer experience, tooling maturity, open standards, and operational reliability.
+
+## Product Categories
+The following product categories define the structure of this platform battlecard. You MUST generate exactly **{{diffs_per_category}} key differentiators per category**, for a total of {{total_diffs}} differentiators.
+
+{{product_categories}}
+
+## Key Differentiator Theme Guidance
+Use the following themes as guidance when selecting key differentiators. Most differentiators should map to one of these themes, but you MAY choose differentiators outside these themes for specific product categories where it makes sense — justify with clear reasoning about who cares and why.
+
+| Theme | Who Cares | Why It Matters |
+|-------|-----------|----------------|
+| Serverless | Both | Operational simplicity, no capacity planning, instant scale |
+| Open Formats & Standards | Both | Avoid lock-in, portability, future-proof investments |
+| AI Assistants | Both | Productivity, natural language access to data |
+| Intelligent Optimization | Both | Self-tuning, auto-scaling, ML-driven performance |
+| Performance & TCO | C-suite + Practitioners | Query speed and cost efficiency together |
+| Unified Platform | C-suite | Fewer tools, lower integration complexity |
+| Interoperability | Practitioners | Works with existing tools and data sources |
+| Governance & Security | C-suite | Access controls, lineage, compliance (HIPAA, SOC2, GDPR) |
+| Real-time & Streaming | Practitioners | Handle streaming alongside batch workloads |
+| Data Sharing | Both | Cross-org collaboration without copying data |
+| Developer Experience | Practitioners | IDE support, debugging, CI/CD, daily productivity |
+| GenAI & LLM Support | Both | RAG, vector search, fine-tuning, compound AI systems |
+| Pricing Transparency | C-suite | Predictable costs, no surprise bills |
+| Multi-cloud | C-suite | Vendor risk mitigation, cloud flexibility |
+
+## Directives
+{{directives}}
+
+## Additional Context
+The following context documents are provided as XML-tagged sections.
+Each tag indicates the document type (competitive_directive, battlecard_archive, product_categories, key_differentiator_themes, or context).
+Attributes include the document name, type classification, scope, and whether it was human_provided or agent_generated.
+Use these documents to inform your analysis. Cite them as sources where relevant.
+
+{{context}}
+
+## Task
+Generate exactly **{{diffs_per_category}} key differentiators per product category** ({{total_diffs}} total).
+For each, provide ONLY the planning skeleton — detailed headlines, details, reasoning, citations, and sources will be generated separately in a second pass.
+
+## Output Format
+Return ONLY a JSON array. Each object must have this exact shape:
+
+```json
+{
+  "id": "<Category>_<Differentiator> with underscores",
+  "competitor": "{{competitor}}",
+  "category": "<product category from the list above>",
+  "rank": 1,
+  "key_differentiator": "<2-4 word differentiator name — see naming rules below>",
+  "description": "<1 sentence, max 12 words — the benefit or value this capability delivers to buyers>",
+  "selection_reasoning": "<who cares about this (C-suite, practitioners, or both) and WHY it matters for platform selection>",
+  "rank_reasoning": "<why this rank position within its category>",
+  "directive_alignment": "<which directive points this aligns with, or 'N/A'>",
+  "databricks_rating": "strong_advantage|advantage|partial|disadvantage",
+  "competitor_rating": "strong_advantage|advantage|partial|disadvantage"
+}
+```
+
+## Key Differentiator Naming Rules — CRITICAL
+
+The `key_differentiator` field is the title shown on the battlecard slide. It must be:
+
+1. **2-4 words maximum** (ideally 2-3). This is a category label, not a sentence.
+2. **NO brand names, product names, or feature names** (e.g. NOT "Delta Live Tables", NOT "Fabric Capacity", NOT "Databricks Unity Catalog").
+3. **Generic capability labels** that any platform could be evaluated against.
+4. **Title case** formatting.
+
+### Examples of GOOD key_differentiator names:
+- "Ease of Use"
+- "Data Connectors"
+- "Query Performance"
+- "Cost Transparency"
+- "Streaming Support"
+- "Data Governance"
+- "Open Standards"
+- "Auto-Optimization"
+- "Multi-Cloud Support"
+- "Developer Tooling"
+
+### Examples of BAD key_differentiator names — DO NOT write like this:
+- "Native Change Data Capture Pipeline Support" (too long, too specific)
+- "Serverless SQL Warehouse Auto-Scaling" (too long, includes branded concepts)
+- "Delta Lake Open Table Format" (brand name)
+
+## Description Rules
+
+The `description` field explains WHY this differentiator matters. It must be:
+
+1. **One sentence, max 12 words.**
+2. **Benefit-focused** — what value does this deliver to the buyer?
+3. **No brand names or vendor comparisons.**
+
+## Selection Reasoning Rules
+
+The `selection_reasoning` field must clearly state:
+1. **WHO cares** — C-suite, practitioners, or both
+2. **WHY it matters** for choosing a data platform
+
+## Rules
+1. Generate exactly **{{diffs_per_category}} differentiators per product category**. The total count MUST equal {{total_diffs}}.
+2. The `category` field MUST be one of the product categories listed above. Every category must have exactly {{diffs_per_category}} differentiators.
+3. Within each category, rank differentiators 1-{{diffs_per_category}} by importance. The `rank` field resets to 1 for each category.
+4. Databricks rating must be >= competitor rating for the majority of differentiators.
+5. Be fair — include 1-2 areas per category where the competitor has genuine strengths.
+6. Balance differentiators between what matters to C-suite and practitioners.
+7. Align differentiators with the provided directives where applicable.
+8. Each differentiator must have a unique `id` (format: Category_KeyDiff with underscores replacing spaces).
+9. **Most differentiators should map to the theme guidance table above**, but you may introduce themes outside that list when clearly important.
+10. **NO BRAND NAMES** in `key_differentiator` or `description` fields.
+11. **KEY DIFF NAMES must be 2-4 words** (ideally 2-3).
+12. **DESCRIPTIONS must be benefit-focused**, max 12 words.
+
+Return ONLY the JSON array. No markdown fences, no explanation text.
+"""
+
+    # V3 is like V2 but treats Cross-Platform Capabilities as context woven into
+    # Core Product Category slides, not separate slides.
+    _PASS1_V3_INLINE = _PASS1_V2_INLINE.replace(
+        "## Task\nGenerate exactly",
+        "## Cross-Platform Context\n"
+        "Cross-Platform Capabilities (multi-cloud, governance, security, pricing) should NOT be treated as a separate product category. "
+        "Instead, weave cross-platform capabilities into the core product category slides where they naturally fit. "
+        "For example, governance differentiators belong in the relevant product category (e.g., Data Warehousing governance vs. ML governance), "
+        "not in a standalone 'Cross-Platform' section.\n\n"
+        "## Task\nGenerate exactly"
+    )
+
+    # V4 adds per-category parallel execution instruction
+    _PASS1_V4_INLINE = _PASS1_V3_INLINE.replace(
+        "## Task\nGenerate exactly",
+        "## Execution Mode\n"
+        "This prompt will be executed **once per product category** in parallel. "
+        "You will receive a single product category and its cross-platform context. "
+        "Generate exactly **{{diffs_per_category}} key differentiators** for the given category only.\n\n"
+        "## Task\nGenerate exactly"
+    )
+
+    _PASS1_INLINE_FALLBACKS = {
+        1: _PASS1_V1_INLINE,
+        2: _PASS1_V2_INLINE,
+        3: _PASS1_V3_INLINE,
+        4: _PASS1_V4_INLINE,
+    }
+
+    _PASS2_V1_INLINE = """\
+You fill in detailed competitive analysis for a single key differentiator on a Databricks vs {{competitor}} platform battlecard.
+
+## Key Differentiator
+- **Category**: {{category}}
+- **Key Differentiator**: {{key_differentiator}}
+- **Description**: {{description}}
+- **Databricks Rating**: {{databricks_rating}}
+- **Competitor Rating**: {{competitor_rating}}
+- **Selection Reasoning**: {{selection_reasoning}}
+
+## Audience
+This battlecard is for **C-suite executives** and **data/ML/AI practitioners**.
+- C-suite cares about: strategic platform direction, total cost of ownership, vendor risk, governance posture, time-to-value.
+- Practitioners care about: performance benchmarks, developer experience, tooling maturity, open standards, operational reliability.
+
+## Directives
+{{directives}}
+
+## Additional Context
+{{context}}
+
+## Task
+Generate the full detail for this single differentiator. Include compelling headlines, detailed reasoning for each rating, and properly cited sources.
+
+### Writing style for details fields
+Each details field must be a concise technical description explaining the capability or limitation. Include specific technical details, version numbers, benchmarks, or architecture details where available.
+
+### Output Format
+Return a JSON object with these fields:
+- `databricks_headline`: 6-10 word headline for Databricks position
+- `databricks_details`: 2-3 sentences of technical detail with citations
+- `databricks_reasoning`: Why this rating for Databricks
+- `competitor_headline`: 6-10 word headline for competitor position
+- `competitor_details`: 2-3 sentences of technical detail with citations
+- `competitor_reasoning`: Why this rating for competitor
+- `citations`: Array of citation objects with source, url, verdict, rationale
+
+Return ONLY the JSON object. No markdown fences, no explanation text.
+"""
+
+    _DIRECTIVE_INLINE = (
+        "Read the following slides content about competing against {{competitor}}.\n\n"
+        "Parse and create a max 10 to 25 bullets on how we (Databricks compete team) should "
+        "take what has been taught to AE account executives and SAs on how to compete against {{competitor}}.\n\n"
+        "Extract this directive as max 10 to 25 bullets that will be used to create an internal battlecard.\n\n"
+        "Write the directive in markdown format."
+    )
+
+    # ── Build seed list ──
     seeds = []
 
     # Pass 1 templates
     for ver_num, cfg in PASS1_PROMPT_TEMPLATES.items():
+        # Try file first, then inline fallback
         tpl_text = None
         if "template" in cfg:
             tpl_text = cfg["template"]
         elif "file" in cfg:
             tpl_text = _read_file_safe(cfg["file"])
-
-        is_active = tpl_text is not None
         if not tpl_text:
-            tpl_text = f"[Placeholder — template file not found: {cfg.get('file', 'unknown')}]"
+            tpl_text = _PASS1_INLINE_FALLBACKS.get(ver_num)
 
-        # Extract variable names from {{var}} placeholders
-        variables = sorted(set(re.findall(r'\{\{(\w+)\}\}', tpl_text))) if is_active else []
+        variables = sorted(set(re.findall(r'\{\{(\w+)\}\}', tpl_text))) if tpl_text else []
 
         seeds.append({
             "template_name": f"pass1_v{ver_num}",
             "template_type": "pass1",
             "version_label": cfg.get("label", f"V{ver_num}"),
             "description": cfg.get("description", ""),
-            "template_text": tpl_text,
+            "template_text": tpl_text or f"[Placeholder — template v{ver_num} not available]",
             "variables": json.dumps(variables),
-            "is_active": is_active,
+            "is_active": tpl_text is not None,
             "is_default": ver_num == 3,
             "display_order": ver_num,
         })
@@ -904,39 +1179,25 @@ def _seed_prompt_templates():
             tpl_text = cfg["template"]
         elif "file" in cfg:
             tpl_text = _read_file_safe(cfg["file"])
-
-        is_active = tpl_text is not None
         if not tpl_text:
-            tpl_text = f"[Placeholder — template file not found: {cfg.get('file', 'unknown')}]"
+            tpl_text = _PASS2_V1_INLINE if ver_num == 1 else None
 
-        variables = sorted(set(re.findall(r'\{\{(\w+)\}\}', tpl_text))) if is_active else []
+        variables = sorted(set(re.findall(r'\{\{(\w+)\}\}', tpl_text))) if tpl_text else []
 
         seeds.append({
             "template_name": f"pass2_v{ver_num}",
             "template_type": "pass2",
             "version_label": cfg.get("label", f"V{ver_num}"),
             "description": cfg.get("description", ""),
-            "template_text": tpl_text,
+            "template_text": tpl_text or f"[Placeholder — template v{ver_num} not available]",
             "variables": json.dumps(variables),
-            "is_active": is_active,
+            "is_active": tpl_text is not None,
             "is_default": ver_num == 2,
             "display_order": ver_num,
         })
 
     # Directive template
-    directive_text = _read_file_safe(DEFAULT_DIRECTIVE_PROMPT)
-    directive_active = directive_text is not None
-    if not directive_text:
-        # Use the fallback prompt
-        directive_text = (
-            "Read the following slides content about competing against {{competitor}}.\n\n"
-            "Parse and create a max 10 to 25 bullets on how we (Databricks compete team) should "
-            "take what has been taught to AE account executives and SAs on how to compete against {{competitor}}.\n\n"
-            "Extract this directive as max 10 to 25 bullets that will be used to create an internal battlecard.\n\n"
-            "Write the directive in markdown format."
-        )
-        directive_active = True  # Fallback is always usable
-
+    directive_text = _read_file_safe(DEFAULT_DIRECTIVE_PROMPT) or _DIRECTIVE_INLINE
     directive_vars = sorted(set(re.findall(r'\{\{(\w+)\}\}', directive_text)))
     seeds.append({
         "template_name": "directive_v1",
@@ -945,13 +1206,44 @@ def _seed_prompt_templates():
         "description": "Default directive generation prompt. Extracts competitive positioning bullets from slides content.",
         "template_text": directive_text,
         "variables": json.dumps(directive_vars),
-        "is_active": directive_active,
+        "is_active": True,
         "is_default": True,
         "display_order": 1,
     })
 
-    # Insert all seeds
+    # ── Insert or repair ──
     with ENGINE.begin() as conn:
+        count = conn.execute(text("SELECT COUNT(*) FROM prompt_templates")).scalar()
+
+        if count and int(count) > 0:
+            # DB already has rows — repair any placeholders
+            for seed in seeds:
+                if seed["template_text"].startswith("[Placeholder"):
+                    continue
+                try:
+                    conn.execute(
+                        text(
+                            "UPDATE prompt_templates "
+                            "SET template_text = :template_text, "
+                            "    variables = :variables, "
+                            "    is_active = :is_active, "
+                            "    updated_at = CURRENT_TIMESTAMP "
+                            "WHERE template_name = :template_name "
+                            "  AND template_text LIKE '[Placeholder%'"
+                        ),
+                        {
+                            "template_text": seed["template_text"],
+                            "variables": seed["variables"],
+                            "is_active": seed["is_active"],
+                            "template_name": seed["template_name"],
+                        },
+                    )
+                except Exception as e:
+                    logger.warning("Repair prompt_templates row %s (non-fatal): %s", seed["template_name"], e)
+            logger.info("Repaired any placeholder prompt_templates rows")
+            return
+
+        # Fresh insert
         for seed in seeds:
             try:
                 conn.execute(

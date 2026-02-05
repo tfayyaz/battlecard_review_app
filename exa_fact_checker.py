@@ -56,7 +56,7 @@ class ExaFactChecker:
                 {"sid": self.session_id},
             ).mappings().first()
         if not row or not row["generation_id"]:
-            self._update_step(7, "waiting_human", error_message="No generation found for this session.")
+            self._update_step(6, "waiting_human", error_message="No generation found for this session.")
             return
 
         gen_id = row["generation_id"]
@@ -65,11 +65,13 @@ class ExaFactChecker:
         with self.engine.begin() as conn:
             evidence_rows = conn.execute(
                 text(
-                    "SELECT e.evidence_id, e.traces_to_text, e.claim_id, "
-                    "c.headline, c.description, co.company_name, co.company_type "
+                    "SELECT e.evidence_id, e.traces_to_text, e.detail_item_id, e.claim_id, "
+                    "c.headline, c.description, co.company_name, co.company_type, "
+                    "di.item_text AS detail_item_text "
                     "FROM evidence e "
                     "JOIN claims c ON e.claim_id = c.claim_id "
                     "JOIN companies co ON c.company_id = co.company_id "
+                    "LEFT JOIN claim_detail_items di ON e.detail_item_id = di.detail_item_id "
                     "WHERE c.generation_id = :gen_id "
                     "ORDER BY e.evidence_id"
                 ),
@@ -77,7 +79,7 @@ class ExaFactChecker:
             ).mappings().all()
 
         if not evidence_rows:
-            self._update_step(7, "waiting_human", error_message="No evidence rows found to fact check.")
+            self._update_step(6, "waiting_human", error_message="No evidence rows found to fact check.")
             return
 
         total = len(evidence_rows)
@@ -94,8 +96,9 @@ class ExaFactChecker:
             )
 
             try:
-                # a. Search Exa
-                exa_results = self._search_exa(ev["traces_to_text"], ev["company_name"])
+                # a. Search Exa — use detail_item_text for richer context when available
+                search_text = ev.get("detail_item_text") or ev["traces_to_text"]
+                exa_results = self._search_exa(search_text, ev["company_name"])
 
                 # b. Judge with LLM
                 verdict = self._judge_with_llm(ev["traces_to_text"], exa_results)
@@ -138,13 +141,13 @@ class ExaFactChecker:
                 text(
                     "INSERT INTO workflow_artifacts "
                     "(session_id, step_number, artifact_type, artifact_name, artifact_content) "
-                    "VALUES (CAST(:sid AS uuid), 7, 'fact_check_results', 'fact_check_summary', :content)"
+                    "VALUES (CAST(:sid AS uuid), 6, 'fact_check_results', 'fact_check_summary', :content)"
                 ),
                 {"sid": self.session_id, "content": json.dumps(summary)},
             )
 
-        # 5. Set step 7 to waiting_human
-        self._update_step(7, "waiting_human", progress_message=f"Fact checked {total} claims. Review results below.")
+        # 5. Set step 6 to waiting_human
+        self._update_step(6, "waiting_human", progress_message=f"Fact checked {total} claims. Review results below.")
         logger.info("Fact check complete for session %s: %s", self.session_id, summary)
 
     def _search_exa(self, claim_text, company_name):

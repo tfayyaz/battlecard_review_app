@@ -515,6 +515,7 @@
                 <a href="#schema-l200" class="nav-link">L200 Critical Diff</a>
                 <a href="#schema-exec-summary" class="nav-link">Executive Summary</a>
                 <a href="#schema-key-diff" class="nav-link">Key Differentiator</a>
+                <a href="#schema-detail-items" class="nav-link">Claim Detail Items</a>
                 <a href="#schema-citations" class="nav-link">Citations & Index Ranges</a>
                 <a href="#schema-fact-check" class="nav-link">Fact Check Result</a>
                 <a href="#schema-review" class="nav-link">Human Review</a>
@@ -528,6 +529,9 @@
 
             <div class="nav-section">
                 <div class="nav-section-title">Components</div>
+                <a href="#detail-items" class="nav-link">Detail Items</a>
+                <a href="#evidence-grouping" class="nav-link">Evidence Grouping</a>
+                <a href="#inline-evidence" class="nav-link">Inline Evidence</a>
                 <a href="#cards" class="nav-link">Cards</a>
                 <a href="#badges" class="nav-link">Badges</a>
                 <a href="#tables" class="nav-link">Tables</a>
@@ -844,7 +848,7 @@
   <span style="color:#6a9955">// Databricks position</span>
   <span class="json-key">"databricks_rating"</span>: <span class="json-string">"strong_advantage"</span>,     <span style="color:#6a9955">// strong_advantage | advantage | partial | disadvantage</span>
   <span class="json-key">"databricks_headline"</span>: <span class="json-string">"End-to-end ML platform"</span>,
-  <span class="json-key">"databricks_details"</span>: <span class="json-string">"MLflow 3 for tracking, Model Serving for deployment, Unity Catalog for governance - all integrated."</span>,
+  <span class="json-key">"databricks_details"</span>: [<span class="json-string">"MLflow 3 for tracking, Model Serving for deployment."</span>, <span class="json-string">"Unity Catalog for governance - all integrated."</span>],
   <span class="json-key">"databricks_reasoning"</span>: <span class="json-string">"Single platform for feature engineering, training, serving, and governance"</span>,
 
   <span style="color:#6a9955">// Databricks citation (source + quote)</span>
@@ -904,7 +908,7 @@
                                 <tr><td><code>directive_alignment</code></td><td>string</td><td>Which directive points this aligns with</td></tr>
                                 <tr><td><code>databricks_rating</code></td><td>string</td><td><code>strong_advantage</code> | <code>advantage</code> | <code>partial</code> | <code>disadvantage</code></td></tr>
                                 <tr><td><code>databricks_headline</code></td><td>string</td><td>Short Databricks position headline</td></tr>
-                                <tr><td><code>databricks_details</code></td><td>string</td><td>Detailed Databricks capability description</td></tr>
+                                <tr><td><code>databricks_details</code></td><td>array of strings</td><td>Databricks detail items (2-4 per vendor)</td></tr>
                                 <tr><td><code>databricks_reasoning</code></td><td>string</td><td>Why Databricks gets this rating</td></tr>
                                 <tr><td><code>databricks_citation</code></td><td>object</td><td><code>{ source: url, quote: string }</code> - supporting evidence</td></tr>
                                 <tr><td><code>fabric_rating</code></td><td>string</td><td>Competitor rating (same enum as databricks)</td></tr>
@@ -956,6 +960,132 @@
       }
     ]
   }</pre>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Claim Detail Items Schema -->
+            <section id="schema-detail-items" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Claim Detail Items</h1>
+                    <p class="section-description">Each claim's details are stored as an array of individual detail items rather than a single text string. This enables per-item evidence, fact-checks, and human review feedback.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Database Schema</h3>
+                    <p class="component-description">The <code>claim_detail_items</code> table stores individual detail bullets. Each item links back to a claim and has its own order position.</p>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;"><span style="color:#569cd6; font-weight:bold;">CREATE TABLE</span> claim_detail_items (
+    detail_item_id  <span style="color:#569cd6;">SERIAL PRIMARY KEY</span>,
+    claim_id        <span style="color:#569cd6;">INT NOT NULL</span> <span style="color:#569cd6;">REFERENCES</span> claims(claim_id) <span style="color:#569cd6;">ON DELETE CASCADE</span>,
+    item_order      <span style="color:#569cd6;">INT NOT NULL</span>,          <span style="color:#6a9955;">-- 0-indexed position</span>
+    item_text       <span style="color:#569cd6;">TEXT NOT NULL</span>,         <span style="color:#6a9955;">-- the detail bullet text</span>
+    created_at      <span style="color:#569cd6;">TIMESTAMP DEFAULT CURRENT_TIMESTAMP</span>
+);</pre>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Data Model</h3>
+                    <p class="component-description">Detail items are produced by the LLM as an array of strings (2-4 per vendor), then stored as individual rows. Evidence and fact-checks link to specific items via <code>detail_item_id</code>.</p>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;"><span style="color:#6a9955;">// LLM output (array of strings)</span>
+<span class="json-key">"databricks_details"</span>: [
+  <span class="json-string">"Serverless warehouses with 2-6 second cold starts, DBU-based billing."</span>,
+  <span class="json-string">"Photon C++ engine with SIMD delivers 2-8x performance."</span>,
+  <span class="json-string">"Delta Sharing open protocol adopted by 4,000+ enterprises."</span>
+]
+
+<span style="color:#6a9955;">// Stored as individual rows in claim_detail_items</span>
+<span style="color:#6a9955;">// detail_item_id=42, claim_id=10, item_order=0, item_text="Serverless warehouses..."</span>
+<span style="color:#6a9955;">// detail_item_id=43, claim_id=10, item_order=1, item_text="Photon C++ engine..."</span>
+<span style="color:#6a9955;">// detail_item_id=44, claim_id=10, item_order=2, item_text="Delta Sharing..."</span>
+
+<span style="color:#6a9955;">// Frontend receives structured detail items</span>
+<span class="json-key">"databricks_detail_items"</span>: [
+  { <span class="json-key">"detail_item_id"</span>: <span class="json-number">42</span>, <span class="json-key">"item_order"</span>: <span class="json-number">0</span>, <span class="json-key">"text"</span>: <span class="json-string">"Serverless warehouses..."</span> },
+  { <span class="json-key">"detail_item_id"</span>: <span class="json-number">43</span>, <span class="json-key">"item_order"</span>: <span class="json-number">1</span>, <span class="json-key">"text"</span>: <span class="json-string">"Photon C++ engine..."</span> },
+  { <span class="json-key">"detail_item_id"</span>: <span class="json-number">44</span>, <span class="json-key">"item_order"</span>: <span class="json-number">2</span>, <span class="json-key">"text"</span>: <span class="json-string">"Delta Sharing..."</span> }
+]</pre>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Per-Item Citations</h3>
+                    <p class="component-description">Citations use <code>detail_item_index</code> (0-based) to link to specific items in the details array. Evidence rows in the database use <code>detail_item_id</code> as a foreign key.</p>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;"><span class="json-key">"citations"</span>: {
+  <span class="json-key">"databricks_details"</span>: [
+    {
+      <span class="json-key">"citation_id"</span>: <span class="json-string">"cite_databricks_details_0_1"</span>,
+      <span class="json-key">"detail_item_index"</span>: <span class="json-number">0</span>,          <span style="color:#6a9955;">// links to 1st item in details array</span>
+      <span class="json-key">"start_index"</span>: <span class="json-number">0</span>,
+      <span class="json-key">"end_index"</span>: <span class="json-number">22</span>,
+      <span class="json-key">"source_index"</span>: <span class="json-number">1</span>,
+      <span class="json-key">"source_quote"</span>: <span class="json-string">"Serverless SQL warehouses start in 2-6 seconds..."</span>,
+      <span class="json-key">"verdict"</span>: <span class="json-string">"verified"</span>,
+      <span class="json-key">"confidence"</span>: <span class="json-number">0.92</span>
+    },
+    {
+      <span class="json-key">"citation_id"</span>: <span class="json-string">"cite_databricks_details_1_1"</span>,
+      <span class="json-key">"detail_item_index"</span>: <span class="json-number">1</span>,          <span style="color:#6a9955;">// links to 2nd item in details array</span>
+      <span class="json-key">"start_index"</span>: <span class="json-number">0</span>,
+      <span class="json-key">"end_index"</span>: <span class="json-number">18</span>,
+      <span class="json-key">"source_index"</span>: <span class="json-number">2</span>,
+      <span class="json-key">"source_quote"</span>: <span class="json-string">"Photon is a next-generation engine written in C++..."</span>,
+      <span class="json-key">"verdict"</span>: <span class="json-string">"verified"</span>,
+      <span class="json-key">"confidence"</span>: <span class="json-number">0.88</span>
+    }
+  ]
+}</pre>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Review Feedback Levels</h3>
+                    <p class="component-description">Reviews can now target individual detail items in addition to headline and key-diff levels.</p>
+                    <div class="component-demo">
+                        <table class="comparison-table">
+                            <thead>
+                                <tr>
+                                    <th>Scope</th>
+                                    <th>Format</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>Key Differentiator</td>
+                                    <td><code>key_diff</code></td>
+                                    <td>Overall differentiator selection feedback</td>
+                                </tr>
+                                <tr>
+                                    <td>Vendor Headline</td>
+                                    <td><code>databricks</code> / <code>fabric</code></td>
+                                    <td>Headline + overall vendor position</td>
+                                </tr>
+                                <tr>
+                                    <td style="background: rgba(59, 130, 246, 0.06);">Detail Item</td>
+                                    <td style="background: rgba(59, 130, 246, 0.06);"><code>databricks_detail_42</code></td>
+                                    <td style="background: rgba(59, 130, 246, 0.06);">Individual detail bullet (new)</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Backward Compatibility</h3>
+                    <p class="component-description">Legacy claims without detail items fall back to a single-item list wrapping the original <code>description</code> field.</p>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;"><span style="color:#6a9955;">// Legacy claim (no detail_items rows)</span>
+<span style="color:#6a9955;">// Frontend receives a single-item fallback:</span>
+<span class="json-key">"databricks_detail_items"</span>: [
+  { <span class="json-key">"detail_item_id"</span>: <span class="json-boolean">null</span>, <span class="json-key">"item_order"</span>: <span class="json-number">0</span>, <span class="json-key">"text"</span>: <span class="json-string">"Original description text..."</span> }
+]
+
+<span style="color:#6a9955;">// Flat string still available for backward compat:</span>
+<span class="json-key">"databricks_details"</span>: <span class="json-string">"Original description text..."</span></pre>
                     </div>
                 </div>
             </section>
@@ -1065,8 +1195,8 @@
                                 </tr>
                                 <tr>
                                     <td><code>databricks_details</code></td>
-                                    <td>Databricks position details</td>
-                                    <td>"Unity Catalog provides centralized..."</td>
+                                    <td>Databricks detail items (array of strings)</td>
+                                    <td>["Unity Catalog provides centralized...", "..."]</td>
                                 </tr>
                                 <tr>
                                     <td><code>databricks_reasoning</code></td>
@@ -1305,6 +1435,753 @@
                             <span class="badge badge-info">In Progress</span>
                             <span class="badge badge-gray">Pending</span>
                         </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Detail Items Component -->
+            <section id="detail-items" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Detail Items</h1>
+                    <p class="section-description">Detail items render as a bulleted list within each vendor column, with per-item review buttons (approve, needs revision, reject, comment).</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Detail Item List with Per-Item Review</h3>
+                    <p class="component-description">Each detail item is a concise, single-sentence bullet. Items display inline review buttons that appear on hover, allowing reviewers to approve, flag, or reject individual claims.</p>
+                    <div class="component-demo">
+                        <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; max-width: 480px;">
+                            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+                                <span style="color: #16a34a; font-weight: 700; font-size: 13px;">(+)</span>
+                                <span style="font-weight: 600; font-size: 13px; color: #374151; cursor: pointer; border-bottom: 1px dashed #9ca3af;">End-to-end ML platform</span>
+                            </div>
+                            <div style="padding-left: 2px;">
+                                <!-- Detail item 1 -->
+                                <div style="display: flex; align-items: flex-start; gap: 6px; margin-bottom: 3px; padding: 2px 0;">
+                                    <span style="flex: 1; font-size: 12px; color: #374151; cursor: pointer;">&ndash; MLflow 3 for tracking, Model Serving for deployment.</span>
+                                    <div style="flex-shrink: 0; display: flex; gap: 2px;">
+                                        <button style="font-size: 10px; padding: 1px 4px; min-width: 18px; height: 18px; border: 1px solid #d1d5db; border-radius: 4px; background: #dcfce7; color: #16a34a; cursor: pointer; font-weight: 700;">&#10003;</button>
+                                        <button style="font-size: 10px; padding: 1px 4px; min-width: 18px; height: 18px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">&#9888;</button>
+                                        <button style="font-size: 10px; padding: 1px 4px; min-width: 18px; height: 18px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">&#10007;</button>
+                                        <button style="font-size: 10px; padding: 1px 4px; min-width: 18px; height: 18px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">&#128172;</button>
+                                    </div>
+                                </div>
+                                <!-- Detail item 2 -->
+                                <div style="display: flex; align-items: flex-start; gap: 6px; margin-bottom: 3px; padding: 2px 0;">
+                                    <span style="flex: 1; font-size: 12px; color: #374151; cursor: pointer;">&ndash; Unity Catalog for governance &mdash; all integrated.</span>
+                                    <div style="flex-shrink: 0; display: flex; gap: 2px;">
+                                        <button style="font-size: 10px; padding: 1px 4px; min-width: 18px; height: 18px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">&#10003;</button>
+                                        <button style="font-size: 10px; padding: 1px 4px; min-width: 18px; height: 18px; border: 1px solid #fef3c7; color: #b45309; border-color: #fbbf24; border-radius: 4px; background: #fef3c7; cursor: pointer; font-weight: 700;">&#9888;</button>
+                                        <button style="font-size: 10px; padding: 1px 4px; min-width: 18px; height: 18px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">&#10007;</button>
+                                        <button style="font-size: 10px; padding: 1px 4px; min-width: 18px; height: 18px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">&#128172;</button>
+                                    </div>
+                                </div>
+                                <!-- Detail item 3 -->
+                                <div style="display: flex; align-items: flex-start; gap: 6px; margin-bottom: 3px; padding: 2px 0;">
+                                    <span style="flex: 1; font-size: 12px; color: #374151; cursor: pointer;">&ndash; Feature Store with automatic lineage tracking.</span>
+                                    <div style="flex-shrink: 0; display: flex; gap: 2px;">
+                                        <button style="font-size: 10px; padding: 1px 4px; min-width: 18px; height: 18px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">&#10003;</button>
+                                        <button style="font-size: 10px; padding: 1px 4px; min-width: 18px; height: 18px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">&#9888;</button>
+                                        <button style="font-size: 10px; padding: 1px 4px; min-width: 18px; height: 18px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">&#10007;</button>
+                                        <button style="font-size: 10px; padding: 1px 4px; min-width: 18px; height: 18px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">&#128172;</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Headline-level buttons -->
+                            <div style="display: flex; gap: 4px; margin-top: 6px;">
+                                <button style="font-size: 11px; padding: 2px 6px; border: 1px solid #d1d5db; border-radius: 4px; background: #dcfce7; color: #16a34a; cursor: pointer; font-weight: 700;">&#10003;</button>
+                                <button style="font-size: 11px; padding: 2px 6px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">&#9888;</button>
+                                <button style="font-size: 11px; padding: 2px 6px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">&#10007;</button>
+                                <button style="font-size: 11px; padding: 2px 6px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">&#128172;</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">CSS Classes</h3>
+                    <div class="component-demo">
+                        <table class="comparison-table">
+                            <thead>
+                                <tr>
+                                    <th>Class</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><code>.vendor-detail-items</code></td><td>Container for the list of detail items (margin-top: 4px)</td></tr>
+                                <tr><td><code>.vendor-detail-item</code></td><td>Individual item row (flex, align-items: flex-start, gap: 6px)</td></tr>
+                                <tr><td><code>.vendor-details-text</code></td><td>The text span within each item (flex: 1, clickable for evidence)</td></tr>
+                                <tr><td><code>.detail-item-buttons</code></td><td>Per-item score button group (flex-shrink: 0, smaller buttons)</td></tr>
+                                <tr><td><code>.score-btn</code></td><td>Individual review buttons (approve/revision/reject/comment)</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">HTML Structure</h3>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;"><span style="color:#808080;">&lt;div</span> <span style="color:#9cdcfe;">class</span>=<span class="json-string">"vendor-detail-items"</span><span style="color:#808080;">&gt;</span>
+  <span style="color:#808080;">&lt;div</span> <span style="color:#9cdcfe;">class</span>=<span class="json-string">"vendor-detail-item"</span> <span style="color:#9cdcfe;">data-detail-item-id</span>=<span class="json-string">"42"</span><span style="color:#808080;">&gt;</span>
+    <span style="color:#808080;">&lt;span</span> <span style="color:#9cdcfe;">class</span>=<span class="json-string">"vendor-details-text"</span><span style="color:#808080;">&gt;</span>&amp;ndash; Detail text here<span style="color:#808080;">&lt;/span&gt;</span>
+    <span style="color:#808080;">&lt;div</span> <span style="color:#9cdcfe;">class</span>=<span class="json-string">"score-buttons detail-item-buttons"</span><span style="color:#808080;">&gt;</span>
+      <span style="color:#808080;">&lt;button</span> <span style="color:#9cdcfe;">class</span>=<span class="json-string">"score-btn approve"</span><span style="color:#808080;">&gt;</span>&#10003;<span style="color:#808080;">&lt;/button&gt;</span>
+      <span style="color:#808080;">&lt;button</span> <span style="color:#9cdcfe;">class</span>=<span class="json-string">"score-btn revision"</span><span style="color:#808080;">&gt;</span>&#9888;<span style="color:#808080;">&lt;/button&gt;</span>
+      <span style="color:#808080;">&lt;button</span> <span style="color:#9cdcfe;">class</span>=<span class="json-string">"score-btn reject"</span><span style="color:#808080;">&gt;</span>&#10007;<span style="color:#808080;">&lt;/button&gt;</span>
+      <span style="color:#808080;">&lt;button</span> <span style="color:#9cdcfe;">class</span>=<span class="json-string">"expand-btn"</span><span style="color:#808080;">&gt;</span>&#128172;<span style="color:#808080;">&lt;/button&gt;</span>
+    <span style="color:#808080;">&lt;/div&gt;</span>
+  <span style="color:#808080;">&lt;/div&gt;</span>
+<span style="color:#808080;">&lt;/div&gt;</span></pre>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Evidence Grouping by Detail Item -->
+            <section id="evidence-grouping" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Evidence Grouping</h1>
+                    <p class="section-description">Evidence and fact-checks are grouped per detail item in the evidence dropdown, giving reviewers a clear view of which sources support each individual claim.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Per-Item Evidence Blocks</h3>
+                    <p class="component-description">Each detail item gets its own evidence block showing "Generated from" (LLM citations) and "Fact-checked with" (Exa web search results) cards.</p>
+                    <div class="component-demo">
+                        <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; max-width: 520px;">
+                            <!-- Headline block -->
+                            <div style="margin-bottom: 16px;">
+                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #6b7280; margin-bottom: 6px;">Headline</div>
+                                <div style="display: inline-block; background: #e5e7eb; color: #374151; font-size: 12px; font-weight: 500; padding: 3px 8px; border-radius: 4px; margin-bottom: 8px;">End-to-end ML platform</div>
+                                <div style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 11px; margin-bottom: 4px;">
+                                    <span style="color: #3b82f6; font-weight: 600;">Generated from</span>
+                                    <span style="color: #6b7280;">MLflow on Databricks</span>
+                                    <span style="background: #dcfce7; color: #16a34a; font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600;">verified 92%</span>
+                                </div>
+                            </div>
+                            <!-- Detail item 1 -->
+                            <div style="margin-bottom: 16px;">
+                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #6b7280; margin-bottom: 6px;">Detail</div>
+                                <div style="display: inline-block; background: #e5e7eb; color: #374151; font-size: 12px; font-weight: 500; padding: 3px 8px; border-radius: 4px; margin-bottom: 8px;">MLflow 3 for tracking, Model Serving for deployment.</div>
+                                <div style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 11px; margin-bottom: 4px;">
+                                    <span style="color: #3b82f6; font-weight: 600;">Generated from</span>
+                                    <span style="color: #6b7280;">MLflow Documentation</span>
+                                    <span style="background: #dcfce7; color: #16a34a; font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600;">verified 95%</span>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 11px;">
+                                    <span style="color: #8b5cf6; font-weight: 600;">Fact-checked with</span>
+                                    <span style="color: #6b7280;">exa.ai &mdash; docs.databricks.com</span>
+                                    <span style="background: #dcfce7; color: #16a34a; font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600;">verified 90%</span>
+                                </div>
+                            </div>
+                            <!-- Detail item 2 -->
+                            <div>
+                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #6b7280; margin-bottom: 6px;">Detail</div>
+                                <div style="display: inline-block; background: #e5e7eb; color: #374151; font-size: 12px; font-weight: 500; padding: 3px 8px; border-radius: 4px; margin-bottom: 8px;">Unity Catalog for governance &mdash; all integrated.</div>
+                                <div style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 11px; margin-bottom: 4px;">
+                                    <span style="color: #3b82f6; font-weight: 600;">Generated from</span>
+                                    <span style="color: #6b7280;">Unity Catalog Docs</span>
+                                    <span style="background: #dcfce7; color: #16a34a; font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600;">verified 88%</span>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 11px;">
+                                    <span style="color: #8b5cf6; font-weight: 600;">Fact-checked with</span>
+                                    <span style="color: #6b7280;">exa.ai &mdash; databricks.com/product</span>
+                                    <span style="background: #f3f4f6; color: #6b7280; font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600;">unverified</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">How Grouping Works</h3>
+                    <p class="component-description">Citations are filtered by <code>detail_item_id</code> so each evidence block only shows sources relevant to that specific detail item.</p>
+                    <div class="component-demo">
+                        <pre style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.6;"><span style="color:#6a9955;">// JavaScript: group citations by detail_item_id</span>
+detailItems.forEach(<span style="color:#569cd6;">function</span>(item) {
+    <span style="color:#569cd6;">var</span> itemCitations = allCitations.filter(<span style="color:#569cd6;">function</span>(c) {
+        <span style="color:#569cd6;">return</span> c.detail_item_id === item.detail_item_id;
+    });
+
+    <span style="color:#6a9955;">// Legacy fallback: if no match and single item, show all</span>
+    <span style="color:#569cd6;">if</span> (itemCitations.length === <span class="json-number">0</span>
+        && item.detail_item_id === <span class="json-boolean">null</span>
+        && detailItems.length === <span class="json-number">1</span>) {
+        itemCitations = allCitations;
+    }
+
+    renderEvidenceBlock(item.text, itemCitations);
+});</pre>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Data Flow</h3>
+                    <div class="component-demo">
+                        <table class="comparison-table">
+                            <thead>
+                                <tr>
+                                    <th>Stage</th>
+                                    <th>Table / Field</th>
+                                    <th>Key</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>LLM Output</td>
+                                    <td><code>databricks_details[i]</code></td>
+                                    <td><code>detail_item_index</code> (0-based)</td>
+                                </tr>
+                                <tr>
+                                    <td>Database</td>
+                                    <td><code>claim_detail_items</code></td>
+                                    <td><code>detail_item_id</code> (PK)</td>
+                                </tr>
+                                <tr>
+                                    <td>Evidence</td>
+                                    <td><code>evidence.detail_item_id</code></td>
+                                    <td>FK to <code>claim_detail_items</code></td>
+                                </tr>
+                                <tr>
+                                    <td>Fact Checks</td>
+                                    <td><code>fact_checks.evidence_id</code></td>
+                                    <td>FK to <code>evidence</code> (inherits item link)</td>
+                                </tr>
+                                <tr>
+                                    <td>Reviews</td>
+                                    <td><code>human_reviews.detail_item_id</code></td>
+                                    <td>FK to <code>claim_detail_items</code></td>
+                                </tr>
+                                <tr>
+                                    <td>Frontend</td>
+                                    <td><code>diff.databricks_detail_items</code></td>
+                                    <td><code>detail_item_id</code> on each item</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Detail Items Human Review with Inline Evidence -->
+            <section id="inline-evidence" class="section">
+                <div class="section-header">
+                    <h1 class="section-title">Detail Items Human Review with Inline Evidence</h1>
+                    <p class="section-description">Human review interface with headline in teal box, detail items with review buttons. Single ℹ button expands to show both Generated From and Fact-Check evidence. Comment button opens inline comment box below the text.</p>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Interactive Demo</h3>
+                    <p class="component-description">Use review buttons (✓ ⚠ ✗) to approve/flag/reject. Click 💬 for inline comment box. Click ℹ to expand both evidence sources at once.</p>
+                    <div class="component-demo">
+                        <div id="review-demo" style="background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; max-width: 580px;">
+
+                            <!-- HEADLINE SECTION -->
+                            <div style="margin-bottom: 16px;">
+                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #6b7280; margin-bottom: 6px;">HEADLINE</div>
+                                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                                    <span style="flex: 1; font-weight: 700; font-size: 15px; color: #1f2937;">Automatic Optimization Without Manual Tuning</span>
+                                    <div style="flex-shrink: 0; display: flex; gap: 3px;">
+                                        <button class="review-btn" data-state="approved" style="font-size: 11px; padding: 2px 6px; min-width: 22px; height: 22px; border: 1px solid #16a34a; border-radius: 4px; background: #dcfce7; color: #16a34a; cursor: pointer; font-weight: 700;">✓</button>
+                                        <button class="review-btn" style="font-size: 11px; padding: 2px 6px; min-width: 22px; height: 22px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">⚠</button>
+                                        <button class="review-btn" style="font-size: 11px; padding: 2px 6px; min-width: 22px; height: 22px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">✗</button>
+                                        <button class="comment-btn" onclick="toggleInlineComment(this)" style="font-size: 11px; padding: 2px 6px; min-width: 22px; height: 22px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;" title="Add comment">💬</button>
+                                        <button class="info-btn" onclick="toggleAllEvidence(this)" style="font-size: 11px; padding: 2px 6px; min-width: 22px; height: 22px; border: 1px solid #ea580c; border-radius: 4px; background: #fff7ed; color: #ea580c; cursor: pointer; font-weight: 600;" title="Show evidence">ℹ</button>
+                                    </div>
+                                </div>
+                                <!-- Inline comment box (hidden by default) -->
+                                <div class="inline-comment-box" style="display: none; margin: 8px 0; padding: 10px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px;">
+                                    <textarea placeholder="Add your comment..." style="width: 100%; height: 60px; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 12px; resize: vertical; margin-bottom: 8px;"></textarea>
+                                    <div style="display: flex; justify-content: flex-end; gap: 6px;">
+                                        <button onclick="cancelInlineComment(this)" style="font-size: 11px; padding: 4px 10px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">Cancel</button>
+                                        <button onclick="saveInlineComment(this)" style="font-size: 11px; padding: 4px 10px; border: none; border-radius: 4px; background: #2d5a5a; color: #fff; cursor: pointer; font-weight: 600;">Save</button>
+                                    </div>
+                                </div>
+                                <!-- Combined evidence block (Generated From + Fact-Check) -->
+                                <div class="evidence-block" style="display: none; margin: 8px 0;">
+                                    <!-- Generated From card -->
+                                    <div style="padding: 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; border-left: 4px solid #ea580c; margin-bottom: 8px;">
+                                        <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #ea580c; margin-bottom: 8px;">GENERATED FROM</div>
+                                        <div style="font-size: 13px; color: #374151; line-height: 1.5; margin-bottom: 10px;">
+                                            "<span style="background: #fed7aa; padding: 1px 2px; border-radius: 2px;">Streaming tables ingest files and messages incrementally</span> – <span style="background: #fed7aa; padding: 1px 2px; border-radius: 2px;">Materialized views refresh incrementally with built-in change tracking</span>"
+                                        </div>
+                                        <div style="font-size: 12px; color: #9a3412; background: #ffedd5; padding: 6px 10px; border-radius: 6px; border: 1px dashed #fdba74;">
+                                            <strong>Context:</strong> Lakeflow Declarative Pipelines Battlecard
+                                        </div>
+                                    </div>
+                                    <!-- Fact-Check Verified card -->
+                                    <div style="padding: 12px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; border-left: 4px solid #22c55e;">
+                                        <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #16a34a; margin-bottom: 8px;">FACT-CHECK VERIFIED</div>
+                                        <div style="font-size: 13px; color: #374151; line-height: 1.5; margin-bottom: 10px;">
+                                            "<span style="background: #bbf7d0; padding: 1px 2px; border-radius: 2px;">Independent source confirms automatic optimization capabilities</span>"
+                                        </div>
+                                        <div style="font-size: 12px; color: #166534; background: #dcfce7; padding: 6px 10px; border-radius: 6px; border: 1px dashed #86efac;">
+                                            <strong>Source:</strong> exa.ai &mdash; docs.databricks.com
+                                        </div>
+                                        <div style="margin-top: 8px;">
+                                            <span style="display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; background: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 4px;">verified 94%</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- DETAILS - L200 SECTION -->
+                            <div style="margin-bottom: 16px;">
+                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #6b7280; margin-bottom: 8px;">DETAILS - L200</div>
+                                <div style="padding-left: 0;">
+                                    <!-- L200 Detail item 1 -->
+                                    <div style="margin-bottom: 10px;">
+                                        <div style="display: flex; align-items: flex-start; gap: 8px;">
+                                            <span style="flex: 1; font-size: 13px; color: #374151; line-height: 1.4;">– Predictive optimization auto-clusters and compacts</span>
+                                            <div style="flex-shrink: 0; display: flex; gap: 3px;">
+                                                <button class="review-btn" data-state="approved" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #16a34a; border-radius: 4px; background: #dcfce7; color: #16a34a; cursor: pointer; font-weight: 700;">✓</button>
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">⚠</button>
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">✗</button>
+                                                <button class="comment-btn" onclick="toggleInlineComment(this)" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;" title="Add comment">💬</button>
+                                                <button class="info-btn" onclick="toggleAllEvidence(this)" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #ea580c; border-radius: 4px; background: #fff7ed; color: #ea580c; cursor: pointer; font-weight: 600;" title="Show evidence">ℹ</button>
+                                            </div>
+                                        </div>
+                                        <div class="inline-comment-box" style="display: none; margin: 6px 0 0 12px; padding: 8px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px;">
+                                            <textarea placeholder="Add your comment..." style="width: 100%; height: 50px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 11px; resize: vertical; margin-bottom: 6px;"></textarea>
+                                            <div style="display: flex; justify-content: flex-end; gap: 4px;">
+                                                <button onclick="cancelInlineComment(this)" style="font-size: 10px; padding: 3px 8px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">Cancel</button>
+                                                <button onclick="saveInlineComment(this)" style="font-size: 10px; padding: 3px 8px; border: none; border-radius: 4px; background: #2d5a5a; color: #fff; cursor: pointer; font-weight: 600;">Save</button>
+                                            </div>
+                                        </div>
+                                        <div class="evidence-block" style="display: none; margin: 6px 0 0 12px;">
+                                            <div style="padding: 10px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; border-left: 3px solid #ea580c; margin-bottom: 6px;">
+                                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #ea580c; margin-bottom: 6px;">GENERATED FROM</div>
+                                                <div style="font-size: 12px; color: #374151;">"<span style="background: #fed7aa; padding: 1px 2px; border-radius: 2px;">Predictive optimization uses data statistics</span> to apply clustering"</div>
+                                            </div>
+                                            <div style="padding: 10px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; border-left: 3px solid #22c55e;">
+                                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #16a34a; margin-bottom: 6px;">FACT-CHECK VERIFIED</div>
+                                                <div style="font-size: 12px; color: #374151;">"Confirmed in Databricks documentation"</div>
+                                                <span style="display: inline-block; margin-top: 6px; font-size: 10px; font-weight: 600; background: #dcfce7; color: #166534; padding: 2px 6px; border-radius: 4px;">verified 92%</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <!-- L200 Detail item 2 -->
+                                    <div style="margin-bottom: 10px;">
+                                        <div style="display: flex; align-items: flex-start; gap: 8px;">
+                                            <span style="flex: 1; font-size: 13px; color: #374151; line-height: 1.4;">– Liquid clustering enables flexible data layout</span>
+                                            <div style="flex-shrink: 0; display: flex; gap: 3px;">
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">✓</button>
+                                                <button class="review-btn" data-state="revision" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #fbbf24; border-radius: 4px; background: #fef3c7; color: #b45309; cursor: pointer; font-weight: 700;">⚠</button>
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">✗</button>
+                                                <button class="comment-btn has-comment" onclick="toggleInlineComment(this)" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #3b82f6; border-radius: 4px; background: #dbeafe; color: #3b82f6; cursor: pointer;" title="1 comment">💬</button>
+                                                <button class="info-btn" onclick="toggleAllEvidence(this)" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #ea580c; border-radius: 4px; background: #fff7ed; color: #ea580c; cursor: pointer; font-weight: 600;" title="Show evidence">ℹ</button>
+                                            </div>
+                                        </div>
+                                        <div class="inline-comment-box" style="display: none; margin: 6px 0 0 12px; padding: 8px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px;">
+                                            <div style="font-size: 11px; color: #374151; margin-bottom: 6px; padding: 6px; background: #fff; border-radius: 4px; border: 1px solid #e5e7eb;">
+                                                <strong style="color: #1e40af;">Reviewer:</strong> Need to verify this claim against latest docs.
+                                            </div>
+                                            <textarea placeholder="Add another comment..." style="width: 100%; height: 40px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 11px; resize: vertical; margin-bottom: 6px;"></textarea>
+                                            <div style="display: flex; justify-content: flex-end; gap: 4px;">
+                                                <button onclick="cancelInlineComment(this)" style="font-size: 10px; padding: 3px 8px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">Cancel</button>
+                                                <button onclick="saveInlineComment(this)" style="font-size: 10px; padding: 3px 8px; border: none; border-radius: 4px; background: #2d5a5a; color: #fff; cursor: pointer; font-weight: 600;">Save</button>
+                                            </div>
+                                        </div>
+                                        <div class="evidence-block" style="display: none; margin: 6px 0 0 12px;">
+                                            <div style="padding: 10px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; border-left: 3px solid #ea580c; margin-bottom: 6px;">
+                                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #ea580c; margin-bottom: 6px;">GENERATED FROM</div>
+                                                <div style="font-size: 12px; color: #374151;">"<span style="background: #fed7aa; padding: 1px 2px; border-radius: 2px;">Liquid clustering</span> allows flexible data layout changes"</div>
+                                            </div>
+                                            <div style="padding: 10px; background: #fefce8; border: 1px solid #fde047; border-radius: 6px; border-left: 3px solid #eab308;">
+                                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #a16207; margin-bottom: 6px;">FACT-CHECK PENDING</div>
+                                                <div style="font-size: 12px; color: #374151;">No independent verification source found.</div>
+                                                <span style="display: inline-block; margin-top: 6px; font-size: 10px; font-weight: 600; background: #fef3c7; color: #92400e; padding: 2px 6px; border-radius: 4px;">unverified</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <!-- L200 Detail item 3 -->
+                                    <div style="margin-bottom: 10px;">
+                                        <div style="display: flex; align-items: flex-start; gap: 8px;">
+                                            <span style="flex: 1; font-size: 13px; color: #374151; line-height: 1.4;">– Auto-tuning SQL warehouses adjust compute</span>
+                                            <div style="flex-shrink: 0; display: flex; gap: 3px;">
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">✓</button>
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">⚠</button>
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">✗</button>
+                                                <button class="comment-btn" onclick="toggleInlineComment(this)" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;" title="Add comment">💬</button>
+                                                <button class="info-btn" onclick="toggleAllEvidence(this)" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #ea580c; border-radius: 4px; background: #fff7ed; color: #ea580c; cursor: pointer; font-weight: 600;" title="Show evidence">ℹ</button>
+                                            </div>
+                                        </div>
+                                        <div class="inline-comment-box" style="display: none; margin: 6px 0 0 12px; padding: 8px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px;">
+                                            <textarea placeholder="Add your comment..." style="width: 100%; height: 50px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 11px; resize: vertical; margin-bottom: 6px;"></textarea>
+                                            <div style="display: flex; justify-content: flex-end; gap: 4px;">
+                                                <button onclick="cancelInlineComment(this)" style="font-size: 10px; padding: 3px 8px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">Cancel</button>
+                                                <button onclick="saveInlineComment(this)" style="font-size: 10px; padding: 3px 8px; border: none; border-radius: 4px; background: #2d5a5a; color: #fff; cursor: pointer; font-weight: 600;">Save</button>
+                                            </div>
+                                        </div>
+                                        <div class="evidence-block" style="display: none; margin: 6px 0 0 12px;">
+                                            <div style="padding: 10px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; border-left: 3px solid #ea580c;">
+                                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #ea580c; margin-bottom: 6px;">GENERATED FROM</div>
+                                                <div style="font-size: 12px; color: #374151;">"<span style="background: #fed7aa; padding: 1px 2px; border-radius: 2px;">SQL warehouses auto-tune</span> based on workload"</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- DETAILS - L300 SECTION -->
+                            <div style="margin-bottom: 16px;">
+                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #6b7280; margin-bottom: 8px;">DETAILS - L300</div>
+                                <div style="padding-left: 0;">
+                                    <!-- L300 Detail item 1 -->
+                                    <div style="margin-bottom: 10px;">
+                                        <div style="display: flex; align-items: flex-start; gap: 8px;">
+                                            <span style="flex: 1; font-size: 13px; color: #374151; line-height: 1.4;">– Predictive optimization automatically clusters, compacts, and tunes without manual intervention, using data statistics to apply the optimal configuration.</span>
+                                            <div style="flex-shrink: 0; display: flex; gap: 3px;">
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">✓</button>
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">⚠</button>
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">✗</button>
+                                                <button class="comment-btn" onclick="toggleInlineComment(this)" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;" title="Add comment">💬</button>
+                                                <button class="info-btn" onclick="toggleAllEvidence(this)" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #ea580c; border-radius: 4px; background: #fff7ed; color: #ea580c; cursor: pointer; font-weight: 600;" title="Show evidence">ℹ</button>
+                                            </div>
+                                        </div>
+                                        <div class="inline-comment-box" style="display: none; margin: 6px 0 0 12px; padding: 8px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px;">
+                                            <textarea placeholder="Add your comment..." style="width: 100%; height: 50px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 11px; resize: vertical; margin-bottom: 6px;"></textarea>
+                                            <div style="display: flex; justify-content: flex-end; gap: 4px;">
+                                                <button onclick="cancelInlineComment(this)" style="font-size: 10px; padding: 3px 8px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">Cancel</button>
+                                                <button onclick="saveInlineComment(this)" style="font-size: 10px; padding: 3px 8px; border: none; border-radius: 4px; background: #2d5a5a; color: #fff; cursor: pointer; font-weight: 600;">Save</button>
+                                            </div>
+                                        </div>
+                                        <div class="evidence-block" style="display: none; margin: 6px 0 0 12px;">
+                                            <div style="padding: 10px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; border-left: 3px solid #ea580c; margin-bottom: 6px;">
+                                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #ea580c; margin-bottom: 6px;">GENERATED FROM</div>
+                                                <div style="font-size: 12px; color: #374151;">"<span style="background: #fed7aa; padding: 1px 2px; border-radius: 2px;">Predictive optimization uses data statistics</span> to automatically apply clustering and compaction"</div>
+                                            </div>
+                                            <div style="padding: 10px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; border-left: 3px solid #22c55e;">
+                                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #16a34a; margin-bottom: 6px;">FACT-CHECK VERIFIED</div>
+                                                <div style="font-size: 12px; color: #374151;">"Confirmed in Databricks documentation"</div>
+                                                <span style="display: inline-block; margin-top: 6px; font-size: 10px; font-weight: 600; background: #dcfce7; color: #166534; padding: 2px 6px; border-radius: 4px;">verified 92%</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <!-- L300 Detail item 2 -->
+                                    <div style="margin-bottom: 10px;">
+                                        <div style="display: flex; align-items: flex-start; gap: 8px;">
+                                            <span style="flex: 1; font-size: 13px; color: #374151; line-height: 1.4;">– Liquid clustering enables flexible data layout without rewriting entire tables, allowing schema evolution and partition changes on-the-fly.</span>
+                                            <div style="flex-shrink: 0; display: flex; gap: 3px;">
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">✓</button>
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">⚠</button>
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">✗</button>
+                                                <button class="comment-btn" onclick="toggleInlineComment(this)" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;" title="Add comment">💬</button>
+                                                <button class="info-btn" onclick="toggleAllEvidence(this)" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #ea580c; border-radius: 4px; background: #fff7ed; color: #ea580c; cursor: pointer; font-weight: 600;" title="Show evidence">ℹ</button>
+                                            </div>
+                                        </div>
+                                        <div class="inline-comment-box" style="display: none; margin: 6px 0 0 12px; padding: 8px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px;">
+                                            <textarea placeholder="Add your comment..." style="width: 100%; height: 50px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 11px; resize: vertical; margin-bottom: 6px;"></textarea>
+                                            <div style="display: flex; justify-content: flex-end; gap: 4px;">
+                                                <button onclick="cancelInlineComment(this)" style="font-size: 10px; padding: 3px 8px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">Cancel</button>
+                                                <button onclick="saveInlineComment(this)" style="font-size: 10px; padding: 3px 8px; border: none; border-radius: 4px; background: #2d5a5a; color: #fff; cursor: pointer; font-weight: 600;">Save</button>
+                                            </div>
+                                        </div>
+                                        <div class="evidence-block" style="display: none; margin: 6px 0 0 12px;">
+                                            <div style="padding: 10px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; border-left: 3px solid #ea580c; margin-bottom: 6px;">
+                                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #ea580c; margin-bottom: 6px;">GENERATED FROM</div>
+                                                <div style="font-size: 12px; color: #374151;">"<span style="background: #fed7aa; padding: 1px 2px; border-radius: 2px;">Liquid clustering</span> allows flexible data layout changes"</div>
+                                            </div>
+                                            <div style="padding: 10px; background: #fefce8; border: 1px solid #fde047; border-radius: 6px; border-left: 3px solid #eab308;">
+                                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #a16207; margin-bottom: 6px;">FACT-CHECK PENDING</div>
+                                                <div style="font-size: 12px; color: #374151;">No independent verification source found.</div>
+                                                <span style="display: inline-block; margin-top: 6px; font-size: 10px; font-weight: 600; background: #fef3c7; color: #92400e; padding: 2px 6px; border-radius: 4px;">unverified</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <!-- L300 Detail item 3 -->
+                                    <div style="margin-bottom: 10px;">
+                                        <div style="display: flex; align-items: flex-start; gap: 8px;">
+                                            <span style="flex: 1; font-size: 13px; color: #374151; line-height: 1.4;">– Auto-tuning SQL warehouses adjust compute automatically based on query patterns, scaling resources up or down to match workload demands.</span>
+                                            <div style="flex-shrink: 0; display: flex; gap: 3px;">
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">✓</button>
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">⚠</button>
+                                                <button class="review-btn" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">✗</button>
+                                                <button class="comment-btn" onclick="toggleInlineComment(this)" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;" title="Add comment">💬</button>
+                                                <button class="info-btn" onclick="toggleAllEvidence(this)" style="font-size: 10px; padding: 1px 5px; min-width: 20px; height: 20px; border: 1px solid #ea580c; border-radius: 4px; background: #fff7ed; color: #ea580c; cursor: pointer; font-weight: 600;" title="Show evidence">ℹ</button>
+                                            </div>
+                                        </div>
+                                        <div class="inline-comment-box" style="display: none; margin: 6px 0 0 12px; padding: 8px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px;">
+                                            <textarea placeholder="Add your comment..." style="width: 100%; height: 50px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 11px; resize: vertical; margin-bottom: 6px;"></textarea>
+                                            <div style="display: flex; justify-content: flex-end; gap: 4px;">
+                                                <button onclick="cancelInlineComment(this)" style="font-size: 10px; padding: 3px 8px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">Cancel</button>
+                                                <button onclick="saveInlineComment(this)" style="font-size: 10px; padding: 3px 8px; border: none; border-radius: 4px; background: #2d5a5a; color: #fff; cursor: pointer; font-weight: 600;">Save</button>
+                                            </div>
+                                        </div>
+                                        <div class="evidence-block" style="display: none; margin: 6px 0 0 12px;">
+                                            <div style="padding: 10px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; border-left: 3px solid #ea580c;">
+                                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #ea580c; margin-bottom: 6px;">GENERATED FROM</div>
+                                                <div style="font-size: 12px; color: #374151;">"<span style="background: #fed7aa; padding: 1px 2px; border-radius: 2px;">SQL warehouses auto-tune</span> based on workload patterns"</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- REVIEW ENTIRE STATEMENT -->
+                            <div style="border-top: 1px solid #e5e7eb; padding-top: 12px; margin-top: 8px;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                                    <span style="font-size: 11px; color: #6b7280; font-weight: 500;">Review entire statement:</span>
+                                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                                        <button style="font-size: 11px; padding: 4px 12px; border: 1px solid #16a34a; border-radius: 4px; background: #dcfce7; color: #16a34a; cursor: pointer; font-weight: 600;">✓ Approve All</button>
+                                        <button style="font-size: 11px; padding: 4px 12px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">⚠ Needs Work</button>
+                                        <button style="font-size: 11px; padding: 4px 12px; border: 1px solid #dc2626; border-radius: 4px; background: #fef2f2; color: #dc2626; cursor: pointer; font-weight: 600;">✗ Reject All</button>
+                                        <button style="font-size: 11px; padding: 4px 12px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">💬 Comment</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <script>
+                        // Toggle all evidence (Generated From + Fact-Check together)
+                        function toggleAllEvidence(btn) {
+                            var container = btn.closest('div').parentElement.parentElement;
+                            var evidenceBlock = container.querySelector('.evidence-block');
+                            if (!evidenceBlock) return;
+
+                            var isHidden = evidenceBlock.style.display === 'none';
+                            evidenceBlock.style.display = isHidden ? 'block' : 'none';
+
+                            // Toggle button style
+                            if (isHidden) {
+                                btn.style.background = '#ea580c';
+                                btn.style.color = '#fff';
+                                btn.style.borderColor = '#ea580c';
+                            } else {
+                                btn.style.background = '#fff7ed';
+                                btn.style.color = '#ea580c';
+                                btn.style.borderColor = '#ea580c';
+                            }
+                        }
+
+                        // Toggle inline comment box
+                        function toggleInlineComment(btn) {
+                            var container = btn.closest('div').parentElement.parentElement;
+                            var commentBox = container.querySelector('.inline-comment-box');
+                            if (!commentBox) return;
+
+                            var isHidden = commentBox.style.display === 'none';
+                            commentBox.style.display = isHidden ? 'block' : 'none';
+
+                            // Focus textarea when opening
+                            if (isHidden) {
+                                var textarea = commentBox.querySelector('textarea');
+                                if (textarea) textarea.focus();
+                            }
+                        }
+
+                        // Cancel inline comment
+                        function cancelInlineComment(btn) {
+                            var commentBox = btn.closest('.inline-comment-box');
+                            if (commentBox) {
+                                var textarea = commentBox.querySelector('textarea');
+                                if (textarea) textarea.value = '';
+                                commentBox.style.display = 'none';
+                            }
+                        }
+
+                        // Save inline comment
+                        function saveInlineComment(btn) {
+                            var commentBox = btn.closest('.inline-comment-box');
+                            if (!commentBox) return;
+
+                            var textarea = commentBox.querySelector('textarea');
+                            var text = textarea ? textarea.value.trim() : '';
+
+                            if (text) {
+                                // Mark the comment button as having a comment
+                                var container = commentBox.parentElement;
+                                var commentBtn = container.querySelector('.comment-btn');
+                                if (commentBtn) {
+                                    commentBtn.style.border = '1px solid #3b82f6';
+                                    commentBtn.style.background = '#dbeafe';
+                                    commentBtn.style.color = '#3b82f6';
+                                    commentBtn.classList.add('has-comment');
+                                }
+
+                                // Add the comment as a visible block
+                                var existingComments = commentBox.querySelectorAll('.saved-comment');
+                                var commentHtml = '<div class="saved-comment" style="font-size: 11px; color: #374151; margin-bottom: 6px; padding: 6px; background: #fff; border-radius: 4px; border: 1px solid #e5e7eb;">' +
+                                    '<strong style="color: #1e40af;">Reviewer:</strong> ' + text +
+                                    '</div>';
+                                textarea.insertAdjacentHTML('beforebegin', commentHtml);
+                                textarea.value = '';
+                                textarea.placeholder = 'Add another comment...';
+                            }
+                        }
+                    </script>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Button Reference</h3>
+                    <p class="component-description">All button types with their states and meanings.</p>
+                    <div class="component-demo">
+                        <div style="display: flex; flex-direction: column; gap: 16px;">
+                            <!-- Review buttons -->
+                            <div>
+                                <div style="font-size: 11px; font-weight: 600; color: #6b7280; margin-bottom: 8px; text-transform: uppercase;">Review Buttons</div>
+                                <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+                                    <div style="text-align: center;">
+                                        <button style="font-size: 12px; padding: 3px 8px; min-width: 28px; height: 28px; border: 1px solid #16a34a; border-radius: 4px; background: #dcfce7; color: #16a34a; cursor: pointer; font-weight: 700;">✓</button>
+                                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">Approved</div>
+                                    </div>
+                                    <div style="text-align: center;">
+                                        <button style="font-size: 12px; padding: 3px 8px; min-width: 28px; height: 28px; border: 1px solid #fbbf24; border-radius: 4px; background: #fef3c7; color: #b45309; cursor: pointer; font-weight: 700;">⚠</button>
+                                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">Needs Revision</div>
+                                    </div>
+                                    <div style="text-align: center;">
+                                        <button style="font-size: 12px; padding: 3px 8px; min-width: 28px; height: 28px; border: 1px solid #dc2626; border-radius: 4px; background: #fee2e2; color: #dc2626; cursor: pointer; font-weight: 700;">✗</button>
+                                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">Rejected</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Action buttons -->
+                            <div>
+                                <div style="font-size: 11px; font-weight: 600; color: #6b7280; margin-bottom: 8px; text-transform: uppercase;">Action Buttons</div>
+                                <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+                                    <div style="text-align: center;">
+                                        <button style="font-size: 12px; padding: 3px 8px; min-width: 28px; height: 28px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer;">💬</button>
+                                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">Comment</div>
+                                    </div>
+                                    <div style="text-align: center;">
+                                        <button style="font-size: 12px; padding: 3px 8px; min-width: 28px; height: 28px; border: 1px solid #3b82f6; border-radius: 4px; background: #dbeafe; color: #3b82f6; cursor: pointer;">💬</button>
+                                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">Has Comment</div>
+                                    </div>
+                                    <div style="text-align: center;">
+                                        <button style="font-size: 12px; padding: 3px 8px; min-width: 28px; height: 28px; border: 1px solid #ea580c; border-radius: 4px; background: #fff7ed; color: #ea580c; cursor: pointer; font-weight: 600;">📄</button>
+                                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">Generated From</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Fact-check states -->
+                            <div>
+                                <div style="font-size: 11px; font-weight: 600; color: #6b7280; margin-bottom: 8px; text-transform: uppercase;">Fact-Check Button States</div>
+                                <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+                                    <div style="text-align: center;">
+                                        <button style="font-size: 12px; padding: 3px 8px; min-width: 28px; height: 28px; border: 1px solid #16a34a; border-radius: 4px; background: #dcfce7; color: #16a34a; cursor: pointer; font-weight: 600;">🔍</button>
+                                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">Verified</div>
+                                    </div>
+                                    <div style="text-align: center;">
+                                        <button style="font-size: 12px; padding: 3px 8px; min-width: 28px; height: 28px; border: 1px solid #eab308; border-radius: 4px; background: #fef3c7; color: #a16207; cursor: pointer; font-weight: 600;">🔍</button>
+                                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">Pending</div>
+                                    </div>
+                                    <div style="text-align: center;">
+                                        <button style="font-size: 12px; padding: 3px 8px; min-width: 28px; height: 28px; border: 1px solid #dc2626; border-radius: 4px; background: #fee2e2; color: #dc2626; cursor: pointer; font-weight: 600;">🔍</button>
+                                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">Failed</div>
+                                    </div>
+                                    <div style="text-align: center;">
+                                        <button style="font-size: 12px; padding: 3px 8px; min-width: 28px; height: 28px; border: 1px solid #d1d5db; border-radius: 4px; background: #f3f4f6; color: #9ca3af; cursor: not-allowed; font-weight: 600;" disabled>🔍</button>
+                                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">None</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Evidence Card Types</h3>
+                    <p class="component-description">Three types of evidence cards: Generated From (orange), Fact-Check Verified (green), and Fact-Check Pending (yellow).</p>
+                    <div class="component-demo">
+                        <div style="display: flex; flex-direction: column; gap: 12px; max-width: 480px;">
+                            <!-- Generated From card -->
+                            <div style="padding: 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; border-left: 4px solid #ea580c;">
+                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #ea580c; margin-bottom: 8px;">GENERATED FROM</div>
+                                <div style="font-size: 13px; color: #374151; line-height: 1.5; margin-bottom: 10px;">
+                                    "<span style="background: #fed7aa; padding: 1px 2px; border-radius: 2px;">Highlighted quoted text from source</span>"
+                                </div>
+                                <div style="font-size: 12px; color: #9a3412; background: #ffedd5; padding: 6px 10px; border-radius: 6px; border: 1px dashed #fdba74;">
+                                    <strong>Context:</strong> Source Document Name
+                                </div>
+                            </div>
+
+                            <!-- Fact-check Verified card -->
+                            <div style="padding: 12px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; border-left: 4px solid #22c55e;">
+                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #16a34a; margin-bottom: 8px;">FACT-CHECK VERIFIED</div>
+                                <div style="font-size: 13px; color: #374151; line-height: 1.5; margin-bottom: 10px;">
+                                    "<span style="background: #bbf7d0; padding: 1px 2px; border-radius: 2px;">Independent source confirms this claim</span>"
+                                </div>
+                                <div style="font-size: 12px; color: #166534; background: #dcfce7; padding: 6px 10px; border-radius: 6px; border: 1px dashed #86efac;">
+                                    <strong>Source:</strong> exa.ai &mdash; docs.databricks.com
+                                </div>
+                                <div style="margin-top: 8px;">
+                                    <span style="display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; background: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 4px;">verified 94%</span>
+                                </div>
+                            </div>
+
+                            <!-- Fact-check Pending card -->
+                            <div style="padding: 12px; background: #fefce8; border: 1px solid #fde047; border-radius: 8px; border-left: 4px solid #eab308;">
+                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #a16207; margin-bottom: 8px;">FACT-CHECK PENDING</div>
+                                <div style="font-size: 13px; color: #374151; line-height: 1.5; margin-bottom: 10px;">
+                                    No independent verification source found. Claim based on vendor documentation only.
+                                </div>
+                                <span style="display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; background: #fef3c7; color: #92400e; padding: 3px 8px; border-radius: 4px;">Unverified</span>
+                            </div>
+
+                            <!-- Fact-check Failed card -->
+                            <div style="padding: 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; border-left: 4px solid #dc2626;">
+                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #dc2626; margin-bottom: 8px;">FACT-CHECK FAILED</div>
+                                <div style="font-size: 13px; color: #374151; line-height: 1.5; margin-bottom: 10px;">
+                                    Independent source contradicts this claim or found conflicting information.
+                                </div>
+                                <span style="display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; background: #fee2e2; color: #991b1b; padding: 3px 8px; border-radius: 4px;">Contradicted</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">Detail Levels</h3>
+                    <p class="component-description">Two detail formats stored per claim: L200 (concise bullets) and L300 (verbose sentences).</p>
+                    <div class="component-demo">
+                        <table class="comparison-table">
+                            <thead>
+                                <tr>
+                                    <th>Level</th>
+                                    <th>Format</th>
+                                    <th>Usage</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>L200_summary</strong></td>
+                                    <td>Concise bullet points (5-10 words each)</td>
+                                    <td>Default display in battlecard view</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>L300_verbose</strong></td>
+                                    <td>Expanded sentences with full context</td>
+                                    <td>Available in review, optional in battlecard</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="component-group">
+                    <h3 class="component-title">CSS Classes</h3>
+                    <div class="component-demo">
+                        <table class="comparison-table">
+                            <thead>
+                                <tr>
+                                    <th>Class</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><code>.evidence-card-generated</code></td><td>Orange card for "Generated from" citations with quoted text</td></tr>
+                                <tr><td><code>.evidence-card-verified</code></td><td>Green card for verified fact-checks</td></tr>
+                                <tr><td><code>.evidence-card-pending</code></td><td>Yellow card for unverified/pending fact-checks</td></tr>
+                                <tr><td><code>.evidence-quote</code></td><td>Highlighted quoted text within evidence cards</td></tr>
+                                <tr><td><code>.evidence-context</code></td><td>Dashed context box with source document name</td></tr>
+                                <tr><td><code>.review-btn</code></td><td>Base class for all review buttons</td></tr>
+                                <tr><td><code>.review-btn.approved</code></td><td>Green state for approved items</td></tr>
+                                <tr><td><code>.review-btn.revision</code></td><td>Yellow state for items needing revision</td></tr>
+                                <tr><td><code>.review-btn.rejected</code></td><td>Red state for rejected items</td></tr>
+                                <tr><td><code>.statement-review</code></td><td>Container for whole-statement review buttons</td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </section>

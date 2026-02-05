@@ -495,9 +495,10 @@
         .cite-highlight:hover {
             background: linear-gradient(to bottom, transparent 40%, #fde047 40%);
         }
+        /* Disable active highlight on citations */
         .cited-text.active {
-            background: linear-gradient(to bottom, transparent 35%, #fed7aa 35%);
-            border-bottom: 1px solid #f59e0b;
+            background: transparent;
+            border-bottom: none;
         }
 
         /* Hidden key diff eval state */
@@ -517,6 +518,7 @@
         body.hide-details .diff-desc { display: none !important; }
         body.hide-details .review-text { display: none !important; }
         body.hide-details .vendor-details-text { display: none !important; }
+        body.hide-details .vendor-detail-items { display: none !important; }
         body.hide-details .evidence-dropdown-toggle { display: none !important; }
         body.hide-details .evidence-dropdown-content { display: none !important; }
         body.hide-details td:nth-child(2) .review-cell > span:not(.rating-icon):not(.review-headline),
@@ -754,31 +756,14 @@
             font-size: 12px;
         }
 
-        /* Inline Citations */
+        /* Inline Citations - simplified, no hover effects or [n] markers */
         .cited-text {
             background: transparent;
             border-bottom: none;
-            padding: 1px 2px;
-            border-radius: 2px;
-            position: relative;
-            transition: background 0.15s, border-color 0.15s;
         }
-        .cited-text:hover {
-            background: rgba(59, 130, 246, 0.10);
-            border-bottom: 2px solid #3b82f6;
-            cursor: pointer;
-        }
-        .cited-text.cite-popover-active {
-            background: rgba(59, 130, 246, 0.15);
-            border-bottom: 2px solid #3b82f6;
-        }
-
+        /* Hide citation index markers [n] */
         .cited-text .cite-index {
-            font-size: 9px;
-            font-weight: 700;
-            color: #3b82f6;
-            vertical-align: super;
-            margin-left: 1px;
+            display: none;
         }
 
         /* Inline verdict dot shown after cite-index in table cells */
@@ -1417,7 +1402,7 @@
             z-index: 999;
         }
 
-        .citation-panel-overlay.open { display: none; /* disabled — using inline expansion */ }
+        .citation-panel-overlay.open { display: block; }
 
         .citation-panel {
             display: none;
@@ -1432,7 +1417,7 @@
             overflow-y: auto;
         }
 
-        .citation-panel.open { display: none; /* disabled — using inline expansion */ }
+        .citation-panel.open { display: block; animation: slideIn 0.2s ease-out; }
         .citation-panel.open-DISABLED {
             display: block;
             animation: slideIn 0.2s ease-out;
@@ -2494,36 +2479,316 @@
             background: rgba(59, 130, 246, 0.10);
         }
 
+        /* Headline review row - buttons below headline */
+        .headline-review-row {
+            margin-top: 4px;
+            margin-bottom: 6px;
+        }
+
         .vendor-details-text {
             font-size: 13px;
             color: #555;
-            cursor: pointer;
             padding: 1px 2px;
             border-radius: 2px;
-            transition: background 0.15s;
         }
-        .vendor-details-text:hover {
-            background: rgba(59, 130, 246, 0.10);
+        .vendor-detail-items {
+            margin-top: 4px;
+            padding-left: 2px;
         }
-
-        .evidence-dropdown-toggle {
+        .vendor-detail-item {
+            margin-bottom: 10px;
+            padding: 2px 0;
+        }
+        .vendor-detail-item-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            margin-bottom: 4px;
+        }
+        .vendor-detail-item .vendor-details-text {
+            flex: 1;
+        }
+        .detail-item-buttons {
+            flex-shrink: 0;
+            display: flex;
+            gap: 3px;
+            align-items: center;
+        }
+        .detail-item-buttons .score-btn,
+        .detail-item-buttons .expand-btn,
+        .detail-item-buttons .info-btn {
+            font-size: 11px;
+            padding: 2px 6px;
+            min-width: 22px;
+            height: 22px;
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            margin-top: 10px;
-            padding: 8px 12px;
-            background: #f3f4f6;
-            border: 1px solid #e5e7eb;
-            border-radius: 6px;
+            justify-content: center;
+            border-radius: 4px;
             cursor: pointer;
-            font-size: 12px;
-            font-weight: 500;
-            color: #374151;
-            user-select: none;
-            transition: background 0.15s;
         }
-        .evidence-dropdown-toggle:hover {
-            background: #e5e7eb;
+
+        /* L200/L300 detail section styles */
+        .detail-section-header {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #6b7280;
+            margin: 10px 0 6px 0;
+        }
+        .detail-section-header:first-of-type {
+            margin-top: 6px;
+        }
+
+        /* Inline comment box */
+        .inline-comment-box {
+            display: none;
+            margin: 6px 0 0 12px;
+            padding: 8px;
+            background: #f0f9ff;
+            border: 1px solid #bae6fd;
+            border-radius: 6px;
+        }
+        .inline-comment-box.visible {
+            display: block;
+        }
+        .inline-comment-box textarea {
+            width: 100%;
+            height: 50px;
+            padding: 6px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-size: 11px;
+            resize: vertical;
+            margin-bottom: 6px;
+        }
+        .inline-comment-box .comment-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 4px;
+        }
+        .inline-comment-box .comment-actions button {
+            font-size: 10px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .inline-comment-box .btn-cancel {
+            border: 1px solid #d1d5db;
+            background: #fff;
+        }
+        .inline-comment-box .btn-save {
+            border: none;
+            background: #2d5a5a;
+            color: #fff;
+            font-weight: 600;
+        }
+        .inline-comment-box .existing-comment {
+            font-size: 11px;
+            color: #374151;
+            margin-bottom: 6px;
+            padding: 6px;
+            background: #fff;
+            border-radius: 4px;
+            border: 1px solid #e5e7eb;
+        }
+        .inline-comment-box .existing-comment strong {
+            color: #1e40af;
+        }
+
+        /* Inline evidence block */
+        .inline-evidence-block {
+            display: none;
+            margin: 6px 0 0 12px;
+        }
+        .inline-evidence-block.visible {
+            display: block;
+        }
+        .evidence-card {
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 6px;
+        }
+        .evidence-card.generated-from {
+            background: #fff7ed;
+            border: 1px solid #fed7aa;
+            border-left: 3px solid #ea580c;
+        }
+        .evidence-card.fact-check-verified {
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-left: 3px solid #22c55e;
+        }
+        .evidence-card.fact-check-pending {
+            background: #fefce8;
+            border: 1px solid #fde047;
+            border-left: 3px solid #eab308;
+        }
+        .evidence-card.fact-check-required {
+            background: #f3f4f6;
+            border: 1px solid #d1d5db;
+            border-left: 3px solid #9ca3af;
+        }
+        .evidence-card-header {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+        .evidence-card.generated-from .evidence-card-header {
+            color: #ea580c;
+        }
+        .evidence-card.fact-check-verified .evidence-card-header {
+            color: #16a34a;
+        }
+        .evidence-card.fact-check-pending .evidence-card-header {
+            color: #a16207;
+        }
+        .evidence-card.fact-check-required .evidence-card-header {
+            color: #6b7280;
+        }
+        .evidence-card.fact-check-required .evidence-card-body {
+            color: #6b7280;
+            font-style: italic;
+        }
+        .evidence-card-body {
+            font-size: 12px;
+            color: #374151;
+        }
+        .evidence-highlight {
+            padding: 1px 2px;
+            border-radius: 2px;
+        }
+        .evidence-card-clickable {
+            cursor: pointer;
+            transition: box-shadow 0.15s, border-color 0.15s;
+        }
+        .evidence-card-clickable:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-color: #ea580c;
+        }
+        .evidence-card-source {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 6px;
+            font-size: 11px;
+        }
+        .evidence-card-source-title {
+            color: #374151;
+            font-weight: 600;
+        }
+        .evidence-card-source-link {
+            color: #ea580c;
+            font-weight: 500;
+        }
+        .evidence-card.generated-from .evidence-highlight {
+            background: #fed7aa;
+        }
+        .evidence-card.fact-check-verified .evidence-highlight {
+            background: #bbf7d0;
+        }
+        .verification-badge {
+            display: inline-block;
+            margin-top: 6px;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .verification-badge.verified {
+            background: #dcfce7;
+            color: #166534;
+        }
+        .verification-badge.unverified {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        /* Info button for evidence toggle */
+        .info-btn {
+            font-size: 10px;
+            padding: 1px 5px;
+            min-width: 20px;
+            height: 20px;
+            border: 1px solid #ea580c;
+            border-radius: 4px;
+            background: #fff7ed;
+            color: #ea580c;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .info-btn.active {
+            background: #ea580c;
+            color: #fff;
+        }
+
+        /* Review entire statement section */
+        .review-statement-section {
+            border-top: 1px solid #e5e7eb;
+            padding-top: 12px;
+            margin-top: 8px;
+        }
+        .review-statement-section .section-label {
+            font-size: 11px;
+            color: #6b7280;
+            font-weight: 500;
+        }
+        .review-statement-buttons {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-top: 6px;
+        }
+        .review-statement-buttons button {
+            font-size: 11px;
+            padding: 4px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        /* All review statement buttons are grey by default */
+        .review-statement-buttons .btn-approve-all,
+        .review-statement-buttons .btn-needs-work,
+        .review-statement-buttons .btn-reject-all {
+            border: 1px solid #d1d5db;
+            background: #f9fafb;
+            color: #6b7280;
+        }
+        /* Only show colors when selected */
+        .review-statement-buttons .btn-approve-all.selected {
+            border-color: #16a34a;
+            background: #16a34a;
+            color: #fff;
+        }
+        .review-statement-buttons .btn-needs-work.selected {
+            border-color: #fbbf24;
+            background: #fef3c7;
+            color: #b45309;
+        }
+        .review-statement-buttons .btn-reject-all.selected {
+            border-color: #dc2626;
+            background: #dc2626;
+            color: #fff;
+        }
+        .review-statement-buttons .btn-comment {
+            border: 1px solid #d1d5db;
+            background: #fff;
+            color: #374151;
+        }
+        .review-statement-buttons .btn-comment.has-comment {
+            background: #fef3c7;
+            border-color: #f59e0b;
+            color: #b45309;
+        }
+
+        /* Hide Reasoning & Evidence dropdown - using inline ℹ button instead */
+        .evidence-dropdown-toggle {
+            display: none !important;
+        }
+        .evidence-dropdown-content {
+            display: none !important;
         }
         .evidence-dropdown-arrow {
             font-size: 10px;
@@ -2847,13 +3112,135 @@
                                         <span class="rating-prefix negative">(&ndash;)</span>
                                         {% endif %}
                                         <span>
-                                            <span class="vendor-headline-link" onclick="clickEvidenceText('{{ diff.id }}', 'databricks', 'headline')">{{ diff.databricks_headline }}</span>{% if diff.databricks_details %} <span class="vendor-details-text" onclick="clickEvidenceText('{{ diff.id }}', 'databricks', 'detail')">&ndash; {{ diff.databricks_details }}</span>{% endif %}
+                                            <span class="vendor-headline-link" onclick="clickEvidenceText('{{ diff.id }}', 'databricks', 'headline')">{{ diff.databricks_headline }}</span>
                                         </span>
                                     </div>
+                                    {# Headline review buttons #}
+                                    {% set headline_scope = 'databricks_headline' %}
+                                    <div class="headline-review-row">
+                                        <div class="score-buttons detail-item-buttons" onclick="event.stopPropagation()">
+                                            <button class="score-btn approve {% if diff.feedback[headline_scope] and diff.feedback[headline_scope].status == 'approved' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', '{{ headline_scope }}', 'approved', this)" title="Approve">&#10003;</button>
+                                            <button class="score-btn revision {% if diff.feedback[headline_scope] and diff.feedback[headline_scope].status == 'needs_revision' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', '{{ headline_scope }}', 'needs_revision', this)" title="Needs Revision">&#9888;</button>
+                                            <button class="score-btn reject {% if diff.feedback[headline_scope] and diff.feedback[headline_scope].status == 'rejected' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', '{{ headline_scope }}', 'rejected', this)" title="Reject">&#10007;</button>
+                                            <button class="expand-btn {% if diff.feedback[headline_scope] and diff.feedback[headline_scope].comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', '{{ headline_scope }}')" title="{% if diff.feedback[headline_scope] and diff.feedback[headline_scope].comment %}View comment{% else %}Add comment{% endif %}">&#128172;{% if diff.feedback[headline_scope] and diff.feedback[headline_scope].comment %}<span class="comment-dot"></span>{% endif %}</button>
+                                        </div>
+                                    </div>
+                                    <div class="review-details" id="details-{{ diff.id }}-{{ headline_scope }}">
+                                        <div class="comment-row">
+                                            <input type="text" class="comment-input{% if diff.feedback[headline_scope] and diff.feedback[headline_scope].comment %} saved{% endif %}"
+                                                   id="comment-{{ diff.id }}-{{ headline_scope }}"
+                                                   placeholder="Add comment..."
+                                                   value="{{ diff.feedback[headline_scope].comment if diff.feedback[headline_scope] and diff.feedback[headline_scope].comment else '' }}"
+                                                   {% if diff.feedback[headline_scope] and diff.feedback[headline_scope].comment %}readonly{% endif %}>
+                                            <button class="save-btn{% if diff.feedback[headline_scope] and diff.feedback[headline_scope].comment %} saved{% endif %}"
+                                                    onclick="saveComment('{{ diff.id }}', '{{ headline_scope }}', this)">
+                                                {% if diff.feedback[headline_scope] and diff.feedback[headline_scope].comment %}Edit{% else %}Save{% endif %}</button>
+                                        </div>
+                                    </div>
 
-                                    <div class="score-buttons" style="margin-top: 6px;">
+                                    {# L200 Detail Section (concise) #}
+                                    {% if diff.databricks_detail_items %}
+                                    <div class="detail-section-header">Details - L200</div>
+                                    <div class="vendor-detail-items">
+                                        {% for item in diff.databricks_detail_items %}
+                                        {% set item_scope = 'databricks_detail_' ~ (item.detail_item_id or loop.index0) %}
+                                        <div class="vendor-detail-item" data-detail-item-id="{{ item.detail_item_id or '' }}">
+                                            <div class="vendor-detail-item-row">
+                                                <span class="vendor-details-text" onclick="clickEvidenceText('{{ diff.id }}', 'databricks', 'detail')">&ndash; {{ item.text }}</span>
+                                                <div class="score-buttons detail-item-buttons" onclick="event.stopPropagation()">
+                                                    <button class="score-btn approve {% if diff.feedback[item_scope] and diff.feedback[item_scope].status == 'approved' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope }}', 'approved', this)" title="Approve">&#10003;</button>
+                                                    <button class="score-btn revision {% if diff.feedback[item_scope] and diff.feedback[item_scope].status == 'needs_revision' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope }}', 'needs_revision', this)" title="Needs Revision">&#9888;</button>
+                                                    <button class="score-btn reject {% if diff.feedback[item_scope] and diff.feedback[item_scope].status == 'rejected' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope }}', 'rejected', this)" title="Reject">&#10007;</button>
+                                                    <button class="expand-btn {% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', '{{ item_scope }}')" title="{% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %}View comment{% else %}Add comment{% endif %}">&#128172;{% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %}<span class="comment-dot"></span>{% endif %}</button>
+                                                    <button class="info-btn" onclick="toggleInlineEvidence('{{ diff.id }}', '{{ item_scope }}')" title="Show evidence">&#8505;</button>
+                                                </div>
+                                            </div>
+                                            {# Inline comment - key-diff style #}
+                                            <div class="review-details" id="details-{{ diff.id }}-{{ item_scope }}">
+                                                <div class="comment-row">
+                                                    <input type="text" class="comment-input{% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %} saved{% endif %}"
+                                                           id="comment-{{ diff.id }}-{{ item_scope }}"
+                                                           placeholder="Add comment..."
+                                                           value="{{ diff.feedback[item_scope].comment if diff.feedback[item_scope] and diff.feedback[item_scope].comment else '' }}"
+                                                           {% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %}readonly{% endif %}>
+                                                    <button class="save-btn{% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %} saved{% endif %}"
+                                                            onclick="saveComment('{{ diff.id }}', '{{ item_scope }}', this)">
+                                                        {% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %}Edit{% else %}Save{% endif %}</button>
+                                                </div>
+                                            </div>
+                                            {# Inline evidence block - now below the row #}
+                                            <div class="inline-evidence-block" id="inline-evidence-{{ diff.id }}-{{ item_scope }}"></div>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+
+                                    {# L300 Detail Section (verbose) - only show if any item has verbose text #}
+                                    {% set has_verbose = diff.databricks_detail_items | selectattr('text_verbose') | list | length > 0 %}
+                                    {% if has_verbose %}
+                                    <div class="detail-section-header">Details - L300</div>
+                                    <div class="vendor-detail-items">
+                                        {% for item in diff.databricks_detail_items %}
+                                        {% if item.text_verbose %}
+                                        {% set item_scope_l300 = 'databricks_detail_l300_' ~ (item.detail_item_id or loop.index0) %}
+                                        <div class="vendor-detail-item" data-detail-item-id="{{ item.detail_item_id or '' }}" data-level="l300">
+                                            <div class="vendor-detail-item-row">
+                                                <span class="vendor-details-text">&ndash; {{ item.text_verbose }}</span>
+                                                <div class="score-buttons detail-item-buttons" onclick="event.stopPropagation()">
+                                                    <button class="score-btn approve {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'approved' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'approved', this)" title="Approve">&#10003;</button>
+                                                    <button class="score-btn revision {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'needs_revision' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'needs_revision', this)" title="Needs Revision">&#9888;</button>
+                                                    <button class="score-btn reject {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'rejected' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'rejected', this)" title="Reject">&#10007;</button>
+                                                    <button class="expand-btn {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', '{{ item_scope_l300 }}')" title="{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}View comment{% else %}Add comment{% endif %}">&#128172;{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}<span class="comment-dot"></span>{% endif %}</button>
+                                                    <button class="info-btn" onclick="toggleInlineEvidence('{{ diff.id }}', '{{ item_scope_l300 }}')" title="Show evidence">&#8505;</button>
+                                                </div>
+                                            </div>
+                                            {# Inline comment - key-diff style #}
+                                            <div class="review-details" id="details-{{ diff.id }}-{{ item_scope_l300 }}">
+                                                <div class="comment-row">
+                                                    <input type="text" class="comment-input{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %} saved{% endif %}"
+                                                           id="comment-{{ diff.id }}-{{ item_scope_l300 }}"
+                                                           placeholder="Add comment..."
+                                                           value="{{ diff.feedback[item_scope_l300].comment if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment else '' }}"
+                                                           {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}readonly{% endif %}>
+                                                    <button class="save-btn{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %} saved{% endif %}"
+                                                            onclick="saveComment('{{ diff.id }}', '{{ item_scope_l300 }}', this)">
+                                                        {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}Edit{% else %}Save{% endif %}</button>
+                                                </div>
+                                            </div>
+                                            {# Inline evidence block #}
+                                            <div class="inline-evidence-block" id="inline-evidence-{{ diff.id }}-{{ item_scope_l300 }}"></div>
+                                        </div>
+                                        {% endif %}
+                                        {% endfor %}
+                                    </div>
+                                    {% endif %}
+                                    {% endif %}
+
+                                    {# Review entire statement section #}
+                                    <div class="review-statement-section">
+                                        <span class="section-label">Review entire statement:</span>
+                                        <div class="review-statement-buttons">
+                                            <button class="btn-approve-all {% if diff.feedback.databricks.status == 'approved' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', 'databricks', 'approved', this)">&#10003; Approve All</button>
+                                            <button class="btn-needs-work {% if diff.feedback.databricks.status == 'needs_revision' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', 'databricks', 'needs_revision', this)">&#9888; Needs Work</button>
+                                            <button class="btn-reject-all {% if diff.feedback.databricks.status == 'rejected' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', 'databricks', 'rejected', this)">&#10007; Reject All</button>
+                                            <button class="btn-comment {% if diff.feedback.databricks.comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', 'databricks')">&#128172; Comment</button>
+                                        </div>
+                                    </div>
+
+                                    <div class="score-buttons" style="margin-top: 6px; display: none;">
                                         <button class="score-btn approve {% if diff.feedback.databricks.status == 'approved' %}selected{% endif %}"
-                                                onclick="saveFeedback('{{ diff.id }}', 'databricks', 'approved', this)" title="Approve">&#10003;</button>
+                                                onclick="saveFeedback('{{ diff.id }}', 'databricks', 'approved', this)" title="Approve Headline">&#10003;</button>
                                         <button class="score-btn revision {% if diff.feedback.databricks.status == 'needs_revision' %}selected{% endif %}"
                                                 onclick="saveFeedback('{{ diff.id }}', 'databricks', 'needs_revision', this)" title="Needs Revision">&#9888;</button>
                                         <button class="score-btn reject {% if diff.feedback.databricks.status == 'rejected' %}selected{% endif %}"
@@ -2914,13 +3301,135 @@
                                         <span class="rating-prefix negative">(&ndash;)</span>
                                         {% endif %}
                                         <span>
-                                            <span class="vendor-headline-link" onclick="clickEvidenceText('{{ diff.id }}', 'fabric', 'headline')">{{ diff.fabric_headline }}</span>{% if diff.fabric_details %} <span class="vendor-details-text" onclick="clickEvidenceText('{{ diff.id }}', 'fabric', 'detail')">&ndash; {{ diff.fabric_details }}</span>{% endif %}
+                                            <span class="vendor-headline-link" onclick="clickEvidenceText('{{ diff.id }}', 'fabric', 'headline')">{{ diff.fabric_headline }}</span>
                                         </span>
                                     </div>
+                                    {# Headline review buttons #}
+                                    {% set headline_scope_fab = 'fabric_headline' %}
+                                    <div class="headline-review-row">
+                                        <div class="score-buttons detail-item-buttons" onclick="event.stopPropagation()">
+                                            <button class="score-btn approve {% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].status == 'approved' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', '{{ headline_scope_fab }}', 'approved', this)" title="Approve">&#10003;</button>
+                                            <button class="score-btn revision {% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].status == 'needs_revision' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', '{{ headline_scope_fab }}', 'needs_revision', this)" title="Needs Revision">&#9888;</button>
+                                            <button class="score-btn reject {% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].status == 'rejected' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', '{{ headline_scope_fab }}', 'rejected', this)" title="Reject">&#10007;</button>
+                                            <button class="expand-btn {% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', '{{ headline_scope_fab }}')" title="{% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].comment %}View comment{% else %}Add comment{% endif %}">&#128172;{% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].comment %}<span class="comment-dot"></span>{% endif %}</button>
+                                        </div>
+                                    </div>
+                                    <div class="review-details" id="details-{{ diff.id }}-{{ headline_scope_fab }}">
+                                        <div class="comment-row">
+                                            <input type="text" class="comment-input{% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].comment %} saved{% endif %}"
+                                                   id="comment-{{ diff.id }}-{{ headline_scope_fab }}"
+                                                   placeholder="Add comment..."
+                                                   value="{{ diff.feedback[headline_scope_fab].comment if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].comment else '' }}"
+                                                   {% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].comment %}readonly{% endif %}>
+                                            <button class="save-btn{% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].comment %} saved{% endif %}"
+                                                    onclick="saveComment('{{ diff.id }}', '{{ headline_scope_fab }}', this)">
+                                                {% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].comment %}Edit{% else %}Save{% endif %}</button>
+                                        </div>
+                                    </div>
 
-                                    <div class="score-buttons" style="margin-top: 6px;">
+                                    {# L200 Detail Section (concise) #}
+                                    {% if diff.fabric_detail_items %}
+                                    <div class="detail-section-header">Details - L200</div>
+                                    <div class="vendor-detail-items">
+                                        {% for item in diff.fabric_detail_items %}
+                                        {% set item_scope = 'fabric_detail_' ~ (item.detail_item_id or loop.index0) %}
+                                        <div class="vendor-detail-item" data-detail-item-id="{{ item.detail_item_id or '' }}">
+                                            <div class="vendor-detail-item-row">
+                                                <span class="vendor-details-text" onclick="clickEvidenceText('{{ diff.id }}', 'fabric', 'detail')">&ndash; {{ item.text }}</span>
+                                                <div class="score-buttons detail-item-buttons" onclick="event.stopPropagation()">
+                                                    <button class="score-btn approve {% if diff.feedback[item_scope] and diff.feedback[item_scope].status == 'approved' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope }}', 'approved', this)" title="Approve">&#10003;</button>
+                                                    <button class="score-btn revision {% if diff.feedback[item_scope] and diff.feedback[item_scope].status == 'needs_revision' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope }}', 'needs_revision', this)" title="Needs Revision">&#9888;</button>
+                                                    <button class="score-btn reject {% if diff.feedback[item_scope] and diff.feedback[item_scope].status == 'rejected' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope }}', 'rejected', this)" title="Reject">&#10007;</button>
+                                                    <button class="expand-btn {% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', '{{ item_scope }}')" title="{% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %}View comment{% else %}Add comment{% endif %}">&#128172;{% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %}<span class="comment-dot"></span>{% endif %}</button>
+                                                    <button class="info-btn" onclick="toggleInlineEvidence('{{ diff.id }}', '{{ item_scope }}')" title="Show evidence">&#8505;</button>
+                                                </div>
+                                            </div>
+                                            {# Inline comment - key-diff style #}
+                                            <div class="review-details" id="details-{{ diff.id }}-{{ item_scope }}">
+                                                <div class="comment-row">
+                                                    <input type="text" class="comment-input{% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %} saved{% endif %}"
+                                                           id="comment-{{ diff.id }}-{{ item_scope }}"
+                                                           placeholder="Add comment..."
+                                                           value="{{ diff.feedback[item_scope].comment if diff.feedback[item_scope] and diff.feedback[item_scope].comment else '' }}"
+                                                           {% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %}readonly{% endif %}>
+                                                    <button class="save-btn{% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %} saved{% endif %}"
+                                                            onclick="saveComment('{{ diff.id }}', '{{ item_scope }}', this)">
+                                                        {% if diff.feedback[item_scope] and diff.feedback[item_scope].comment %}Edit{% else %}Save{% endif %}</button>
+                                                </div>
+                                            </div>
+                                            {# Inline evidence block #}
+                                            <div class="inline-evidence-block" id="inline-evidence-{{ diff.id }}-{{ item_scope }}"></div>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+
+                                    {# L300 Detail Section (verbose) - only show if any item has verbose text #}
+                                    {% set has_verbose_fab = diff.fabric_detail_items | selectattr('text_verbose') | list | length > 0 %}
+                                    {% if has_verbose_fab %}
+                                    <div class="detail-section-header">Details - L300</div>
+                                    <div class="vendor-detail-items">
+                                        {% for item in diff.fabric_detail_items %}
+                                        {% if item.text_verbose %}
+                                        {% set item_scope_l300 = 'fabric_detail_l300_' ~ (item.detail_item_id or loop.index0) %}
+                                        <div class="vendor-detail-item" data-detail-item-id="{{ item.detail_item_id or '' }}" data-level="l300">
+                                            <div class="vendor-detail-item-row">
+                                                <span class="vendor-details-text">&ndash; {{ item.text_verbose }}</span>
+                                                <div class="score-buttons detail-item-buttons" onclick="event.stopPropagation()">
+                                                    <button class="score-btn approve {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'approved' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'approved', this)" title="Approve">&#10003;</button>
+                                                    <button class="score-btn revision {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'needs_revision' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'needs_revision', this)" title="Needs Revision">&#9888;</button>
+                                                    <button class="score-btn reject {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'rejected' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'rejected', this)" title="Reject">&#10007;</button>
+                                                    <button class="expand-btn {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', '{{ item_scope_l300 }}')" title="{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}View comment{% else %}Add comment{% endif %}">&#128172;{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}<span class="comment-dot"></span>{% endif %}</button>
+                                                    <button class="info-btn" onclick="toggleInlineEvidence('{{ diff.id }}', '{{ item_scope_l300 }}')" title="Show evidence">&#8505;</button>
+                                                </div>
+                                            </div>
+                                            {# Inline comment - key-diff style #}
+                                            <div class="review-details" id="details-{{ diff.id }}-{{ item_scope_l300 }}">
+                                                <div class="comment-row">
+                                                    <input type="text" class="comment-input{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %} saved{% endif %}"
+                                                           id="comment-{{ diff.id }}-{{ item_scope_l300 }}"
+                                                           placeholder="Add comment..."
+                                                           value="{{ diff.feedback[item_scope_l300].comment if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment else '' }}"
+                                                           {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}readonly{% endif %}>
+                                                    <button class="save-btn{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %} saved{% endif %}"
+                                                            onclick="saveComment('{{ diff.id }}', '{{ item_scope_l300 }}', this)">
+                                                        {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}Edit{% else %}Save{% endif %}</button>
+                                                </div>
+                                            </div>
+                                            {# Inline evidence block #}
+                                            <div class="inline-evidence-block" id="inline-evidence-{{ diff.id }}-{{ item_scope_l300 }}"></div>
+                                        </div>
+                                        {% endif %}
+                                        {% endfor %}
+                                    </div>
+                                    {% endif %}
+                                    {% endif %}
+
+                                    {# Review entire statement section #}
+                                    <div class="review-statement-section">
+                                        <span class="section-label">Review entire statement:</span>
+                                        <div class="review-statement-buttons">
+                                            <button class="btn-approve-all {% if diff.feedback.fabric.status == 'approved' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', 'fabric', 'approved', this)">&#10003; Approve All</button>
+                                            <button class="btn-needs-work {% if diff.feedback.fabric.status == 'needs_revision' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', 'fabric', 'needs_revision', this)">&#9888; Needs Work</button>
+                                            <button class="btn-reject-all {% if diff.feedback.fabric.status == 'rejected' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', 'fabric', 'rejected', this)">&#10007; Reject All</button>
+                                            <button class="btn-comment {% if diff.feedback.fabric.comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', 'fabric')">&#128172; Comment</button>
+                                        </div>
+                                    </div>
+
+                                    <div class="score-buttons" style="margin-top: 6px; display: none;">
                                         <button class="score-btn approve {% if diff.feedback.fabric.status == 'approved' %}selected{% endif %}"
-                                                onclick="saveFeedback('{{ diff.id }}', 'fabric', 'approved', this)" title="Approve">&#10003;</button>
+                                                onclick="saveFeedback('{{ diff.id }}', 'fabric', 'approved', this)" title="Approve Headline">&#10003;</button>
                                         <button class="score-btn revision {% if diff.feedback.fabric.status == 'needs_revision' %}selected{% endif %}"
                                                 onclick="saveFeedback('{{ diff.id }}', 'fabric', 'needs_revision', this)" title="Needs Revision">&#9888;</button>
                                         <button class="score-btn reject {% if diff.feedback.fabric.status == 'rejected' %}selected{% endif %}"
@@ -3414,7 +3923,15 @@
             const urlEl = document.getElementById('citationUrl');
             urlEl.textContent = url || 'No URL';
             urlEl.href = url || '#';
+            document.getElementById('citationOverlay').classList.add('open');
             document.getElementById('citationPanel').classList.add('open');
+        }
+
+        function openCitationFromEvidence(el) {
+            const title = el.dataset.sourceTitle || 'Source';
+            const url = el.dataset.sourceUrl || '';
+            const quote = el.dataset.sourceQuote || '';
+            openCitationDetail(0, title, url, quote, quote);
         }
 
         /**
@@ -3430,8 +3947,17 @@
         // Reasoning modal removed — all content now shown inline via toggleCellExpansion
 
         async function saveFeedback(diffId, level, status, btn) {
-            const buttons = btn.parentElement.querySelectorAll('.score-btn');
-            buttons.forEach(b => b.classList.remove('selected'));
+            // Handle both regular score-btn and review-statement buttons
+            const parent = btn.parentElement;
+            const isReviewStatement = parent.classList.contains('review-statement-buttons');
+
+            if (isReviewStatement) {
+                // Clear selected from all review-statement buttons (except comment)
+                parent.querySelectorAll('.btn-approve-all, .btn-needs-work, .btn-reject-all').forEach(b => b.classList.remove('selected'));
+            } else {
+                // Regular score buttons
+                parent.querySelectorAll('.score-btn').forEach(b => b.classList.remove('selected'));
+            }
             btn.classList.add('selected');
 
             const comment = document.getElementById(`comment-${diffId}-${level}`)?.value || '';
@@ -3487,6 +4013,11 @@
                 if (statusMatch) currentStatus = statusMatch[1];
             }
 
+            // Default to 'provide_feedback' for detail/headline scopes if no status selected
+            if (!currentStatus && (level.includes('_detail_') || level.includes('_headline'))) {
+                currentStatus = 'provide_feedback';
+            }
+
             try {
                 const endpoint = isUcBattlecard ? '/api/uc/feedback' : '/api/feedback';
                 const payload = isUcBattlecard
@@ -3507,6 +4038,21 @@
                     btn.disabled = false;
                     inputEl.readOnly = true;
                     inputEl.classList.add('saved');
+
+                    // Update expand-btn to show has-comment indicator
+                    const expandBtn = document.querySelector(`[onclick="toggleCommentDetails('${diffId}', '${level}')"].expand-btn`);
+                    if (expandBtn && comment) {
+                        expandBtn.classList.add('has-comment');
+                        if (!expandBtn.querySelector('.comment-dot')) {
+                            expandBtn.insertAdjacentHTML('beforeend', '<span class="comment-dot"></span>');
+                        }
+                    }
+
+                    // Update btn-comment for statement-level scopes (databricks/fabric)
+                    const btnComment = document.querySelector(`[onclick="toggleCommentDetails('${diffId}', '${level}')"].btn-comment`);
+                    if (btnComment && comment) {
+                        btnComment.classList.add('has-comment');
+                    }
                 }
             } catch (error) {
                 console.error('Failed to save comment:', error);
@@ -3526,6 +4072,183 @@
                 document.getElementById('fabric-score').textContent = `${scores.fabric_score}%`;
                 document.getElementById('reorder-count').textContent = scores.reordered;
             }
+        }
+
+        // Inline comment functions for L200/L300 detail items
+        function toggleInlineComment(diffId, scope) {
+            const box = document.getElementById(`inline-comment-${diffId}-${scope}`);
+            if (!box) return;
+            box.classList.toggle('visible');
+            if (box.classList.contains('visible')) {
+                const textarea = box.querySelector('textarea');
+                if (textarea) textarea.focus();
+            }
+        }
+
+        function cancelInlineComment(diffId, scope) {
+            const box = document.getElementById(`inline-comment-${diffId}-${scope}`);
+            if (!box) return;
+            const textarea = box.querySelector('textarea');
+            // Restore original comment if exists (stored in data attribute)
+            if (textarea && textarea.dataset.originalComment) {
+                textarea.value = textarea.dataset.originalComment;
+            } else if (textarea) {
+                textarea.value = '';
+            }
+            box.classList.remove('visible');
+        }
+
+        async function saveInlineComment(diffId, scope) {
+            const textareaId = `comment-text-${diffId}-${scope}`;
+            const textarea = document.getElementById(textareaId);
+            if (!textarea) return;
+
+            const comment = textarea.value.trim();
+            if (!comment) {
+                alert('Please enter a comment');
+                return;
+            }
+
+            try {
+                const endpoint = isUcBattlecard ? '/api/uc/feedback' : '/api/feedback';
+                const payload = isUcBattlecard
+                    ? { battlecard_id: battlecardId, diff_id: diffId, level: scope, comment: comment, status: 'provide_feedback' }
+                    : { trial_name: trialName, diff_id: diffId, level: scope, comment: comment, status: 'provide_feedback' };
+
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    const box = document.getElementById(`inline-comment-${diffId}-${scope}`);
+                    if (box) {
+                        // Update existing comment display (replace, not add)
+                        let existingDiv = box.querySelector('.existing-comment');
+                        if (!existingDiv) {
+                            existingDiv = document.createElement('div');
+                            existingDiv.className = 'existing-comment';
+                            box.insertBefore(existingDiv, box.querySelector('textarea'));
+                        }
+                        existingDiv.innerHTML = `<strong>Reviewer:</strong> ${escapeHtmlTrial(comment)}`;
+
+                        // Store the saved comment as the new original
+                        textarea.dataset.originalComment = comment;
+
+                        // Update save button to "Update"
+                        const saveBtn = box.querySelector('.btn-save');
+                        if (saveBtn) saveBtn.textContent = 'Update';
+                    }
+                    // Update expand button to show has-comment indicator
+                    const expandBtn = document.querySelector(`[onclick="toggleInlineComment('${diffId}', '${scope}')"]`);
+                    if (expandBtn) expandBtn.classList.add('has-comment');
+
+                    // Close the comment box after successful save
+                    box.classList.remove('visible');
+                }
+            } catch (error) {
+                console.error('Failed to save inline comment:', error);
+                alert('Failed to save comment. Please try again.');
+            }
+        }
+
+        // Inline evidence toggle - shows generated from + fact-check together
+        function toggleInlineEvidence(diffId, scope) {
+            const block = document.getElementById(`inline-evidence-${diffId}-${scope}`);
+            if (!block) return;
+
+            const infoBtn = document.querySelector(`[onclick="toggleInlineEvidence('${diffId}', '${scope}')"]`);
+
+            if (block.classList.contains('visible')) {
+                block.classList.remove('visible');
+                if (infoBtn) infoBtn.classList.remove('active');
+                return;
+            }
+
+            // Load evidence if not already loaded
+            if (!block.dataset.loaded) {
+                // Find diff data from trialData.categories
+                let diffData = null;
+                for (const category in trialData.categories) {
+                    const found = trialData.categories[category].find(d => d.id === diffId);
+                    if (found) {
+                        diffData = found;
+                        break;
+                    }
+                }
+
+                if (!diffData) {
+                    block.innerHTML = '<div class="evidence-card generated-from"><div class="evidence-card-body">No evidence available</div></div>';
+                } else {
+                    // Build evidence HTML from citations and fact checks
+                    let html = '';
+
+                    // Generated From card
+                    const citations = diffData.citations || {};
+                    const vendor = scope.startsWith('databricks') ? 'databricks' : 'fabric';
+                    const detailsCitations = citations[`${vendor}_details`] || [];
+
+                    if (detailsCitations.length > 0) {
+                        const cite = detailsCitations[0];
+                        const sourceTitle = escapeHtmlTrial(cite.source_title || 'Source');
+                        const sourceUrl = escapeHtmlTrial(cite.source_url || '');
+                        const sourceQuote = escapeHtmlTrial(cite.source_quote || '');
+                        html += `
+                            <div class="evidence-card generated-from evidence-card-clickable"
+                                 data-source-title="${sourceTitle}"
+                                 data-source-url="${sourceUrl}"
+                                 data-source-quote="${sourceQuote}"
+                                 onclick="openCitationFromEvidence(this)">
+                                <div class="evidence-card-header">GENERATED FROM</div>
+                                <div class="evidence-card-body">"<span class="evidence-highlight">${sourceQuote}</span>"</div>
+                                <div class="evidence-card-source">
+                                    <span class="evidence-card-source-title">${sourceTitle}</span>
+                                    <span class="evidence-card-source-link">View source &rarr;</span>
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    // Fact-Check card
+                    const factChecks = (diffData.fact_checks || []).filter(fc => fc.claim_field && fc.claim_field.includes(vendor));
+                    if (factChecks.length > 0) {
+                        const fc = factChecks[0];
+                        const isVerified = fc.verdict === 'verified';
+                        const cardClass = isVerified ? 'fact-check-verified' : 'fact-check-pending';
+                        const headerText = isVerified ? 'FACT-CHECK VERIFIED' : 'FACT-CHECK PENDING';
+                        const badgeClass = isVerified ? 'verified' : 'unverified';
+                        const badgeText = isVerified ? `verified ${Math.round((fc.confidence || 0) * 100)}%` : 'unverified';
+
+                        html += `
+                            <div class="evidence-card ${cardClass}">
+                                <div class="evidence-card-header">${headerText}</div>
+                                <div class="evidence-card-body">"${escapeHtmlTrial(fc.rationale || 'No rationale provided')}"</div>
+                                <span class="verification-badge ${badgeClass}">${badgeText}</span>
+                            </div>
+                        `;
+                    } else {
+                        // No fact check exists - show grey "Fact check required" card
+                        html += `
+                            <div class="evidence-card fact-check-required">
+                                <div class="evidence-card-header">FACT CHECK</div>
+                                <div class="evidence-card-body">Fact check required</div>
+                            </div>
+                        `;
+                    }
+
+                    if (!html) {
+                        html = '<div class="evidence-card generated-from"><div class="evidence-card-body">No evidence available for this item</div></div>';
+                    }
+
+                    block.innerHTML = html;
+                }
+                block.dataset.loaded = 'true';
+            }
+
+            block.classList.add('visible');
+            if (infoBtn) infoBtn.classList.add('active');
         }
 
         // Drag and Drop
@@ -3986,6 +4709,7 @@
                 const isDatabricks = vendor === 'databricks';
                 const headline = isDatabricks ? diffData.databricks_headline : diffData.fabric_headline;
                 const detailsText = isDatabricks ? diffData.databricks_details : diffData.fabric_details;
+                const detailItems = isDatabricks ? (diffData.databricks_detail_items || []) : (diffData.fabric_detail_items || []);
                 const reasoning = isDatabricks
                     ? (diffData.databricks_reasoning || diffData.databricks_rationale || '')
                     : (diffData.fabric_reasoning || diffData.fabric_rationale || '');
@@ -4004,7 +4728,7 @@
                 // Get orphan fact checks for this diff
                 const orphans = (mc && mc.orphan_fact_checks) ? mc.orphan_fact_checks : (diffData.fact_checks || []);
 
-                let html = buildEvidenceSummary(headline, detailsText, headlineCitations, detailsCitations, reasoningCitations, diffId, orphans, vendor);
+                let html = buildEvidenceSummary(headline, detailsText, headlineCitations, detailsCitations, reasoningCitations, diffId, orphans, vendor, detailItems);
                 if (reasoning) {
                     html += `<div class="evidence-pill" style="margin-top: 8px;">${renderCitedText(reasoning, reasoningCitations)}</div>`;
                 }
@@ -4197,6 +4921,7 @@
                 : (diffData.fabric_reasoning || diffData.fabric_rationale || '');
             const headline = isDatabricks ? diffData.databricks_headline : diffData.fabric_headline;
             const detailsText = isDatabricks ? diffData.databricks_details : diffData.fabric_details;
+            const detailItems2 = isDatabricks ? (diffData.databricks_detail_items || []) : (diffData.fabric_detail_items || []);
 
             // Citation fields
             const headlineCitationField = isDatabricks ? 'databricks_headline' : (citations.competitor_headline ? 'competitor_headline' : 'fabric_headline');
@@ -4214,7 +4939,7 @@
             html += `<div class="citation-expansion-header" style="border-bottom-color:${headerColor}; color:${headerColor};">${escapeHtmlTrial(vendorLabel)} Details</div>`;
 
             // Evidence summary (simple sentences for headline + detail)
-            const evidenceHtml = buildEvidenceSummary(headline, detailsText, headlineCitations, detailsCitations, reasoningCitations, diffId);
+            const evidenceHtml = buildEvidenceSummary(headline, detailsText, headlineCitations, detailsCitations, reasoningCitations, diffId, [], vendor, detailItems2);
             if (evidenceHtml || reasoning) {
                 html += '<div class="expand-section">';
                 html += '<div class="expand-section-title">Reasoning and Evidence</div>';
@@ -4364,7 +5089,7 @@
                 `</div>`;
         }
 
-        function buildEvidenceSummary(headline, detailsText, headlineCitations, detailsCitations, reasoningCitations, diffId, orphanFactChecks, vendor) {
+        function buildEvidenceSummary(headline, detailsText, headlineCitations, detailsCitations, reasoningCitations, diffId, orphanFactChecks, vendor, detailItems) {
             const blocks = [];
 
             // Build orphan fact-check lookup by claim_field
@@ -4434,7 +5159,29 @@
                 );
             }
 
-            if (detailsText) {
+            // Render detail items: group evidence by detail_item_id
+            if (detailItems && detailItems.length > 0) {
+                detailItems.forEach(function(item) {
+                    // Filter citations that belong to this detail item
+                    var itemCitations = dCites.filter(function(c) {
+                        return c.detail_item_id === item.detail_item_id;
+                    });
+                    // If no detail_item_id match (legacy), show all citations for first item
+                    if (itemCitations.length === 0 && item.detail_item_id === null && detailItems.length === 1) {
+                        itemCitations = dCites;
+                    }
+                    var enrichedItemCites = enrichCitesWithOrphans(itemCitations, 'details');
+                    blocks.push(
+                        `<div class="evidence-block">` +
+                        `<div class="evidence-block-title">Detail</div>` +
+                        `<div class="evidence-title-pill">${escapeHtmlTrial(item.text)}</div>` +
+                        renderAllGeneratedCards(enrichedItemCites, diffId) +
+                        renderAllFactCheckCards(enrichedItemCites, diffId) +
+                        `</div>`
+                    );
+                });
+            } else if (detailsText) {
+                // Legacy fallback: no detail items, render as single block
                 const enrichedDCites = enrichCitesWithOrphans(dCites, 'details');
                 blocks.push(
                     `<div class="evidence-block">` +
@@ -4841,12 +5588,31 @@
                     if (dbCitations.length > 0 && cells[1]) {
                         const reviewCell = cells[1].querySelector('.review-cell');
                         if (reviewCell) {
-                            const textSpan = reviewCell.querySelector('.vendor-details-text') || reviewCell.querySelector('.review-text');
-                            if (textSpan && diff.databricks_details) {
-                                const rendered = renderCitedTextWithFactChecks(
-                                    diff.databricks_details, dbCitations, diff.id, 'databricks_details'
-                                );
-                                textSpan.innerHTML = '\u2013 ' + rendered;
+                            const detailItemEls = reviewCell.querySelectorAll('.vendor-detail-item');
+                            if (detailItemEls.length > 0) {
+                                // Per-item citation rendering
+                                const dbDetailItems = diff.databricks_detail_items || [];
+                                detailItemEls.forEach(function(el) {
+                                    const did = el.getAttribute('data-detail-item-id');
+                                    const textSpan = el.querySelector('.vendor-details-text');
+                                    if (!textSpan) return;
+                                    const item = dbDetailItems.find(function(it) { return String(it.detail_item_id) === did; });
+                                    if (!item) return;
+                                    const itemCites = dbCitations.filter(function(c) { return String(c.detail_item_id || '') === did; });
+                                    if (itemCites.length > 0) {
+                                        const rendered = renderCitedTextWithFactChecks(item.text, itemCites, diff.id, 'databricks_details');
+                                        textSpan.innerHTML = '\u2013 ' + rendered;
+                                    }
+                                });
+                            } else {
+                                // Legacy: single text span
+                                const textSpan = reviewCell.querySelector('.vendor-details-text') || reviewCell.querySelector('.review-text');
+                                if (textSpan && diff.databricks_details) {
+                                    const rendered = renderCitedTextWithFactChecks(
+                                        diff.databricks_details, dbCitations, diff.id, 'databricks_details'
+                                    );
+                                    textSpan.innerHTML = '\u2013 ' + rendered;
+                                }
                             }
                         }
                     }
@@ -4857,13 +5623,32 @@
                     if (fabCitations.length > 0 && cells[2]) {
                         const reviewCell = cells[2].querySelector('.review-cell');
                         if (reviewCell) {
-                            const textSpan = reviewCell.querySelector('.vendor-details-text') || reviewCell.querySelector('.review-text');
-                            const fabText = diff.fabric_details || '';
-                            if (textSpan && fabText) {
-                                const rendered = renderCitedTextWithFactChecks(
-                                    fabText, fabCitations, diff.id, 'fabric_details'
-                                );
-                                textSpan.innerHTML = '\u2013 ' + rendered;
+                            const detailItemEls = reviewCell.querySelectorAll('.vendor-detail-item');
+                            if (detailItemEls.length > 0) {
+                                // Per-item citation rendering
+                                const fabDetailItems = diff.fabric_detail_items || [];
+                                detailItemEls.forEach(function(el) {
+                                    const did = el.getAttribute('data-detail-item-id');
+                                    const textSpan = el.querySelector('.vendor-details-text');
+                                    if (!textSpan) return;
+                                    const item = fabDetailItems.find(function(it) { return String(it.detail_item_id) === did; });
+                                    if (!item) return;
+                                    const itemCites = fabCitations.filter(function(c) { return String(c.detail_item_id || '') === did; });
+                                    if (itemCites.length > 0) {
+                                        const rendered = renderCitedTextWithFactChecks(item.text, itemCites, diff.id, 'fabric_details');
+                                        textSpan.innerHTML = '\u2013 ' + rendered;
+                                    }
+                                });
+                            } else {
+                                // Legacy: single text span
+                                const textSpan = reviewCell.querySelector('.vendor-details-text') || reviewCell.querySelector('.review-text');
+                                const fabText = diff.fabric_details || '';
+                                if (textSpan && fabText) {
+                                    const rendered = renderCitedTextWithFactChecks(
+                                        fabText, fabCitations, diff.id, 'fabric_details'
+                                    );
+                                    textSpan.innerHTML = '\u2013 ' + rendered;
+                                }
                             }
                         }
                     }
@@ -4871,10 +5656,11 @@
             }
         }
 
-        // Run inline citation rendering on page load
-        document.addEventListener('DOMContentLoaded', function() {
-            renderInlineCitationsInTable();
-        });
+        // Disabled: inline citation rendering in detail bullet points
+        // Citations are now shown only via the ℹ info button
+        // document.addEventListener('DOMContentLoaded', function() {
+        //     renderInlineCitationsInTable();
+        // });
 
         // =====================================================================
         // Session ID Copy Function

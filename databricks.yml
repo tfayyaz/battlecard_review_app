@@ -2,13 +2,6 @@ bundle:
   name: battlecards_review_postgres
 
 resources:
-  database_catalogs:
-    battlecards_prod_catalog:
-      database_instance_name: "instance-98170129-d87f-4357-b0ce-8991c128dea8"
-      name: battlecards-prod-catalog
-      database_name: battlecards_prod
-      create_database_if_not_exists: true
-
   apps:
     battlecards_review:
       name: battlecards-review-pg
@@ -17,21 +10,17 @@ resources:
       resources:
         - name: app-database
           database:
-            database_name: battlecards_prod
-            instance_name: "instance-98170129-d87f-4357-b0ce-8991c128dea8"
+            database_name: databricks_postgres
+            instance_name: "battlestation"
             permission: CAN_CONNECT_AND_CREATE
-
-variables:
-  workspace_host:
-    default: https://fe-vm-pmt.cloud.databricks.com
 
 targets:
   dev:
     mode: development
     default: true
     workspace:
-      host: ${var.workspace_host}
+      host: https://fe-vm-pmt.cloud.databricks.com
   prod:
     mode: production
     workspace:
-      host: ${var.workspace_host}
+      host: https://fe-vm-pmt.cloud.databricks.com

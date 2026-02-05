@@ -262,12 +262,10 @@
                     <div class="hint">Controls how key differentiator names and descriptions are generated in Pass 1</div>
                     <select id="pass1_prompt_template_version" name="pass1_prompt_template_version">
                         {% for ver, cfg in pass1_prompt_templates.items()|sort(reverse=true) %}
-                        <option value="{{ ver }}" {% if ver == 2 %}selected{% endif %}>{{ cfg.label }}</option>
+                        <option value="{{ ver }}" {% if cfg.is_default is defined and cfg.is_default %}selected{% elif cfg.is_default is not defined and ver == 3 %}selected{% endif %}>{{ cfg.label }}</option>
                         {% endfor %}
                     </select>
-                    <div class="hint" id="pass1-prompt-version-hint" style="margin-top:4px; font-style: italic;">
-                        {{ pass1_prompt_templates[2].description }}
-                    </div>
+                    <div class="hint" id="pass1-prompt-version-hint" style="margin-top:4px; font-style: italic;"></div>
                 </div>
 
                 <div class="form-group">
@@ -275,12 +273,10 @@
                     <div class="hint">Controls how claim descriptions are written in Pass 2</div>
                     <select id="pass2_prompt_template_version" name="pass2_prompt_template_version">
                         {% for ver, cfg in pass2_prompt_templates.items()|sort(reverse=true) %}
-                        <option value="{{ ver }}" {% if ver == 2 %}selected{% endif %}>{{ cfg.label }}</option>
+                        <option value="{{ ver }}" {% if cfg.is_default is defined and cfg.is_default %}selected{% elif cfg.is_default is not defined and ver == 2 %}selected{% endif %}>{{ cfg.label }}</option>
                         {% endfor %}
                     </select>
-                    <div class="hint" id="prompt-version-hint" style="margin-top:4px; font-style: italic;">
-                        {{ pass2_prompt_templates[2].description }}
-                    </div>
+                    <div class="hint" id="prompt-version-hint" style="margin-top:4px; font-style: italic;"></div>
                 </div>
 
                 <div class="error-msg" id="errorMsg"></div>
@@ -370,21 +366,25 @@
         const p1Descriptions = {{ pass1_prompt_templates | tojson }};
         const p1Sel = document.getElementById('pass1_prompt_template_version');
         const p1Hint = document.getElementById('pass1-prompt-version-hint');
+        function updateP1Hint() {
+            const cfg = p1Descriptions[p1Sel.value];
+            p1Hint.textContent = cfg ? cfg.description : '';
+        }
         if (p1Sel && p1Hint) {
-            p1Sel.addEventListener('change', function() {
-                const cfg = p1Descriptions[p1Sel.value];
-                p1Hint.textContent = cfg ? cfg.description : '';
-            });
+            p1Sel.addEventListener('change', updateP1Hint);
+            updateP1Hint();
         }
 
         const p2Descriptions = {{ pass2_prompt_templates | tojson }};
         const p2Sel = document.getElementById('pass2_prompt_template_version');
         const p2Hint = document.getElementById('prompt-version-hint');
+        function updateP2Hint() {
+            const cfg = p2Descriptions[p2Sel.value];
+            p2Hint.textContent = cfg ? cfg.description : '';
+        }
         if (p2Sel && p2Hint) {
-            p2Sel.addEventListener('change', function() {
-                const cfg = p2Descriptions[p2Sel.value];
-                p2Hint.textContent = cfg ? cfg.description : '';
-            });
+            p2Sel.addEventListener('change', updateP2Hint);
+            updateP2Hint();
         }
     })();
     </script>

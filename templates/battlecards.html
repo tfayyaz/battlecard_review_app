@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Battlecard Dashboard</title>
+    <title>Battlecard Workflows</title>
     <style>
         :root {
             --primary: #FF3621;
@@ -77,16 +77,13 @@
             border: 1px solid var(--border);
             border-radius: 8px;
             padding: 20px;
-            cursor: pointer;
             transition: box-shadow 0.15s, border-color 0.15s;
-            text-decoration: none;
-            color: inherit;
             display: block;
         }
 
         .card:hover {
             box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-            border-color: var(--teal);
+            border-color: var(--border);
         }
 
         .card-header {
@@ -247,7 +244,10 @@
 <body>
     <div class="header">
         <div class="header-content">
-            <h1 class="header-title">Battlecard Dashboard</h1>
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <a href="/" style="color: var(--text-secondary); text-decoration: none; font-size: 20px;">&larr;</a>
+                <h1 class="header-title">Battlecard Workflows</h1>
+            </div>
             <a href="/workflow/new" class="btn-new">+ New Battlecard</a>
         </div>
     </div>
@@ -256,7 +256,7 @@
         {% if entries %}
         <div class="card-grid">
             {% for e in entries %}
-            <a href="{% if e.workflow_status == 'completed' %}/battlecard/{{ e.battlecard_id }}{% else %}/workflow/{{ e.session_id }}{% endif %}" class="card">
+            <div class="card">
                 <div class="card-header">
                     <div class="competitor-name">{{ e.competitor_name }}</div>
                     <span class="version-badge">v{{ e.version_number }}</span>
@@ -275,7 +275,7 @@
                         <span>
                             <span class="status-badge {{ e.workflow_status }}">
                                 <span class="status-dot"></span>
-                                {% if e.workflow_status == 'in_progress' %}In Progress (Step {{ e.current_step }}/6){% else %}{{ e.workflow_status | replace('_', ' ') | title }}{% endif %}
+                                {% if e.workflow_status == 'in_progress' %}In Progress (Step {{ e.current_step }}/7){% else %}{{ e.workflow_status | replace('_', ' ') | title }}{% endif %}
                             </span>
                         </span>
                     </div>
@@ -295,10 +295,10 @@
 
                 <!-- Step progress dots -->
                 <div class="step-progress">
-                    {% for i in range(1, 7) %}
+                    {% for i in range(1, 8) %}
                     <div class="step-dot {% if i < e.current_step %}done{% elif i == e.current_step and e.workflow_status == 'in_progress' %}active{% elif e.workflow_status == 'completed' %}done{% endif %}"></div>
                     {% endfor %}
-                    <span class="step-progress-label">{{ e.current_step }}/6</span>
+                    <span class="step-progress-label">{{ e.current_step }}/7</span>
                 </div>
 
                 <!-- Review stats (if any reviews exist) -->
@@ -313,15 +313,13 @@
 
                 <!-- Action links -->
                 <div class="card-actions">
-                    {% if e.workflow_status == 'completed' %}
-                    <span class="card-action-link" onclick="event.preventDefault(); window.location.href='/battlecard/{{ e.battlecard_id }}';">Review Battlecard</span>
-                    <span class="card-action-link secondary" onclick="event.preventDefault(); window.location.href='/workflow/{{ e.session_id }}';">View Workflow</span>
-                    <span class="card-action-link secondary" onclick="event.preventDefault(); window.location.href='/workflow/new?competitor={{ e.competitor_name | urlencode }}&product_area={{ e.product_area | urlencode }}';">+ New Version</span>
-                    {% else %}
-                    <span class="card-action-link" onclick="event.preventDefault(); window.location.href='/workflow/{{ e.session_id }}';">Continue Workflow</span>
+                    <a class="card-action-link" href="/workflow/{{ e.session_id }}">{% if e.workflow_status == 'completed' %}View Workflow{% else %}Continue Workflow{% endif %}</a>
+                    {% if e.battlecard_id and e.current_step >= 5 %}
+                    <a class="card-action-link" href="/battlecard/{{ e.battlecard_id }}">View Battlecard</a>
                     {% endif %}
+                    <a class="card-action-link secondary" href="/workflow/new?competitor={{ e.competitor_name | urlencode }}&product_area={{ e.product_area | urlencode }}">+ New Version</a>
                 </div>
-            </a>
+            </div>
             {% endfor %}
         </div>
         {% else %}

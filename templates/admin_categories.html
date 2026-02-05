@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Product Category Admin</title>
+    <style>
+        :root {
+            --primary: #FF3621;
+            --primary-dark: #E02E1B;
+            --success: #00A972;
+            --warning: #F5A623;
+            --danger: #E02E1B;
+            --info: #2196F3;
+            --bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --text: #1F2937;
+            --text-secondary: #6B7280;
+            --border: #E5E7EB;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: text; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+
+        header {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+        header h1 { font-size: 28px; font-weight: 600; margin-bottom: 8px; }
+        header p { opacity: 0.9; font-size: 14px; }
+
+        .header-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 16px;
+        }
+        .header-btn {
+            padding: 8px 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            background: rgba(255,255,255,0.1);
+            color: white;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .header-btn:hover {
+            background: rgba(255,255,255,0.2);
+            border-color: rgba(255,255,255,0.5);
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        .card-header h2 {
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        .btn-primary:hover { background: var(--primary-dark); }
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+        .btn-success:hover { opacity: 0.9; }
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+        .btn-danger:hover { opacity: 0.9; }
+        .btn-secondary {
+            background: var(--border);
+            color: var(--text);
+        }
+        .btn-secondary:hover { background: #d1d5db; }
+        .btn-sm {
+            padding: 4px 10px;
+            font-size: 12px;
+        }
+
+        /* Tables */
+        .admin-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .admin-table th {
+            text-align: left;
+            padding: 10px 12px;
+            background: var(--bg);
+            border-bottom: 2px solid var(--border);
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+        .admin-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: middle;
+        }
+        .admin-table tr:hover {
+            background: #f9fafb;
+        }
+        .admin-table .name-col { max-width: 300px; }
+        .admin-table .desc-col {
+            max-width: 400px;
+            color: var(--text-secondary);
+        }
+        .admin-table .desc-col .truncate {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        /* Inline editing */
+        .inline-edit {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: inherit;
+        }
+        .inline-edit:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(255, 54, 33, 0.1);
+        }
+        textarea.inline-edit {
+            resize: vertical;
+            min-height: 60px;
+        }
+
+        /* Checkboxes */
+        .toggle-checkbox {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            accent-color: var(--primary);
+        }
+
+        /* Action buttons */
+        .action-btns {
+            display: flex;
+            gap: 6px;
+            white-space: nowrap;
+        }
+        .action-btn {
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+        .action-btn:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        .action-btn.delete:hover {
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        .badge-info { background: #E3F2FD; color: var(--info); }
+        .badge-databricks { background: #FEE2E2; color: var(--primary); }
+        .badge-competitor { background: #EDE9FE; color: #7C3AED; }
+
+        /* Filter bar */
+        .filter-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .filter-bar select {
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+            background: white;
+        }
+        .filter-bar select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        /* Add form row */
+        .add-form-row td {
+            background: #FFFBEB;
+        }
+
+        /* Drag handle */
+        .drag-handle {
+            cursor: grab;
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+        .drag-handle:active { cursor: grabbing; }
+        tr.dragging {
+            opacity: 0.5;
+            background: #FEE2E2;
+        }
+
+        /* Toast notification */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            color: white;
+            font-size: 13px;
+            font-weight: 500;
+            z-index: 1000;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: all 0.3s;
+        }
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .toast-success { background: var(--success); }
+        .toast-error { background: var(--danger); }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 32px;
+            color: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>Product Category Admin</h1>
+            <p>Manage product categories and product mappings used in battlecard workflows</p>
+            <div class="header-actions">
+                <a href="/" class="header-btn">Back to Home</a>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Card 1: Product Categories -->
+        <div class="card">
+            <div class="card-header">
+                <h2>Product Categories <span class="badge badge-info" id="cat-count">{{ categories|length }}</span></h2>
+                <button class="btn btn-primary" onclick="showAddCategory()">+ Add Category</button>
+            </div>
+
+            <table class="admin-table" id="categories-table">
+                <thead>
+                    <tr>
+                        <th style="width:40px">#</th>
+                        <th class="name-col">Name</th>
+                        <th class="desc-col">Description</th>
+                        <th style="width:60px">Core</th>
+                        <th style="width:90px">Cross-Plat</th>
+                        <th style="width:130px">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="categories-body">
+                    {% for cat in categories %}
+                    <tr data-id="{{ cat.catalog_id }}" draggable="true"
+                        ondragstart="dragStart(event)" ondragover="dragOver(event)"
+                        ondrop="drop(event)" ondragend="dragEnd(event)">
+                        <td><span class="drag-handle" title="Drag to reorder">&#x2630;</span></td>
+                        <td class="name-col">
+                            <span class="display-value">{{ cat.category_name }}</span>
+                        </td>
+                        <td class="desc-col">
+                            <span class="display-value"><span class="truncate">{{ cat.category_description or '' }}</span></span>
+                        </td>
+                        <td>
+                            <input type="checkbox" class="toggle-checkbox"
+                                   {{ 'checked' if cat.is_core_product_category else '' }}
+                                   onchange="toggleFlag({{ cat.catalog_id }}, 'is_core', this.checked)">
+                        </td>
+                        <td>
+                            <input type="checkbox" class="toggle-checkbox"
+                                   {{ 'checked' if cat.is_cross_platform_capability else '' }}
+                                   onchange="toggleFlag({{ cat.catalog_id }}, 'is_cross_platform', this.checked)">
+                        </td>
+                        <td>
+                            <div class="action-btns">
+                                <button class="action-btn" onclick="editCategory({{ cat.catalog_id }})">Edit</button>
+                                <button class="action-btn delete" onclick="deleteCategory({{ cat.catalog_id }}, '{{ cat.category_name|e }}')">Delete</button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            {% if not categories %}
+            <div class="empty-state" id="cat-empty">
+                <h3>No categories defined</h3>
+                <p>Click "Add Category" to create your first product category.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Card 2: Product Mappings -->
+        <div class="card">
+            <div class="card-header">
+                <h2>Product Mappings <span class="badge badge-info" id="map-count">{{ mappings|length }}</span></h2>
+                <div class="filter-bar">
+                    <label for="mapping-filter">Filter by category:</label>
+                    <select id="mapping-filter" onchange="filterMappings()">
+                        <option value="all">All Categories</option>
+                        {% for cat in categories %}
+                        <option value="{{ cat.catalog_id }}">{{ cat.category_name }}</option>
+                        {% endfor %}
+                    </select>
+                    <button class="btn btn-primary" onclick="showAddMapping()">+ Add Mapping</button>
+                </div>
+            </div>
+
+            <table class="admin-table" id="mappings-table">
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th style="width:100px">Vendor</th>
+                        <th style="width:140px">Competitor</th>
+                        <th>Product Name</th>
+                        <th class="desc-col">Description</th>
+                        <th style="width:130px">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="mappings-body">
+                    {% for m in mappings %}
+                    <tr data-id="{{ m.mapping_id }}" data-catalog-id="{{ m.catalog_id }}">
+                        <td>
+                            {% for cat in categories %}
+                                {% if cat.catalog_id == m.catalog_id %}{{ cat.category_name }}{% endif %}
+                            {% endfor %}
+                        </td>
+                        <td>
+                            <span class="badge {{ 'badge-databricks' if m.vendor == 'databricks' else 'badge-competitor' }}">
+                                {{ m.vendor }}
+                            </span>
+                        </td>
+                        <td>{{ m.competitor_name or '—' }}</td>
+                        <td>
+                            <span class="display-value">{{ m.product_name }}</span>
+                        </td>
+                        <td class="desc-col">
+                            <span class="display-value"><span class="truncate">{{ m.product_description or '' }}</span></span>
+                        </td>
+                        <td>
+                            <div class="action-btns">
+                                <button class="action-btn" onclick="editMapping({{ m.mapping_id }})">Edit</button>
+                                <button class="action-btn delete" onclick="deleteMapping({{ m.mapping_id }}, '{{ m.product_name|e }}')">Delete</button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            {% if not mappings %}
+            <div class="empty-state" id="map-empty">
+                <h3>No product mappings defined</h3>
+                <p>Click "Add Mapping" to create your first product mapping.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // ─── Data from server ───
+        const categoriesData = {{ categories|tojson }};
+        const mappingsData = {{ mappings|tojson }};
+
+        // ─── Toast ───
+        function showToast(msg, type = 'success') {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = 'toast toast-' + type + ' show';
+            setTimeout(() => t.classList.remove('show'), 3000);
+        }
+
+        // ─── Category CRUD ───
+
+        function showAddCategory() {
+            const tbody = document.getElementById('categories-body');
+            // Remove existing add form if any
+            const existing = document.getElementById('add-cat-row');
+            if (existing) { existing.remove(); return; }
+
+            const tr = document.createElement('tr');
+            tr.id = 'add-cat-row';
+            tr.className = 'add-form-row';
+            tr.innerHTML = `
+                <td>—</td>
+                <td><input type="text" class="inline-edit" id="new-cat-name" placeholder="Category name"></td>
+                <td><textarea class="inline-edit" id="new-cat-desc" placeholder="Description"></textarea></td>
+                <td><input type="checkbox" class="toggle-checkbox" id="new-cat-core"></td>
+                <td><input type="checkbox" class="toggle-checkbox" id="new-cat-cross"></td>
+                <td>
+                    <div class="action-btns">
+                        <button class="btn btn-success btn-sm" onclick="saveNewCategory()">Save</button>
+                        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('add-cat-row').remove()">Cancel</button>
+                    </div>
+                </td>
+            `;
+            tbody.appendChild(tr);
+            document.getElementById('new-cat-name').focus();
+        }
+
+        async function saveNewCategory() {
+            const name = document.getElementById('new-cat-name').value.trim();
+            const desc = document.getElementById('new-cat-desc').value.trim();
+            const isCore = document.getElementById('new-cat-core').checked;
+            const isCross = document.getElementById('new-cat-cross').checked;
+
+            if (!name) { showToast('Category name is required', 'error'); return; }
+
+            const res = await fetch('/api/admin/categories', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name, description: desc, is_core: isCore, is_cross_platform: isCross}),
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast('Category created');
+                location.reload();
+            } else {
+                showToast(data.error || 'Failed to create category', 'error');
+            }
+        }
+
+        function editCategory(catalogId) {
+            const row = document.querySelector(`#categories-body tr[data-id="${catalogId}"]`);
+            if (!row || row.classList.contains('editing')) return;
+            row.classList.add('editing');
+
+            const nameCell = row.cells[1];
+            const descCell = row.cells[2];
+            const actionsCell = row.cells[5];
+
+            const origName = nameCell.querySelector('.display-value').textContent.trim();
+            const origDesc = descCell.querySelector('.display-value').textContent.trim();
+
+            nameCell.innerHTML = `<input type="text" class="inline-edit" value="${escHtml(origName)}">`;
+            descCell.innerHTML = `<textarea class="inline-edit">${escHtml(origDesc)}</textarea>`;
+            actionsCell.innerHTML = `
+                <div class="action-btns">
+                    <button class="btn btn-success btn-sm" onclick="saveCategory(${catalogId})">Save</button>
+                    <button class="btn btn-secondary btn-sm" onclick="location.reload()">Cancel</button>
+                </div>
+            `;
+            nameCell.querySelector('input').focus();
+        }
+
+        async function saveCategory(catalogId) {
+            const row = document.querySelector(`#categories-body tr[data-id="${catalogId}"]`);
+            const name = row.cells[1].querySelector('input').value.trim();
+            const desc = row.cells[2].querySelector('textarea').value.trim();
+            const isCore = row.cells[3].querySelector('input').checked;
+            const isCross = row.cells[4].querySelector('input').checked;
+
+            if (!name) { showToast('Category name is required', 'error'); return; }
+
+            const res = await fetch(`/api/admin/categories/${catalogId}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name, description: desc, is_core: isCore, is_cross_platform: isCross}),
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast('Category updated');
+                location.reload();
+            } else {
+                showToast(data.error || 'Failed to update category', 'error');
+            }
+        }
+
+        async function deleteCategory(catalogId, name) {
+            if (!confirm(`Delete category "${name}"?\n\nThis will also delete all related product mappings and session selections.`)) return;
+
+            const res = await fetch(`/api/admin/categories/${catalogId}`, {method: 'DELETE'});
+            const data = await res.json();
+            if (data.success) {
+                showToast('Category deleted');
+                location.reload();
+            } else {
+                showToast(data.error || 'Failed to delete category', 'error');
+            }
+        }
+
+        async function toggleFlag(catalogId, flag, value) {
+            // Read current values from the row
+            const row = document.querySelector(`#categories-body tr[data-id="${catalogId}"]`);
+            const nameEl = row.cells[1].querySelector('.display-value');
+            const descEl = row.cells[2].querySelector('.display-value');
+            const name = nameEl ? nameEl.textContent.trim() : '';
+            const desc = descEl ? descEl.textContent.trim() : '';
+            const isCore = row.cells[3].querySelector('input').checked;
+            const isCross = row.cells[4].querySelector('input').checked;
+
+            const res = await fetch(`/api/admin/categories/${catalogId}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name, description: desc, is_core: isCore, is_cross_platform: isCross}),
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(`${flag === 'is_core' ? 'Core' : 'Cross-platform'} flag updated`);
+            } else {
+                showToast(data.error || 'Failed to update flag', 'error');
+                // Revert the checkbox
+                row.cells[flag === 'is_core' ? 3 : 4].querySelector('input').checked = !value;
+            }
+        }
+
+        // ─── Drag & Drop Reorder ───
+
+        let dragRow = null;
+
+        function dragStart(e) {
+            dragRow = e.target.closest('tr');
+            dragRow.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+        }
+
+        function dragOver(e) {
+            e.preventDefault();
+            const tr = e.target.closest('tr');
+            if (!tr || tr === dragRow) return;
+            const tbody = document.getElementById('categories-body');
+            const rows = Array.from(tbody.querySelectorAll('tr:not(.add-form-row)'));
+            const dragIdx = rows.indexOf(dragRow);
+            const targetIdx = rows.indexOf(tr);
+            if (dragIdx < targetIdx) {
+                tr.after(dragRow);
+            } else {
+                tr.before(dragRow);
+            }
+        }
+
+        function drop(e) {
+            e.preventDefault();
+        }
+
+        async function dragEnd(e) {
+            if (dragRow) dragRow.classList.remove('dragging');
+            dragRow = null;
+
+            // Collect new order
+            const tbody = document.getElementById('categories-body');
+            const rows = Array.from(tbody.querySelectorAll('tr[data-id]'));
+            const order = rows.map(r => parseInt(r.dataset.id));
+
+            const res = await fetch('/api/admin/categories/reorder', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({order}),
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast('Order saved');
+            } else {
+                showToast('Failed to save order', 'error');
+            }
+        }
+
+        // ─── Mapping CRUD ───
+
+        function showAddMapping() {
+            const tbody = document.getElementById('mappings-body');
+            const existing = document.getElementById('add-map-row');
+            if (existing) { existing.remove(); return; }
+
+            let catOptions = categoriesData.map(c =>
+                `<option value="${c.catalog_id}">${escHtml(c.category_name)}</option>`
+            ).join('');
+
+            const tr = document.createElement('tr');
+            tr.id = 'add-map-row';
+            tr.className = 'add-form-row';
+            tr.innerHTML = `
+                <td>
+                    <select class="inline-edit" id="new-map-cat">${catOptions}</select>
+                </td>
+                <td>
+                    <select class="inline-edit" id="new-map-vendor" onchange="toggleCompetitorField()">
+                        <option value="databricks">databricks</option>
+                        <option value="competitor">competitor</option>
+                    </select>
+                </td>
+                <td>
+                    <input type="text" class="inline-edit" id="new-map-comp" placeholder="Competitor name" disabled>
+                </td>
+                <td>
+                    <input type="text" class="inline-edit" id="new-map-name" placeholder="Product name">
+                </td>
+                <td>
+                    <textarea class="inline-edit" id="new-map-desc" placeholder="Description"></textarea>
+                </td>
+                <td>
+                    <div class="action-btns">
+                        <button class="btn btn-success btn-sm" onclick="saveNewMapping()">Save</button>
+                        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('add-map-row').remove()">Cancel</button>
+                    </div>
+                </td>
+            `;
+            tbody.appendChild(tr);
+            document.getElementById('new-map-name').focus();
+        }
+
+        function toggleCompetitorField() {
+            const vendor = document.getElementById('new-map-vendor').value;
+            const comp = document.getElementById('new-map-comp');
+            comp.disabled = vendor !== 'competitor';
+            if (vendor !== 'competitor') comp.value = '';
+        }
+
+        async function saveNewMapping() {
+            const catalogId = parseInt(document.getElementById('new-map-cat').value);
+            const vendor = document.getElementById('new-map-vendor').value;
+            const competitorName = document.getElementById('new-map-comp').value.trim();
+            const productName = document.getElementById('new-map-name').value.trim();
+            const productDesc = document.getElementById('new-map-desc').value.trim();
+
+            if (!productName) { showToast('Product name is required', 'error'); return; }
+            if (vendor === 'competitor' && !competitorName) {
+                showToast('Competitor name is required for competitor mappings', 'error');
+                return;
+            }
+
+            const res = await fetch('/api/admin/mappings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    catalog_id: catalogId,
+                    vendor,
+                    competitor_name: competitorName || null,
+                    product_name: productName,
+                    product_description: productDesc,
+                }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast('Mapping created');
+                location.reload();
+            } else {
+                showToast(data.error || 'Failed to create mapping', 'error');
+            }
+        }
+
+        function editMapping(mappingId) {
+            const row = document.querySelector(`#mappings-body tr[data-id="${mappingId}"]`);
+            if (!row || row.classList.contains('editing')) return;
+            row.classList.add('editing');
+
+            const nameCell = row.cells[3];
+            const descCell = row.cells[4];
+            const actionsCell = row.cells[5];
+
+            const origName = nameCell.querySelector('.display-value').textContent.trim();
+            const origDesc = descCell.querySelector('.display-value').textContent.trim();
+
+            nameCell.innerHTML = `<input type="text" class="inline-edit" value="${escHtml(origName)}">`;
+            descCell.innerHTML = `<textarea class="inline-edit">${escHtml(origDesc)}</textarea>`;
+            actionsCell.innerHTML = `
+                <div class="action-btns">
+                    <button class="btn btn-success btn-sm" onclick="saveMapping(${mappingId})">Save</button>
+                    <button class="btn btn-secondary btn-sm" onclick="location.reload()">Cancel</button>
+                </div>
+            `;
+            nameCell.querySelector('input').focus();
+        }
+
+        async function saveMapping(mappingId) {
+            const row = document.querySelector(`#mappings-body tr[data-id="${mappingId}"]`);
+            const productName = row.cells[3].querySelector('input').value.trim();
+            const productDesc = row.cells[4].querySelector('textarea').value.trim();
+
+            if (!productName) { showToast('Product name is required', 'error'); return; }
+
+            const res = await fetch(`/api/admin/mappings/${mappingId}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({product_name: productName, product_description: productDesc}),
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast('Mapping updated');
+                location.reload();
+            } else {
+                showToast(data.error || 'Failed to update mapping', 'error');
+            }
+        }
+
+        async function deleteMapping(mappingId, name) {
+            if (!confirm(`Delete mapping "${name}"?`)) return;
+
+            const res = await fetch(`/api/admin/mappings/${mappingId}`, {method: 'DELETE'});
+            const data = await res.json();
+            if (data.success) {
+                showToast('Mapping deleted');
+                location.reload();
+            } else {
+                showToast(data.error || 'Failed to delete mapping', 'error');
+            }
+        }
+
+        // ─── Filter Mappings ───
+
+        function filterMappings() {
+            const filterVal = document.getElementById('mapping-filter').value;
+            const rows = document.querySelectorAll('#mappings-body tr[data-catalog-id]');
+            let visibleCount = 0;
+
+            rows.forEach(row => {
+                if (filterVal === 'all' || row.dataset.catalogId === filterVal) {
+                    row.style.display = '';
+                    visibleCount++;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+
+            document.getElementById('map-count').textContent = visibleCount;
+        }
+
+        // ─── Utility ───
+
+        function escHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

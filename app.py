@@ -13,8 +13,8 @@ Databricks Apps:  DATABRICKS_HOST / DATABRICKS_CLIENT_ID / PGHOST are
 import json
 import logging
 import os
+import subprocess
 import threading
-import time
 from datetime import datetime
 from uuid import uuid4
 
@@ -57,10 +57,7 @@ DB_HOST = os.getenv(
     "instance-98170129-d87f-4357-b0ce-8991c128dea8.database.cloud.databricks.com",
 )
 DB_PORT = int(os.getenv("PGPORT", "5432"))
-DB_NAME = os.getenv("PGDATABASE", "battlecards_prod")
-
-
-_WORKSPACE_CLIENT = None  # populated by _build_engine()
+DB_NAME = os.getenv("PGDATABASE", "databricks_postgres")
 
 
 def _build_engine():
@@ -73,16 +70,37 @@ def _build_engine():
       3. Inject the OAuth access_token as the PG password on every connection via
          the SQLAlchemy ``do_connect`` event.
     """
-    global _WORKSPACE_CLIENT
-
     explicit = os.getenv("DATABASE_URL")
     if explicit:
         return create_engine(explicit, pool_pre_ping=True)
 
     # Initialise WorkspaceClient — picks up DATABRICKS_PROFILE for local dev,
     # or platform-injected env vars inside Databricks Apps.
-    w = WorkspaceClient(profile=DATABRICKS_PROFILE)
-    _WORKSPACE_CLIENT = w
+    # Wrapped in a list so nested functions can reassign it after re-auth.
+    def _init_workspace_client(profile):
+        """Create a WorkspaceClient, triggering CLI re-auth if the refresh token is expired."""
+        try:
+            return WorkspaceClient(profile=profile)
+        except ValueError as e:
+            err_msg = str(e)
+            if "refresh token is invalid" in err_msg or "access token could not be retrieved" in err_msg:
+                logger.warning("OAuth refresh token expired at startup — triggering 'databricks auth login' (will open browser)...")
+                # Extract host from the error message or use env/default
+                host = os.getenv("DATABRICKS_HOST", "https://fe-vm-pmt.cloud.databricks.com")
+                try:
+                    subprocess.run(
+                        ["databricks", "auth", "login", "--host", host, "--profile", profile],
+                        check=True,
+                        timeout=120,
+                    )
+                    logger.info("Re-authentication successful, creating WorkspaceClient...")
+                    return WorkspaceClient(profile=profile)
+                except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as auth_err:
+                    logger.error("databricks auth login failed: %s", auth_err)
+                    raise e from auth_err
+            raise
+
+    _ws = [_init_workspace_client(DATABRICKS_PROFILE)]
 
     # Determine the Postgres username.
     #   - In Databricks Apps the DATABRICKS_CLIENT_ID env var is the PG role.
@@ -90,7 +108,7 @@ def _build_engine():
     pg_user = os.getenv("DATABRICKS_CLIENT_ID") or os.getenv("PGUSER")
     if not pg_user:
         try:
-            me = w.current_user.me()
+            me = _ws[0].current_user.me()
             pg_user = me.user_name  # e.g. "tahir.fayyaz@databricks.com"
         except Exception:
             pg_user = "databricks"
@@ -103,29 +121,44 @@ def _build_engine():
         pool_recycle=1800,
     )
 
+    def _get_fresh_token():
+        """Get a fresh OAuth token, triggering CLI re-auth if the refresh token has expired."""
+        try:
+            return _ws[0].config.oauth_token().access_token
+        except Exception as token_err:
+            err_msg = str(token_err)
+            if "refresh token is invalid" in err_msg or "access token could not be retrieved" in err_msg:
+                logger.warning("OAuth refresh token expired — triggering 'databricks auth login' (will open browser)...")
+                host = _ws[0].config.host
+                profile = DATABRICKS_PROFILE
+                try:
+                    subprocess.run(
+                        ["databricks", "auth", "login", "--host", host, "--profile", profile],
+                        check=True,
+                        timeout=120,
+                    )
+                    logger.info("Re-authentication successful, retrying token fetch...")
+                    # Re-create WorkspaceClient to pick up new token cache
+                    _ws[0] = WorkspaceClient(profile=profile)
+                    return _ws[0].config.oauth_token().access_token
+                except subprocess.TimeoutExpired:
+                    logger.error("databricks auth login timed out after 120s")
+                    raise token_err
+                except subprocess.CalledProcessError as e:
+                    logger.error("databricks auth login failed: %s", e)
+                    raise token_err
+            raise
+
     @event.listens_for(engine, "do_connect")
     def _provide_token(dialect, conn_rec, cargs, cparams):
         """Inject a fresh OAuth token as the PG password on each connection."""
-        cparams["password"] = w.config.oauth_token().access_token
+        cparams["password"] = _get_fresh_token()
 
     return engine
 
 
 ENGINE = _build_engine()
 
-# Categories for L200 slides (used for category ordering)
-CATEGORIES = [
-    "Data Warehousing",
-    "Data Ingestion",
-    "Data Engineering",
-    "Data Governance",
-    "AI/ML",
-    "BI/Analytics",
-    "Security",
-    "Streaming",
-    "Orchestration",
-    "Observability",
-]
 
 # ---------------------------------------------------------------------------
 # Default context file paths (relative to project root)
@@ -145,6 +178,8 @@ DEFAULT_PROMPTS_DIR = os.path.join(
 )
 DEFAULT_PASS1_PROMPT = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass1_planning_v1.md")
 DEFAULT_PASS1_PROMPT_V2 = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass1_planning_v2.md")
+DEFAULT_PASS1_PROMPT_V3 = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass1_planning_v3.md")
+DEFAULT_PASS1_PROMPT_V4 = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass1_planning_v4_per_category.md")
 DEFAULT_PASS2_PROMPT = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass2_detail_v3_factcheck.md")
 DEFAULT_DIRECTIVE_PROMPT = os.path.join(
     os.path.expanduser("~"), "databricks-dev", "compete_automation",
@@ -165,6 +200,16 @@ PASS1_PROMPT_TEMPLATES = {
         "label": "V2 — Snappy (2-4 word diffs)",
         "description": "Shorter key diff names (2-4 words). Benefit-focused descriptions (max 12 words). Theme guidance included.",
         "file": DEFAULT_PASS1_PROMPT_V2,
+    },
+    3: {
+        "label": "V3 — Core vs Cross-Platform",
+        "description": "Like V2 but treats Cross-Platform Capabilities as context woven into Core Product Category slides, not separate slides.",
+        "file": DEFAULT_PASS1_PROMPT_V3,
+    },
+    4: {
+        "label": "V4 — Parallel Per-Category",
+        "description": "Per-category parallel execution. One LLM call per core product category with cross-platform context.",
+        "file": DEFAULT_PASS1_PROMPT_V4,
     },
 }
 
@@ -242,15 +287,22 @@ Return ONLY a JSON object with these fields:
 ```json
 {
   "databricks_headline": "<3-8 word headline for Databricks position>",
-  "databricks_details": "<ONE sentence, 10-15 words max — lead with OUTCOME/BENEFIT, not technology. Do NOT repeat the headline.>",
+  "databricks_details": [
+    "<Detail item 1: ONE sentence, 10-15 words max — lead with OUTCOME/BENEFIT, not technology.>",
+    "<Detail item 2: ONE sentence covering a different capability or fact.>"
+  ],
   "databricks_reasoning": "<why Databricks gets this rating — reference specific features/benchmarks/architecture>",
   "competitor_headline": "<3-8 word headline for competitor position>",
-  "competitor_details": "<ONE sentence, 10-15 words max — lead with LIMITATION or CAPABILITY, not technology. Do NOT repeat the headline.>",
+  "competitor_details": [
+    "<Detail item 1: ONE sentence, 10-15 words max — lead with LIMITATION or CAPABILITY.>",
+    "<Detail item 2: ONE sentence covering a different capability or fact.>"
+  ],
   "competitor_reasoning": "<why competitor gets this rating — reference specific limitations or strengths>",
   "citations": {
     "databricks_details": [
       {
-        "citation_id": "cite_databricks_details_1",
+        "citation_id": "cite_databricks_details_0_1",
+        "detail_item_index": 0,
         "start_index": 0,
         "end_index": 42,
         "source_index": 1,
@@ -291,13 +343,13 @@ Return ONLY a JSON object with these fields:
 - Prefer context + official docs for evidence; use web sources if necessary.
 
 ## Rules
-1. **Details must be outcome-focused** — ONE sentence, 10-15 words max. Lead with WHAT IT MEANS for the user (benefit/limitation), then one proof point. Do NOT lead with technology names, engine names, or architecture details. Do NOT repeat information from the headline.
+1. **Detail items must be outcome-focused** — ONE sentence per item, 10-15 words max. Produce 2-4 detail items per vendor. Lead with WHAT IT MEANS for the user (benefit/limitation), then one proof point. Do NOT lead with technology names, engine names, or architecture details. Do NOT repeat information from the headline.
 2. **Reasoning fields carry the technical depth** — put architecture details, engine names, and technical specifics here.
 3. Keep claims concrete and verifiable — avoid hype or vague superlatives.
 4. Include real URLs in citations where possible. Use documentation links.
 5. Be fair — if the competitor genuinely excels in this area, reflect that honestly.
 6. Ground claims in product capabilities, benchmarks, and architecture.
-7. Each details field (databricks_details, competitor_details) must have at least 2 citations.
+7. Each detail item should have at least 1 citation. Use `detail_item_index` (0-based) to link citations to the correct item in the details array.
 
 Return ONLY the JSON object. No markdown fences, no explanation text.
 """,
@@ -415,10 +467,20 @@ CREATE TABLE IF NOT EXISTS claims (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS claim_detail_items (
+    detail_item_id SERIAL PRIMARY KEY,
+    claim_id INT NOT NULL REFERENCES claims(claim_id) ON DELETE CASCADE,
+    item_order INT NOT NULL,
+    item_text TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_detail_items_claim ON claim_detail_items(claim_id);
+
 CREATE TABLE IF NOT EXISTS evidence (
     evidence_id SERIAL PRIMARY KEY,
     claim_id INT REFERENCES claims(claim_id),
-    traces_to_field VARCHAR(50) NOT NULL CHECK (traces_to_field IN ('headline', 'description')),
+    detail_item_id INT REFERENCES claim_detail_items(detail_item_id),
+    traces_to_field VARCHAR(50) NOT NULL CHECK (traces_to_field IN ('headline', 'description', 'detail_item')),
     traces_to_start_index INT NOT NULL,
     traces_to_end_index INT NOT NULL,
     traces_to_text TEXT NOT NULL,
@@ -458,6 +520,7 @@ CREATE TABLE IF NOT EXISTS human_reviews (
     review_id SERIAL PRIMARY KEY,
     generation_id INT REFERENCES battlecard_generations(generation_id),
     claim_id INT REFERENCES claims(claim_id),
+    detail_item_id INT REFERENCES claim_detail_items(detail_item_id),
     evidence_id INT REFERENCES evidence(evidence_id),
     fact_check_id INT REFERENCES fact_checks(fact_check_id),
     review_type VARCHAR(50) NOT NULL CHECK (review_type IN (
@@ -577,7 +640,7 @@ CREATE TABLE IF NOT EXISTS workflow_sessions (
     max_workers INT DEFAULT 5,
     pass1_prompt_version_id INT REFERENCES prompt_versions(prompt_version_id),
     pass2_prompt_version_id INT REFERENCES prompt_versions(prompt_version_id),
-    pass1_prompt_template_version INT NOT NULL DEFAULT 2,
+    pass1_prompt_template_version INT NOT NULL DEFAULT 3,
     pass2_prompt_template_version INT NOT NULL DEFAULT 2,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -598,6 +661,8 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
     error_details JSONB,
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
+    heartbeat_at TIMESTAMP,
+    worker_id VARCHAR(100),
     UNIQUE(session_id, step_number)
 );
 
@@ -666,6 +731,22 @@ CREATE TABLE IF NOT EXISTS session_category_selections (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(session_id, catalog_id)
 );
+
+CREATE TABLE IF NOT EXISTS prompt_templates (
+    template_id SERIAL PRIMARY KEY,
+    template_name VARCHAR(255) NOT NULL,
+    template_type VARCHAR(50) NOT NULL,
+    version_label VARCHAR(100),
+    description TEXT,
+    template_text TEXT NOT NULL,
+    variables TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    is_default BOOLEAN DEFAULT FALSE,
+    display_order INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_templates_name ON prompt_templates(template_name);
 """
 
 
@@ -701,20 +782,53 @@ PRODUCT_CATEGORY_CATALOG_SEED = [
 
 
 def init_db():
-    with ENGINE.begin() as conn:
-        conn.execute(text(SCHEMA_SQL))
-        # Migrations: add columns that may not exist on older schemas
-        for migration in [
-            "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS pass2_prompt_template_version INT NOT NULL DEFAULT 2",
-            "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS pass1_prompt_template_version INT NOT NULL DEFAULT 2",
-        ]:
+    # First, try running the full schema SQL in one go (fastest path for fresh DBs).
+    try:
+        with ENGINE.begin() as conn:
+            conn.execute(text(SCHEMA_SQL))
+    except Exception:
+        # If the monolithic schema fails (e.g. ownership issues on existing tables),
+        # split into individual statements and run each in its own transaction.
+        logger.info("Full schema SQL failed; running statements individually...")
+        for stmt in SCHEMA_SQL.split(";"):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
             try:
+                with ENGINE.begin() as conn:
+                    conn.execute(text(stmt))
+            except Exception as e:
+                logger.warning("Schema init (non-fatal): %s", e)
+
+    # Migrations: add columns that may not exist on older schemas.
+    # Each runs in its own transaction to avoid one failure aborting all.
+    migrations = [
+        "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS pass2_prompt_template_version INT NOT NULL DEFAULT 2",
+        "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS pass1_prompt_template_version INT NOT NULL DEFAULT 2",
+        "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS detail_item_id INT REFERENCES claim_detail_items(detail_item_id)",
+        "ALTER TABLE human_reviews ADD COLUMN IF NOT EXISTS detail_item_id INT REFERENCES claim_detail_items(detail_item_id)",
+        "ALTER TABLE evidence DROP CONSTRAINT IF EXISTS evidence_traces_to_field_check",
+        "ALTER TABLE evidence ADD CONSTRAINT evidence_traces_to_field_check CHECK (traces_to_field IN ('headline', 'description', 'detail_item'))",
+        "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMP",
+        "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS worker_id VARCHAR(100)",
+        # L200/L300 detail text support
+        "ALTER TABLE claim_detail_items ADD COLUMN IF NOT EXISTS item_text_verbose TEXT",
+        # Error storage for workflow steps
+        "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS last_error TEXT",
+        "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS error_count INT DEFAULT 0",
+    ]
+    for migration in migrations:
+        try:
+            with ENGINE.begin() as conn:
                 conn.execute(text(migration))
-            except Exception:
-                pass  # column already exists or DB doesn't support IF NOT EXISTS
+        except Exception:
+            pass  # column already exists or DB doesn't support IF NOT EXISTS
 
     # Seed product_category_catalog if empty
     _seed_product_category_catalog()
+
+    # Seed prompt_templates if empty
+    _seed_prompt_templates()
 
 
 def _seed_product_category_catalog():
@@ -734,6 +848,126 @@ def _seed_product_category_catalog():
     logger.info("Seeded product_category_catalog with %d rows", len(PRODUCT_CATEGORY_CATALOG_SEED))
 
 
+def _seed_prompt_templates():
+    """Populate prompt_templates with built-in templates if empty."""
+    import re
+
+    with ENGINE.begin() as conn:
+        count = conn.execute(text("SELECT COUNT(*) FROM prompt_templates")).scalar()
+        if count and int(count) > 0:
+            return
+
+    def _read_file_safe(path):
+        """Read file contents or return None if missing."""
+        try:
+            if os.path.isfile(path):
+                with open(path) as f:
+                    return f.read()
+        except Exception:
+            pass
+        return None
+
+    # Collect seed templates
+    seeds = []
+
+    # Pass 1 templates
+    for ver_num, cfg in PASS1_PROMPT_TEMPLATES.items():
+        tpl_text = None
+        if "template" in cfg:
+            tpl_text = cfg["template"]
+        elif "file" in cfg:
+            tpl_text = _read_file_safe(cfg["file"])
+
+        is_active = tpl_text is not None
+        if not tpl_text:
+            tpl_text = f"[Placeholder — template file not found: {cfg.get('file', 'unknown')}]"
+
+        # Extract variable names from {{var}} placeholders
+        variables = sorted(set(re.findall(r'\{\{(\w+)\}\}', tpl_text))) if is_active else []
+
+        seeds.append({
+            "template_name": f"pass1_v{ver_num}",
+            "template_type": "pass1",
+            "version_label": cfg.get("label", f"V{ver_num}"),
+            "description": cfg.get("description", ""),
+            "template_text": tpl_text,
+            "variables": json.dumps(variables),
+            "is_active": is_active,
+            "is_default": ver_num == 3,
+            "display_order": ver_num,
+        })
+
+    # Pass 2 templates
+    for ver_num, cfg in PASS2_PROMPT_TEMPLATES.items():
+        tpl_text = None
+        if "template" in cfg:
+            tpl_text = cfg["template"]
+        elif "file" in cfg:
+            tpl_text = _read_file_safe(cfg["file"])
+
+        is_active = tpl_text is not None
+        if not tpl_text:
+            tpl_text = f"[Placeholder — template file not found: {cfg.get('file', 'unknown')}]"
+
+        variables = sorted(set(re.findall(r'\{\{(\w+)\}\}', tpl_text))) if is_active else []
+
+        seeds.append({
+            "template_name": f"pass2_v{ver_num}",
+            "template_type": "pass2",
+            "version_label": cfg.get("label", f"V{ver_num}"),
+            "description": cfg.get("description", ""),
+            "template_text": tpl_text,
+            "variables": json.dumps(variables),
+            "is_active": is_active,
+            "is_default": ver_num == 2,
+            "display_order": ver_num,
+        })
+
+    # Directive template
+    directive_text = _read_file_safe(DEFAULT_DIRECTIVE_PROMPT)
+    directive_active = directive_text is not None
+    if not directive_text:
+        # Use the fallback prompt
+        directive_text = (
+            "Read the following slides content about competing against {{competitor}}.\n\n"
+            "Parse and create a max 10 to 25 bullets on how we (Databricks compete team) should "
+            "take what has been taught to AE account executives and SAs on how to compete against {{competitor}}.\n\n"
+            "Extract this directive as max 10 to 25 bullets that will be used to create an internal battlecard.\n\n"
+            "Write the directive in markdown format."
+        )
+        directive_active = True  # Fallback is always usable
+
+    directive_vars = sorted(set(re.findall(r'\{\{(\w+)\}\}', directive_text)))
+    seeds.append({
+        "template_name": "directive_v1",
+        "template_type": "directive",
+        "version_label": "V1 — Default Directive",
+        "description": "Default directive generation prompt. Extracts competitive positioning bullets from slides content.",
+        "template_text": directive_text,
+        "variables": json.dumps(directive_vars),
+        "is_active": directive_active,
+        "is_default": True,
+        "display_order": 1,
+    })
+
+    # Insert all seeds
+    with ENGINE.begin() as conn:
+        for seed in seeds:
+            try:
+                conn.execute(
+                    text(
+                        "INSERT INTO prompt_templates "
+                        "(template_name, template_type, version_label, description, template_text, variables, is_active, is_default, display_order) "
+                        "VALUES (:template_name, :template_type, :version_label, :description, :template_text, :variables, :is_active, :is_default, :display_order)"
+                    ),
+                    seed,
+                )
+            except Exception as e:
+                logger.warning("Seed prompt_templates (non-fatal): %s", e)
+
+    logger.info("Seeded prompt_templates with %d rows", len(seeds))
+
+
 def cleanup_stale_data():
     """Wipe all workflow sessions and battlecard generations that don't have
     proper 1:1 linkage.  Run once at startup so the user starts fresh with the
@@ -742,6 +976,7 @@ def cleanup_stale_data():
         conn.execute(text("DELETE FROM human_reviews"))
         conn.execute(text("DELETE FROM fact_checks"))
         conn.execute(text("DELETE FROM evidence"))
+        conn.execute(text("DELETE FROM claim_detail_items"))
         conn.execute(text("DELETE FROM claims"))
         conn.execute(text("DELETE FROM agent_turns"))
         conn.execute(text("DELETE FROM workflow_artifacts"))
@@ -1399,6 +1634,31 @@ def _fetch_generation_by_uuid(battlecard_id):
     return row
 
 
+def _build_detail_items(claim, detail_items_by_claim):
+    """Build structured detail items list for a claim.
+    Returns list of dicts with detail_item_id, item_order, text (L200), and text_verbose (L300).
+    Falls back to wrapping description in a single-item list for legacy claims.
+    """
+    if not claim:
+        return []
+    items = detail_items_by_claim.get(claim["claim_id"], [])
+    if items:
+        return [
+            {
+                "detail_item_id": di["detail_item_id"],
+                "item_order": di["item_order"],
+                "text": di["item_text"],  # L200 concise
+                "text_verbose": di.get("item_text_verbose"),  # L300 verbose (may be None for older data)
+            }
+            for di in items
+        ]
+    # Legacy fallback: no detail items, wrap description
+    desc = claim.get("description") or ""
+    if desc:
+        return [{"detail_item_id": None, "item_order": 0, "text": desc, "text_verbose": None}]
+    return []
+
+
 def load_battlecard_slides(battlecard_id):
     gen = _fetch_generation_by_uuid(battlecard_id)
     if not gen:
@@ -1432,7 +1692,7 @@ def load_battlecard_slides(battlecard_id):
 
         evidences = conn.execute(
             text(
-                "SELECT e.*, s.source_name, s.source_url, s.source_type "
+                "SELECT e.*, e.detail_item_id, s.source_name, s.source_url, s.source_type "
                 "FROM evidence e "
                 "JOIN claims cl ON e.claim_id = cl.claim_id "
                 "LEFT JOIN sources s ON e.generation_source_id = s.source_id "
@@ -1443,7 +1703,7 @@ def load_battlecard_slides(battlecard_id):
 
         fact_checks = conn.execute(
             text(
-                "SELECT fc.*, e.claim_id, e.traces_to_field, e.traces_to_start_index, e.traces_to_end_index, "
+                "SELECT fc.*, e.claim_id, e.detail_item_id, e.traces_to_field, e.traces_to_start_index, e.traces_to_end_index, "
                 "s.source_name, s.source_url, s.source_type "
                 "FROM fact_checks fc "
                 "JOIN evidence e ON fc.evidence_id = e.evidence_id "
@@ -1454,6 +1714,21 @@ def load_battlecard_slides(battlecard_id):
             ),
             {"gid": gen_id},
         ).mappings().all()
+
+        detail_items = conn.execute(
+            text(
+                "SELECT di.* FROM claim_detail_items di "
+                "JOIN claims cl ON di.claim_id = cl.claim_id "
+                "WHERE cl.generation_id = :gid "
+                "ORDER BY di.claim_id, di.item_order"
+            ),
+            {"gid": gen_id},
+        ).mappings().all()
+
+    # Build detail_items lookup by claim_id
+    detail_items_by_claim = {}
+    for di in detail_items:
+        detail_items_by_claim.setdefault(di["claim_id"], []).append(di)
 
     claims_by_keydiff = {}
     for c in claims:
@@ -1502,6 +1777,7 @@ def load_battlecard_slides(battlecard_id):
                 idx = add_source(e["generation_source_id"], e.get("source_name"), e.get("source_url"), e.get("source_type"))
                 entry = {
                     "citation_id": f"ev-{e['evidence_id']}",
+                    "detail_item_id": e.get("detail_item_id"),
                     "start_index": int(e["traces_to_start_index"]),
                     "end_index": int(e["traces_to_end_index"]),
                     "source_index": idx,
@@ -1543,6 +1819,7 @@ def load_battlecard_slides(battlecard_id):
                     {
                         "fact_check_id": str(fc["fact_check_id"]),
                         "claim_field": claim_field,
+                        "detail_item_id": fc.get("detail_item_id"),
                         "claim_start_index": int(fc["traces_to_start_index"]),
                         "claim_end_index": int(fc["traces_to_end_index"]),
                         "verdict": fc.get("status"),
@@ -1567,6 +1844,13 @@ def load_battlecard_slides(battlecard_id):
         slide_fact_checks.extend(build_fact_checks(db_claim, "databricks"))
         slide_fact_checks.extend(build_fact_checks(fab_claim, "fabric"))
 
+        db_detail_items = _build_detail_items(db_claim, detail_items_by_claim)
+        fab_detail_items = _build_detail_items(fab_claim, detail_items_by_claim)
+
+        # Flat text fallback for backward compatibility
+        db_details_flat = " ".join(it["text"] for it in db_detail_items) if db_detail_items else ""
+        fab_details_flat = " ".join(it["text"] for it in fab_detail_items) if fab_detail_items else ""
+
         diff = {
             "id": diff_id,
             "slide_type": "L200",
@@ -1575,11 +1859,13 @@ def load_battlecard_slides(battlecard_id):
             "description": d.get("key_diff_description") or "",
             "rank": d.get("display_order") or 0,
             "databricks_headline": (db_claim.get("headline") if db_claim else ""),
-            "databricks_details": (db_claim.get("description") if db_claim else ""),
+            "databricks_details": db_details_flat,
+            "databricks_detail_items": db_detail_items,
             "databricks_rating": (map_rating(db_claim.get("rating")) if db_claim else ""),
             "databricks_reasoning": "",
             "fabric_headline": (fab_claim.get("headline") if fab_claim else ""),
-            "fabric_details": (fab_claim.get("description") if fab_claim else ""),
+            "fabric_details": fab_details_flat,
+            "fabric_detail_items": fab_detail_items,
             "fabric_rating": (map_rating(fab_claim.get("rating")) if fab_claim else ""),
             "fabric_reasoning": "",
             "selection_reasoning": "",
@@ -1638,6 +1924,10 @@ def load_battlecard_reviews(battlecard_id):
                 comment = payload.get("comment") or ""
                 reorder = payload.get("reorder")
                 key_diff_id = payload.get("key_diff_id")
+                # Use stored diff_id as slide key when available
+                stored_diff_id = payload.get("diff_id")
+                if stored_diff_id:
+                    slide_id = stored_diff_id
             except json.JSONDecodeError:
                 comment = r.get("feedback_text")
 
@@ -1661,13 +1951,17 @@ def load_battlecard_reviews(battlecard_id):
         }
 
         if scope == "reorder" and reorder:
-            feedback[slide_id]["reorder"] = {
-                "original_rank": reorder.get("original_rank"),
-                "new_rank": reorder.get("new_rank"),
-                "timestamp": fb_entry["timestamp"],
-            }
+            # Only keep the newest reorder (first seen since rows are DESC)
+            if "reorder" not in feedback[slide_id]:
+                feedback[slide_id]["reorder"] = {
+                    "original_rank": reorder.get("original_rank"),
+                    "new_rank": reorder.get("new_rank"),
+                    "timestamp": fb_entry["timestamp"],
+                }
         elif scope:
-            feedback[slide_id][scope] = fb_entry
+            # Only keep the newest review per scope (first seen since rows are DESC)
+            if scope not in feedback[slide_id]:
+                feedback[slide_id][scope] = fb_entry
 
     return feedback
 
@@ -1681,7 +1975,7 @@ def load_battlecard_fact_checks(battlecard_id):
     with ENGINE.begin() as conn:
         rows = conn.execute(
             text(
-                "SELECT fc.*, e.claim_id, e.traces_to_field, e.traces_to_start_index, e.traces_to_end_index, "
+                "SELECT fc.*, e.claim_id, e.detail_item_id, e.traces_to_field, e.traces_to_start_index, e.traces_to_end_index, "
                 "s.source_name, s.source_url, s.source_type, "
                 "cl.key_diff_id, co.company_type "
                 "FROM fact_checks fc "
@@ -1711,6 +2005,7 @@ def load_battlecard_fact_checks(battlecard_id):
         entry = {
             "fact_check_id": str(r.get("fact_check_id")),
             "claim_field": claim_field,
+            "detail_item_id": r.get("detail_item_id"),
             "claim_start_index": int(r.get("traces_to_start_index")),
             "claim_end_index": int(r.get("traces_to_end_index")),
             "verdict": r.get("status"),
@@ -1856,6 +2151,16 @@ def save_review_to_db(battlecard_id, diff_id, review_scope, status, comment="", 
         except ValueError:
             key_diff_id = None
 
+    # Parse detail_item_id from scope like "databricks_detail_42" or "fabric_detail_42"
+    detail_item_id = None
+    if review_scope and ("_detail_" in review_scope):
+        parts = review_scope.rsplit("_", 1)
+        if len(parts) == 2:
+            try:
+                detail_item_id = int(parts[1])
+            except ValueError:
+                pass
+
     status_map = {
         "approved": "approve",
         "needs_revision": "request_edit",
@@ -1867,20 +2172,24 @@ def save_review_to_db(battlecard_id, diff_id, review_scope, status, comment="", 
         "scope": review_scope,
         "comment": comment,
         "key_diff_id": key_diff_id,
+        "diff_id": diff_id,
     }
+    if detail_item_id:
+        payload["detail_item_id"] = detail_item_id
     if reorder:
         payload["reorder"] = reorder
 
     with ENGINE.begin() as conn:
         review_id = conn.execute(
             text(
-                "INSERT INTO human_reviews (generation_id, claim_id, review_type, feedback_text, "
+                "INSERT INTO human_reviews (generation_id, claim_id, detail_item_id, review_type, feedback_text, "
                 "reviewed_by, reviewer_role) "
-                "VALUES (:gen, :claim, :rtype, :feedback, :by, :role) RETURNING review_id"
+                "VALUES (:gen, :claim, :detail_item, :rtype, :feedback, :by, :role) RETURNING review_id"
             ),
             {
                 "gen": gen_id,
                 "claim": None,
+                "detail_item": detail_item_id,
                 "rtype": review_type,
                 "feedback": json.dumps(payload),
                 "by": reviewer_email,
@@ -1976,12 +2285,12 @@ def calculate_trial_score(battlecard_id, differentiators, feedback):
 
 @app.route('/')
 def home():
-    return redirect('/battlecards')
+    return render_template('index.html')
 
 
 @app.route('/design-system')
 def design_system():
-    return render_template('design_system.html')
+    return render_template('design_system.html', rubrics=[])
 
 
 @app.route('/battlecards')
@@ -2054,6 +2363,46 @@ def workflow_list():
     return redirect('/battlecards')
 
 
+def _load_prompt_templates_for_ui():
+    """Load prompt templates from DB for use in workflow creation dropdowns.
+
+    Returns (pass1_templates, pass2_templates) as dicts keyed by display_order,
+    matching the format expected by workflow_new.html and workflow_session.html.
+    Falls back to the Python dict constants if the DB table is empty.
+    """
+    try:
+        with ENGINE.begin() as conn:
+            rows = [
+                dict(r) for r in conn.execute(
+                    text(
+                        "SELECT template_id, template_name, template_type, version_label, "
+                        "description, display_order, is_active, is_default "
+                        "FROM prompt_templates WHERE is_active = TRUE "
+                        "ORDER BY template_type, display_order"
+                    )
+                ).mappings().all()
+            ]
+        if rows:
+            p1 = {}
+            p2 = {}
+            for r in rows:
+                entry = {
+                    "label": r["version_label"] or r["template_name"],
+                    "description": r["description"] or "",
+                    "template_id": r["template_id"],
+                    "is_default": r["is_default"],
+                }
+                if r["template_type"] == "pass1":
+                    p1[r["display_order"]] = entry
+                elif r["template_type"] == "pass2":
+                    p2[r["display_order"]] = entry
+            if p1 or p2:
+                return p1 or PASS1_PROMPT_TEMPLATES, p2 or PASS2_PROMPT_TEMPLATES
+    except Exception as e:
+        logger.warning("Failed to load prompt templates from DB: %s", e)
+    return PASS1_PROMPT_TEMPLATES, PASS2_PROMPT_TEMPLATES
+
+
 @app.route('/workflow/new')
 def workflow_new():
     # Fetch existing competitors so the user can create a new version
@@ -2067,9 +2416,10 @@ def workflow_new():
             )
         ).mappings().all()
     competitors = [dict(r) for r in existing]
-    return render_template('workflow_new.html', categories=CATEGORIES, competitors=competitors,
-                           pass1_prompt_templates=PASS1_PROMPT_TEMPLATES,
-                           pass2_prompt_templates=PASS2_PROMPT_TEMPLATES)
+    p1_templates, p2_templates = _load_prompt_templates_for_ui()
+    return render_template('workflow_new.html', competitors=competitors,
+                           pass1_prompt_templates=p1_templates,
+                           pass2_prompt_templates=p2_templates)
 
 
 @app.route('/workflow/<session_id>')
@@ -2125,13 +2475,24 @@ def workflow_session(session_id):
     for a in artifacts_list:
         artifacts_by_step.setdefault(a["step_number"], []).append(a)
 
-    # Look up linked battlecard and review feedback
-    battlecard_id = _lookup_battlecard_for_workflow(session_id)
+    # Look up linked battlecard for header link (always available if generation exists)
+    battlecard_link_id = _lookup_battlecard_for_workflow(session_id)
+
+    # Only show the battlecard preview panel if Step 5 claims exist (meaningful content to preview)
+    battlecard_id = None
+    has_claims = any(
+        a["artifact_type"] in ("pass2_claims", "pass3_regenerated")
+        for a in artifacts_list
+        if a["step_number"] == 5
+    )
+    if has_claims:
+        battlecard_id = battlecard_link_id
+
     review_summary = None
     if session["generation_id"]:
         review_summary = _get_review_feedback_summary(session["generation_id"])
 
-    # Load product category catalog for Step 4
+    # Load product category catalog for Step 3
     with ENGINE.begin() as conn:
         catalog_rows = conn.execute(
             text(
@@ -2175,12 +2536,20 @@ def workflow_session(session_id):
             "description": pm["product_description"],
         })
 
-    # Load fact check summary for step 7
+    # Load fact check summary for step 6
     fact_check_summary = {}
     fact_check_details = []
     if session.get("generation_id"):
         fact_check_summary = get_fact_check_summary_by_gen(session["generation_id"])
         fact_check_details = get_fact_check_details_by_gen(session["generation_id"])
+
+    # Check if generation steps (4+) have started — locks context steps 1-3
+    context_steps_locked = any(
+        s.get("status") not in ("pending", None)
+        for s in steps_list if s.get("step_number", 0) >= 4
+    )
+
+    p1_templates, p2_templates = _load_prompt_templates_for_ui()
 
     return render_template(
         'workflow_session.html',
@@ -2188,17 +2557,18 @@ def workflow_session(session_id):
         steps=steps_list,
         artifacts=artifacts_list,
         artifacts_by_step=artifacts_by_step,
-        categories=CATEGORIES,
         category_catalog=category_catalog,
         session_selections=session_selections,
         product_mappings_by_catalog=product_mappings_by_catalog,
         battlecard_id=battlecard_id,
+        battlecard_link_id=battlecard_link_id,
         review_summary=review_summary,
         fact_check_summary=fact_check_summary,
         fact_check_details=fact_check_details,
         pill_config=PILL_CONFIG,
-        pass1_prompt_templates=PASS1_PROMPT_TEMPLATES,
-        pass2_prompt_templates=PASS2_PROMPT_TEMPLATES,
+        pass1_prompt_templates=p1_templates,
+        pass2_prompt_templates=p2_templates,
+        context_steps_locked=context_steps_locked,
     )
 
 
@@ -2221,12 +2591,14 @@ def view_battlecard(battlecard_id):
         categories.setdefault(cat, [])
 
         diff_fb = feedback.get(diff["id"], {})
-        diff["feedback"] = {
-            "key_diff": diff_fb.get("key_diff", {}),
-            "databricks": diff_fb.get("databricks", {}),
-            "fabric": diff_fb.get("fabric", {}),
-            "reorder": diff_fb.get("reorder"),
-        }
+        # Start with all scopes from loaded reviews (includes detail-level
+        # scopes like databricks_detail_203, fabric_detail_204, etc.)
+        diff["feedback"] = dict(diff_fb)
+        # Ensure known top-level keys always exist so templates don't error
+        diff["feedback"].setdefault("key_diff", {})
+        diff["feedback"].setdefault("databricks", {})
+        diff["feedback"].setdefault("fabric", {})
+        diff["feedback"].setdefault("reorder", None)
 
         slide_fact_checks = fact_checks.get(diff["id"], [])
         diff["fact_checks"] = slide_fact_checks
@@ -2282,7 +2654,12 @@ def view_battlecard(battlecard_id):
     }
 
     slide_categories = list(categories.keys())
-    dynamic_category_order = list(CATEGORIES)
+    # Load category ordering from product_category_catalog
+    with ENGINE.begin() as conn:
+        _cat_order_rows = conn.execute(
+            text("SELECT category_name FROM product_category_catalog ORDER BY display_order")
+        ).scalars().all()
+    dynamic_category_order = list(_cat_order_rows)
     for cat in slide_categories:
         if cat not in dynamic_category_order:
             dynamic_category_order.append(cat)
@@ -2317,7 +2694,13 @@ def submit_uc_feedback():
     status = data.get('status')
     comment = data.get('comment', '')
 
+    logger.info(
+        "FEEDBACK SAVE: battlecard=%s diff_id=%s level=%s status=%s comment=%r",
+        battlecard_id, diff_id, level, status, comment,
+    )
+
     if not all([battlecard_id, diff_id, level]):
+        logger.warning("FEEDBACK SAVE REJECTED: missing required fields – battlecard=%s diff_id=%s level=%s", battlecard_id, diff_id, level)
         return jsonify({"error": "Missing required fields"}), 400
 
     review_id = save_review_to_db(
@@ -2328,6 +2711,8 @@ def submit_uc_feedback():
         comment=comment,
         reviewer_email="anonymous",
     )
+
+    logger.info("FEEDBACK SAVED: review_id=%s battlecard=%s diff_id=%s level=%s status=%s", review_id, battlecard_id, diff_id, level, status)
 
     slides, _ = load_battlecard_slides(battlecard_id)
     feedback = load_battlecard_reviews(battlecard_id)
@@ -2423,12 +2808,11 @@ def workflow_review_feedback(session_id):
 WORKFLOW_STEPS = [
     (1, "Generate Directive"),
     (2, "Upload Old Battlecards"),
-    (3, "Choose Product Categories"),
-    (4, "Map Products to Categories"),
-    (5, "Generate Key Differentiators"),
-    (6, "Generate Key Diff Claims"),
-    (7, "Fact Check Claims"),
-    (8, "Generate Google Slides"),
+    (3, "Classify Product Categories"),
+    (4, "Generate Key Differentiators"),
+    (5, "Generate Key Diff Claims"),
+    (6, "Fact Check Claims"),
+    (7, "Generate Google Slides"),
 ]
 
 
@@ -2440,7 +2824,7 @@ def create_workflow():
     model_name = data.get('model_name', 'databricks-claude-sonnet-4').strip()
     diffs_per_category = int(data.get('diffs_per_category', 10))
     max_workers = int(data.get('max_workers', 5))
-    pass1_prompt_template_version = int(data.get('pass1_prompt_template_version', 2))
+    pass1_prompt_template_version = int(data.get('pass1_prompt_template_version', 3))
     pass2_prompt_template_version = int(data.get('pass2_prompt_template_version', 2))
     previous_generation_id = data.get('previous_generation_id')
 
@@ -2508,6 +2892,10 @@ def create_workflow():
     return jsonify({"success": True, "session_id": session_id})
 
 
+# Heartbeat timeout threshold in seconds - steps in_progress longer than this are considered stuck
+HEARTBEAT_TIMEOUT_SECONDS = 300  # 5 minutes without heartbeat = stuck
+
+
 @app.route('/api/workflow/<session_id>/status')
 def workflow_status(session_id):
     with ENGINE.begin() as conn:
@@ -2524,16 +2912,93 @@ def workflow_status(session_id):
         steps = conn.execute(
             text(
                 "SELECT step_number, step_name, status, progress_current, progress_total, "
-                "progress_message, error_message, error_details "
+                "progress_message, error_message, error_details, started_at, heartbeat_at, worker_id, "
+                "last_error, error_count, "
+                "EXTRACT(EPOCH FROM (NOW() - heartbeat_at)) AS seconds_since_heartbeat "
                 "FROM workflow_steps WHERE session_id::text = :sid ORDER BY step_number"
             ),
             {"sid": session_id},
         ).mappings().all()
 
+    # Process steps to add stuck detection
+    processed_steps = []
+    for s in steps:
+        step_dict = dict(s)
+        # Convert timestamps to ISO strings for JSON
+        if step_dict.get("started_at"):
+            step_dict["started_at"] = step_dict["started_at"].isoformat() if hasattr(step_dict["started_at"], 'isoformat') else str(step_dict["started_at"])
+        if step_dict.get("heartbeat_at"):
+            step_dict["heartbeat_at"] = step_dict["heartbeat_at"].isoformat() if hasattr(step_dict["heartbeat_at"], 'isoformat') else str(step_dict["heartbeat_at"])
+
+        # Detect stuck steps: in_progress but no heartbeat for > threshold
+        step_dict["is_stuck"] = False
+        if step_dict["status"] == "in_progress":
+            seconds_since = step_dict.get("seconds_since_heartbeat")
+            if seconds_since is not None and float(seconds_since) > HEARTBEAT_TIMEOUT_SECONDS:
+                step_dict["is_stuck"] = True
+                step_dict["stuck_reason"] = f"No heartbeat for {int(seconds_since)} seconds (worker may have crashed)"
+            elif step_dict.get("heartbeat_at") is None and step_dict.get("started_at"):
+                # No heartbeat ever recorded but step started - likely old data before heartbeat feature
+                step_dict["is_stuck"] = True
+                step_dict["stuck_reason"] = "Step started but no heartbeat recorded (worker may have crashed)"
+
+        processed_steps.append(step_dict)
+
     return jsonify({
         "session": dict(session),
-        "steps": [dict(s) for s in steps],
+        "steps": processed_steps,
     })
+
+
+@app.route('/api/workflow/<session_id>/partial-artifacts')
+def workflow_partial_artifacts(session_id):
+    """Return latest pass1_skeletons, pass2_claims, and category_selections for progressive rendering.
+
+    Lightweight endpoint — 3 queries (one per artifact type), each ORDER BY created_at DESC LIMIT 1.
+    """
+    result = {}
+    with ENGINE.begin() as conn:
+        for atype, key, meta_key in [
+            ("pass1_skeletons", "pass1_skeletons", "pass1_meta"),
+            ("pass2_claims", "pass2_claims", "pass2_meta"),
+            ("category_selections", "category_selections", None),
+        ]:
+            row = conn.execute(
+                text(
+                    "SELECT artifact_content, artifact_metadata "
+                    "FROM workflow_artifacts "
+                    "WHERE session_id::text = :sid AND artifact_type = :atype "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"sid": session_id, "atype": atype},
+            ).mappings().first()
+
+            if row:
+                content = row["artifact_content"]
+                metadata = row["artifact_metadata"]
+                # Parse JSON content
+                try:
+                    parsed = json.loads(content) if isinstance(content, str) else content
+                except (json.JSONDecodeError, TypeError):
+                    parsed = content
+                # Parse metadata
+                if metadata and isinstance(metadata, str):
+                    try:
+                        metadata = json.loads(metadata)
+                    except (json.JSONDecodeError, TypeError):
+                        metadata = {}
+                elif not metadata:
+                    metadata = {}
+
+                result[key] = parsed
+                if meta_key:
+                    result[meta_key] = metadata
+            else:
+                result[key] = None
+                if meta_key:
+                    result[meta_key] = {}
+
+    return jsonify(result)
 
 
 @app.route('/api/workflow/<session_id>/step/<int:step_number>/artifacts')
@@ -2681,6 +3146,19 @@ def workflow_artifact_detail(session_id, artifact_id):
     })
 
 
+def _generation_steps_started(conn, session_id):
+    """Return True if any generation step (4+) has progressed beyond 'pending'."""
+    row = conn.execute(
+        text(
+            "SELECT COUNT(*) FROM workflow_steps "
+            "WHERE session_id::text = :sid AND step_number >= 4 "
+            "AND status NOT IN ('pending')"
+        ),
+        {"sid": session_id},
+    ).scalar()
+    return (row or 0) > 0
+
+
 @app.route('/api/workflow/<session_id>/step/1/upload', methods=['POST'])
 def workflow_step1_upload(session_id):
     """Upload sales pitch files for directive generation."""
@@ -2690,6 +3168,8 @@ def workflow_step1_upload(session_id):
     raw = f.read()
     content = raw.decode('utf-8', errors='replace').replace('\x00', '')
     with ENGINE.begin() as conn:
+        if _generation_steps_started(conn, session_id):
+            return jsonify({"error": "Cannot modify context steps after generation has started (step 4+)"}), 400
         art_id = conn.execute(
             text(
                 "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content) "
@@ -2716,6 +3196,10 @@ def workflow_step1_generate(session_id):
     to the LLM with the directive generation prompt to produce a structured
     competitive directive.
     """
+    with ENGINE.connect() as conn:
+        if _generation_steps_started(conn, session_id):
+            return jsonify({"error": "Cannot modify context steps after generation has started (step 4+)"}), 400
+
     import threading
 
     def _run_generate(sid):
@@ -2751,22 +3235,11 @@ def workflow_step1_generate(session_id):
             else:
                 slides_content = f"No slides content available for {competitor}."
 
-            # 2. Load the directive generation prompt
+            # 2. Load the directive generation prompt (DB-first with fallback)
             _update_step_status(sid, 1, "in_progress", progress_message="Loading directive prompt template...")
-            prompt_text = ""
-            if os.path.isfile(DEFAULT_DIRECTIVE_PROMPT):
-                with open(DEFAULT_DIRECTIVE_PROMPT) as f:
-                    prompt_text = f.read()
-                logger.info("Loaded directive prompt from %s", DEFAULT_DIRECTIVE_PROMPT)
-            else:
-                logger.warning("Directive prompt not found at %s, using fallback", DEFAULT_DIRECTIVE_PROMPT)
-                prompt_text = (
-                    "Read the following slides content about competing against {{competitor}}.\n\n"
-                    "Parse and create a max 10 to 25 bullets on how we (Databricks compete team) should "
-                    "take what has been taught to AE account executives and SAs on how to compete against {{competitor}}.\n\n"
-                    "Extract this directive as max 10 to 25 bullets that will be used to create an internal battlecard.\n\n"
-                    "Write the directive in markdown format."
-                )
+            from workflow_runner import load_directive_template
+            prompt_text = load_directive_template(engine=ENGINE)
+            logger.info("Loaded directive prompt (%d chars)", len(prompt_text))
 
             # 3. Build the full prompt: directive prompt + slides content
             # Replace SLIDES_EXTRACT.md reference with actual content
@@ -2824,6 +3297,9 @@ def workflow_step1_generate(session_id):
 @app.route('/api/workflow/<session_id>/step/1/skip', methods=['POST'])
 def workflow_step1_skip(session_id):
     """Skip LLM generation — load the default directive file directly."""
+    with ENGINE.connect() as conn:
+        if _generation_steps_started(conn, session_id):
+            return jsonify({"error": "Cannot modify context steps after generation has started (step 4+)"}), 400
     _update_step_status(session_id, 1, "in_progress", progress_message="Loading default directive...")
     with ENGINE.begin() as conn:
         session = conn.execute(
@@ -2871,6 +3347,8 @@ def workflow_step2_upload(session_id):
     # Decode text files; strip null bytes for PDFs (Postgres text columns reject \x00)
     content = raw.decode('utf-8', errors='replace').replace('\x00', '')
     with ENGINE.begin() as conn:
+        if _generation_steps_started(conn, session_id):
+            return jsonify({"error": "Cannot modify context steps after generation has started (step 4+)"}), 400
         art_id = conn.execute(
             text(
                 "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content) "
@@ -2892,6 +3370,9 @@ def workflow_step2_upload(session_id):
 @app.route('/api/workflow/<session_id>/step/2/extract', methods=['POST'])
 def workflow_step2_extract(session_id):
     """Load the default old battlecard file as extracted content."""
+    with ENGINE.connect() as conn:
+        if _generation_steps_started(conn, session_id):
+            return jsonify({"error": "Cannot modify context steps after generation has started (step 4+)"}), 400
     _update_step_status(session_id, 2, "in_progress", progress_message="Loading old battlecard...")
 
     extracted_content = ""
@@ -2941,6 +3422,9 @@ def workflow_step2_extract(session_id):
 @app.route('/api/workflow/<session_id>/step/2/use-as-is', methods=['POST'])
 def workflow_step2_use_as_is(session_id):
     """Use the uploaded text file directly as extracted content (no LLM)."""
+    with ENGINE.connect() as conn:
+        if _generation_steps_started(conn, session_id):
+            return jsonify({"error": "Cannot modify context steps after generation has started (step 4+)"}), 400
     _update_step_status(session_id, 2, "in_progress", progress_message="Using uploaded content as-is...")
 
     # Get the most recent uploaded file
@@ -2983,63 +3467,71 @@ def workflow_step2_use_as_is(session_id):
     return jsonify({"success": True})
 
 
-@app.route('/api/workflow/<session_id>/step/3/save', methods=['POST'])
-def workflow_step3_save(session_id):
-    """Save selected product categories."""
+@app.route('/api/workflow/<session_id>/step/<int:step_number>/delete-upload', methods=['POST'])
+def workflow_step_delete_upload(session_id, step_number):
+    """Delete an uploaded file artifact by name for step 1 or 2."""
+    if step_number not in (1, 2):
+        return jsonify({"error": "Delete upload only supported for steps 1 and 2"}), 400
+
+    artifact_type = {1: 'directive_upload', 2: 'old_battlecard_upload'}[step_number]
+
     data = request.json or {}
-    selected_categories = data.get('categories', [])
-    if not selected_categories:
-        return jsonify({"error": "At least one category must be selected"}), 400
+    filename = data.get('filename', '').strip()
+    if not filename:
+        return jsonify({"error": "filename is required"}), 400
 
-    _update_step_status(session_id, 3, "in_progress", progress_message="Saving categories...")
-
-    categories_content = "\n".join(selected_categories)
     with ENGINE.begin() as conn:
-        # Remove old category artifacts and turns for this session
-        conn.execute(
-            text("DELETE FROM agent_turns WHERE session_id::text = :sid AND content_type = 'product_categories'"),
-            {"sid": session_id},
-        )
-        conn.execute(
+        # Block modifications once generation steps (4+) have started
+        if _generation_steps_started(conn, session_id):
+            return jsonify({"error": "Cannot modify context steps after generation has started (step 4+)"}), 400
+
+        # Verify step is in a state that allows editing
+        step_status = conn.execute(
             text(
-                "DELETE FROM workflow_artifacts WHERE session_id::text = :sid AND artifact_type = 'product_categories'"
+                "SELECT status FROM workflow_steps "
+                "WHERE session_id::text = :sid AND step_number = :step"
             ),
-            {"sid": session_id},
-        )
+            {"sid": session_id, "step": step_number},
+        ).scalar()
+        if step_status not in ('ready', 'pending'):
+            return jsonify({"error": f"Cannot delete uploads when step is '{step_status}'"}), 400
+
+        # Delete the artifact and any linked agent_turns
         art_id = conn.execute(
             text(
-                "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
-                "VALUES (CAST(:sid AS uuid), 3, 'product_categories', 'selected_categories', :content, CAST(:meta AS jsonb)) "
-                "RETURNING artifact_id"
+                "SELECT artifact_id FROM workflow_artifacts "
+                "WHERE session_id::text = :sid AND step_number = :step "
+                "AND artifact_type = :atype AND artifact_name = :name "
+                "ORDER BY created_at DESC LIMIT 1"
             ),
-            {
-                "sid": session_id,
-                "content": categories_content,
-                "meta": json.dumps({"categories": selected_categories}),
-            },
+            {"sid": session_id, "step": step_number, "atype": artifact_type, "name": filename},
         ).scalar()
+
+        if not art_id:
+            return jsonify({"error": "File not found"}), 404
+
         conn.execute(
-            text(
-                "INSERT INTO agent_turns (session_id, step_number, turn_type, role, content_type, content_preview, token_count, artifact_id) "
-                "VALUES (CAST(:sid AS uuid), 3, 'user_input', 'user', 'product_categories', :preview, :tokens, :aid)"
-            ),
-            {"sid": session_id, "preview": categories_content[:500], "tokens": count_tokens(categories_content), "aid": art_id},
+            text("DELETE FROM agent_turns WHERE artifact_id = :aid"),
+            {"aid": art_id},
+        )
+        conn.execute(
+            text("DELETE FROM workflow_artifacts WHERE artifact_id = :aid"),
+            {"aid": art_id},
         )
 
-    _update_step_status(session_id, 3, "completed")
-    _advance_workflow(session_id, 3)
-    return jsonify({"success": True, "categories": selected_categories})
+    return jsonify({"success": True, "deleted": filename})
 
 
-# ---- Step 4: Classify Product Categories ----
-
-@app.route('/api/workflow/<session_id>/step/4/save', methods=['POST'])
-def workflow_step4_save_selections(session_id):
+@app.route('/api/workflow/<session_id>/step/3/save', methods=['POST'])
+def workflow_step3_save(session_id):
     """Save category classification selections (core / cross-platform / skip).
 
     Expects JSON: {"selections": {"<catalog_id>": "<inclusion_type>", ...}}
     where inclusion_type is one of: core_product_category, cross_platform_capability, skip
     """
+    with ENGINE.connect() as conn:
+        if _generation_steps_started(conn, session_id):
+            return jsonify({"error": "Cannot modify context steps after generation has started (step 4+)"}), 400
     data = request.json or {}
     selections_dict = data.get('selections', {})
 
@@ -3051,7 +3543,7 @@ def workflow_step4_save_selections(session_id):
     if not active:
         return jsonify({"error": "At least one category must be included (not skipped)"}), 400
 
-    _update_step_status(session_id, 4, "in_progress", progress_message="Saving category selections...")
+    _update_step_status(session_id, 3, "in_progress", progress_message="Saving category selections...")
 
     with ENGINE.begin() as conn:
         # Load category names from catalog
@@ -3081,6 +3573,53 @@ def workflow_step4_save_selections(session_id):
                 },
             )
 
+        # Build lists by classification
+        core_names = [catalog_lookup.get(k, k) for k, v in selections_dict.items() if v == 'core_product_category']
+        cross_names = [catalog_lookup.get(k, k) for k, v in selections_dict.items() if v == 'cross_platform_capability']
+        skip_names = [catalog_lookup.get(k, k) for k, v in selections_dict.items() if v == 'skip']
+
+        # Save product_categories artifact (newline-separated non-skipped names for WorkflowRunner._get_categories())
+        non_skipped = core_names + cross_names
+        categories_content = "\n".join(non_skipped)
+
+        # Remove old product_categories artifacts and turns
+        conn.execute(
+            text("DELETE FROM agent_turns WHERE session_id::text = :sid AND content_type = 'product_categories'"),
+            {"sid": session_id},
+        )
+        conn.execute(
+            text("DELETE FROM workflow_artifacts WHERE session_id::text = :sid AND artifact_type = 'product_categories'"),
+            {"sid": session_id},
+        )
+
+        cat_art_id = conn.execute(
+            text(
+                "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
+                "VALUES (CAST(:sid AS uuid), 3, 'product_categories', 'selected_categories', :content, CAST(:meta AS jsonb)) "
+                "RETURNING artifact_id"
+            ),
+            {
+                "sid": session_id,
+                "content": categories_content,
+                "meta": json.dumps({"categories": non_skipped}),
+            },
+        ).scalar()
+        conn.execute(
+            text(
+                "INSERT INTO agent_turns (session_id, step_number, turn_type, role, content_type, content_preview, token_count, artifact_id) "
+                "VALUES (CAST(:sid AS uuid), 3, 'user_input', 'user', 'product_categories', :preview, :tokens, :aid)"
+            ),
+            {"sid": session_id, "preview": categories_content[:500], "tokens": count_tokens(categories_content), "aid": cat_art_id},
+        )
+
+        # Save category_selections artifact (JSON summary with core/cross/skipped lists)
+        summary = {
+            "core_product_categories": core_names,
+            "cross_platform_capabilities": cross_names,
+            "skipped": skip_names,
+        }
+        artifact_content = json.dumps(summary, indent=2)
+
         # Remove old category_selections artifacts and turns
         conn.execute(
             text("DELETE FROM agent_turns WHERE session_id::text = :sid AND content_type = 'category_selections'"),
@@ -3091,22 +3630,10 @@ def workflow_step4_save_selections(session_id):
             {"sid": session_id},
         )
 
-        # Build artifact content summarizing selections
-        core_names = [catalog_lookup.get(k, k) for k, v in selections_dict.items() if v == 'core_product_category']
-        cross_names = [catalog_lookup.get(k, k) for k, v in selections_dict.items() if v == 'cross_platform_capability']
-        skip_names = [catalog_lookup.get(k, k) for k, v in selections_dict.items() if v == 'skip']
-
-        summary = {
-            "core_product_categories": core_names,
-            "cross_platform_capabilities": cross_names,
-            "skipped": skip_names,
-        }
-        artifact_content = json.dumps(summary, indent=2)
-
         art_id = conn.execute(
             text(
                 "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
-                "VALUES (CAST(:sid AS uuid), 4, 'category_selections', 'category_selections.json', :content, CAST(:meta AS jsonb)) "
+                "VALUES (CAST(:sid AS uuid), 3, 'category_selections', 'category_selections.json', :content, CAST(:meta AS jsonb)) "
                 "RETURNING artifact_id"
             ),
             {
@@ -3123,40 +3650,195 @@ def workflow_step4_save_selections(session_id):
         conn.execute(
             text(
                 "INSERT INTO agent_turns (session_id, step_number, turn_type, role, content_type, content_preview, token_count, artifact_id) "
-                "VALUES (CAST(:sid AS uuid), 4, 'user_input', 'user', 'category_selections', :preview, :tokens, :aid)"
+                "VALUES (CAST(:sid AS uuid), 3, 'user_input', 'user', 'category_selections', :preview, :tokens, :aid)"
             ),
             {"sid": session_id, "preview": artifact_content[:500], "tokens": count_tokens(artifact_content), "aid": art_id},
         )
 
-    _update_step_status(session_id, 4, "completed")
-    _advance_workflow(session_id, 4)
+    _update_step_status(session_id, 3, "completed")
+    _advance_workflow(session_id, 3)
     return jsonify({"success": True, "summary": summary})
 
 
-@app.route('/api/workflow/<session_id>/step/5/generate', methods=['POST'])
-def workflow_step5_generate(session_id):
+@app.route('/api/workflow/<session_id>/context-sources', methods=['GET'])
+def workflow_context_sources(session_id):
+    """Return available context sources for a workflow session.
+
+    Each source includes: key, label, available (bool), description, and preview snippet.
+    """
+    sources = []
+
+    with ENGINE.begin() as conn:
+        # Check what artifacts exist for this session
+        artifacts = conn.execute(
+            text(
+                "SELECT artifact_type FROM workflow_artifacts "
+                "WHERE session_id::text = :sid "
+                "GROUP BY artifact_type"
+            ),
+            {"sid": session_id},
+        ).scalars().all()
+
+        # Get the generation and previous_generation_id
+        gen_row = conn.execute(
+            text(
+                "SELECT ws.generation_id, bg.previous_generation_id "
+                "FROM workflow_sessions ws "
+                "LEFT JOIN battlecard_generations bg ON ws.generation_id = bg.generation_id "
+                "WHERE ws.session_id::text = :sid"
+            ),
+            {"sid": session_id},
+        ).mappings().first()
+
+    artifact_types = set(artifacts) if artifacts else set()
+    prev_gen_id = gen_row["previous_generation_id"] if gen_row else None
+
+    # 1. Directive
+    has_directive = "directive_generated" in artifact_types
+    directive_preview = ""
+    if has_directive:
+        with ENGINE.begin() as conn:
+            dp = conn.execute(
+                text(
+                    "SELECT LEFT(artifact_content, 200) FROM workflow_artifacts "
+                    "WHERE session_id::text = :sid AND artifact_type = 'directive_generated' "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"sid": session_id},
+            ).scalar()
+            directive_preview = dp or ""
+    sources.append({
+        "key": "directive",
+        "label": "Competitive Directive",
+        "available": has_directive,
+        "description": "Strategic competitive directive generated in Step 1",
+        "preview": directive_preview[:200],
+        "default": True,
+    })
+
+    # 2. Old Battlecard
+    has_old_bc = "old_battlecard_extracted" in artifact_types
+    old_bc_preview = ""
+    if has_old_bc:
+        with ENGINE.begin() as conn:
+            bp = conn.execute(
+                text(
+                    "SELECT LEFT(artifact_content, 200) FROM workflow_artifacts "
+                    "WHERE session_id::text = :sid AND artifact_type = 'old_battlecard_extracted' "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"sid": session_id},
+            ).scalar()
+            old_bc_preview = bp or ""
+    sources.append({
+        "key": "old_battlecard",
+        "label": "Previous Battlecard Content",
+        "available": has_old_bc,
+        "description": "Extracted content from the uploaded old battlecard (Step 2)",
+        "preview": old_bc_preview[:200],
+        "default": True,
+    })
+
+    # 3. Previous Version Review Feedback
+    has_reviews = False
+    review_description = "Review feedback from the previous version"
+    if prev_gen_id:
+        with ENGINE.begin() as conn:
+            review_counts = conn.execute(
+                text(
+                    "SELECT review_type, COUNT(*) AS cnt "
+                    "FROM human_reviews WHERE generation_id = :gid "
+                    "GROUP BY review_type"
+                ),
+                {"gid": prev_gen_id},
+            ).mappings().all()
+        if review_counts:
+            has_reviews = True
+            counts = {r["review_type"]: r["cnt"] for r in review_counts}
+            total = sum(counts.values())
+            parts = []
+            if counts.get("approve"):
+                parts.append(f"{counts['approve']} approved")
+            if counts.get("request_edit"):
+                parts.append(f"{counts['request_edit']} needs revision")
+            if counts.get("reject"):
+                parts.append(f"{counts['reject']} rejected")
+            review_description = f"Previous version reviews ({total} total: {', '.join(parts)})"
+
+    sources.append({
+        "key": "review_feedback",
+        "label": "Previous Version Reviews",
+        "available": has_reviews,
+        "description": review_description,
+        "preview": "",
+        "default": False,
+    })
+
+    # 4. Previous Version Fact-Check Results
+    has_fact_checks = False
+    fc_description = "Fact-check results from the previous version"
+    if prev_gen_id:
+        with ENGINE.begin() as conn:
+            fc_counts = conn.execute(
+                text(
+                    "SELECT fc.status, COUNT(*) AS cnt "
+                    "FROM fact_checks fc "
+                    "JOIN evidence e ON fc.evidence_id = e.evidence_id "
+                    "JOIN claims c ON e.claim_id = c.claim_id "
+                    "WHERE c.generation_id = :gid "
+                    "GROUP BY fc.status"
+                ),
+                {"gid": prev_gen_id},
+            ).mappings().all()
+        if fc_counts:
+            has_fact_checks = True
+            counts = {r["status"]: r["cnt"] for r in fc_counts}
+            total = sum(counts.values())
+            parts = []
+            for status in ("verified", "disputed", "unverified", "outdated"):
+                if counts.get(status):
+                    parts.append(f"{counts[status]} {status}")
+            fc_description = f"Previous version fact-checks ({total} total: {', '.join(parts)})"
+
+    sources.append({
+        "key": "fact_checks",
+        "label": "Previous Version Fact-Checks",
+        "available": has_fact_checks,
+        "description": fc_description,
+        "preview": "",
+        "default": False,
+    })
+
+    return jsonify({"sources": sources})
+
+
+@app.route('/api/workflow/<session_id>/step/4/generate', methods=['POST'])
+def workflow_step4_generate(session_id):
     """Trigger Pass 1 - Generate Key Differentiators."""
-    _update_step_status(session_id, 5, "in_progress", progress_message="Starting Pass 1 generation...")
+    data = request.json or {}
+    context_sources = data.get('context_sources')
+    _update_step_status(session_id, 4, "in_progress", progress_message="Starting Pass 1 generation...")
 
     def _run():
         try:
             from workflow_runner import WorkflowRunner
             runner = WorkflowRunner(session_id, ENGINE)
-            runner.run_pass1()
+            runner.run_pass1(context_sources=context_sources)
         except Exception as e:
             logger.exception("Pass 1 failed for session %s", session_id)
-            _update_step_status(session_id, 5, "failed", error_message=str(e))
+            _update_step_status(session_id, 4, "failed", error_message=str(e))
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     return jsonify({"success": True, "message": "Pass 1 generation started"})
 
 
-@app.route('/api/workflow/<session_id>/step/5/regenerate', methods=['POST'])
-def workflow_step5_regenerate(session_id):
+@app.route('/api/workflow/<session_id>/step/4/regenerate', methods=['POST'])
+def workflow_step4_regenerate(session_id):
     """Regenerate Key Differentiators from feedback."""
     data = request.json or {}
     feedback_text = data.get('feedback', '')
+    context_sources = data.get('context_sources')
 
     # Optionally prepend battlecard review feedback
     if data.get('include_review_feedback'):
@@ -3170,46 +3852,49 @@ def workflow_step5_regenerate(session_id):
             if review_fb:
                 feedback_text = review_fb + "\n\n" + feedback_text
 
-    _update_step_status(session_id, 5, "in_progress", progress_message="Regenerating with feedback...")
+    _update_step_status(session_id, 4, "in_progress", progress_message="Regenerating with feedback...")
 
     def _run():
         try:
             from workflow_runner import WorkflowRunner
             runner = WorkflowRunner(session_id, ENGINE)
-            runner.run_pass1(feedback=feedback_text)
+            runner.run_pass1(feedback=feedback_text, context_sources=context_sources)
         except Exception as e:
             logger.exception("Pass 1 regeneration failed for session %s", session_id)
-            _update_step_status(session_id, 5, "failed", error_message=str(e))
+            _update_step_status(session_id, 4, "failed", error_message=str(e))
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     return jsonify({"success": True, "message": "Regeneration started"})
 
 
-@app.route('/api/workflow/<session_id>/step/6/generate', methods=['POST'])
-def workflow_step6_generate(session_id):
+@app.route('/api/workflow/<session_id>/step/5/generate', methods=['POST'])
+def workflow_step5_generate(session_id):
     """Trigger Pass 2 - Generate Claims."""
-    _update_step_status(session_id, 6, "in_progress", progress_message="Starting Pass 2 generation...")
+    data = request.json or {}
+    context_sources = data.get('context_sources')
+    _update_step_status(session_id, 5, "in_progress", progress_message="Starting Pass 2 generation...")
 
     def _run():
         try:
             from workflow_runner import WorkflowRunner
             runner = WorkflowRunner(session_id, ENGINE)
-            runner.run_pass2()
+            runner.run_pass2(context_sources=context_sources)
         except Exception as e:
             logger.exception("Pass 2 failed for session %s", session_id)
-            _update_step_status(session_id, 6, "failed", error_message=str(e))
+            _update_step_status(session_id, 5, "failed", error_message=str(e))
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     return jsonify({"success": True, "message": "Pass 2 generation started"})
 
 
-@app.route('/api/workflow/<session_id>/step/6/regenerate', methods=['POST'])
-def workflow_step6_regenerate(session_id):
+@app.route('/api/workflow/<session_id>/step/5/regenerate', methods=['POST'])
+def workflow_step5_regenerate(session_id):
     """Trigger Pass 3 - Regenerate claims from feedback."""
     data = request.json or {}
     feedback_text = data.get('feedback', '')
+    context_sources = data.get('context_sources')
 
     # Optionally prepend battlecard review feedback
     if data.get('include_review_feedback'):
@@ -3223,16 +3908,16 @@ def workflow_step6_regenerate(session_id):
             if review_fb:
                 feedback_text = review_fb + "\n\n" + feedback_text
 
-    _update_step_status(session_id, 6, "in_progress", progress_message="Starting Pass 3 regeneration...")
+    _update_step_status(session_id, 5, "in_progress", progress_message="Starting Pass 3 regeneration...")
 
     def _run():
         try:
             from workflow_runner import WorkflowRunner
             runner = WorkflowRunner(session_id, ENGINE)
-            runner.run_pass3(feedback=feedback_text)
+            runner.run_pass3(feedback=feedback_text, context_sources=context_sources)
         except Exception as e:
             logger.exception("Pass 3 failed for session %s", session_id)
-            _update_step_status(session_id, 6, "failed", error_message=str(e))
+            _update_step_status(session_id, 5, "failed", error_message=str(e))
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -3247,10 +3932,123 @@ def workflow_step_approve(session_id, step_number):
     return jsonify({"success": True})
 
 
-@app.route('/api/workflow/<session_id>/step/7/generate', methods=['POST'])
-def workflow_step7_fact_check(session_id):
+@app.route('/api/workflow/<session_id>/step/<int:step_number>/reset-stuck', methods=['POST'])
+def workflow_step_reset_stuck(session_id, step_number):
+    """Reset a stuck step so it can be retried.
+
+    A stuck step is one that's in 'in_progress' status but hasn't received a heartbeat
+    for longer than HEARTBEAT_TIMEOUT_SECONDS. This happens when the worker process
+    crashes or the server restarts.
+    """
+    if step_number < 1 or step_number > 7:
+        return jsonify({"success": False, "error": "Invalid step number"}), 400
+
+    with ENGINE.begin() as conn:
+        # Verify the step is actually stuck (in_progress with old/no heartbeat)
+        row = conn.execute(
+            text(
+                "SELECT status, heartbeat_at, worker_id, "
+                "EXTRACT(EPOCH FROM (NOW() - heartbeat_at)) AS seconds_since_heartbeat "
+                "FROM workflow_steps WHERE session_id::text = :sid AND step_number = :step"
+            ),
+            {"sid": session_id, "step": step_number},
+        ).mappings().first()
+
+        if not row:
+            return jsonify({"success": False, "error": "Step not found"}), 404
+
+        if row["status"] != "in_progress":
+            return jsonify({"success": False, "error": f"Step is {row['status']}, not in_progress"}), 400
+
+        # Check if actually stuck (either no heartbeat, or heartbeat too old)
+        is_stuck = False
+        reason = ""
+        if row["heartbeat_at"] is None:
+            is_stuck = True
+            reason = "No heartbeat recorded"
+        elif row["seconds_since_heartbeat"] and float(row["seconds_since_heartbeat"]) > HEARTBEAT_TIMEOUT_SECONDS:
+            is_stuck = True
+            reason = f"No heartbeat for {int(row['seconds_since_heartbeat'])} seconds"
+
+        if not is_stuck:
+            return jsonify({
+                "success": False,
+                "error": "Step does not appear to be stuck - worker may still be running"
+            }), 400
+
+        # Reset the step to 'ready' so it can be re-triggered
+        conn.execute(
+            text(
+                "UPDATE workflow_steps SET status = 'ready', "
+                "progress_current = 0, progress_total = 0, "
+                "progress_message = :msg, "
+                "error_message = NULL, error_details = NULL, "
+                "heartbeat_at = NULL, worker_id = NULL "
+                "WHERE session_id::text = :sid AND step_number = :step"
+            ),
+            {
+                "sid": session_id,
+                "step": step_number,
+                "msg": f"Reset from stuck state ({reason}). Ready to retry.",
+            },
+        )
+
+    return jsonify({
+        "success": True,
+        "message": f"Step {step_number} reset from stuck state. Click 'Run' to retry."
+    })
+
+
+@app.route('/api/workflow/<session_id>/step/<int:step_number>/reopen', methods=['POST'])
+def workflow_step_reopen(session_id, step_number):
+    """Reopen a completed step for editing. Steps 1-3 go back to 'ready', steps 4-6 go to 'waiting_human'."""
+    if step_number < 1 or step_number > 7:
+        return jsonify({"success": False, "error": "Invalid step number"}), 400
+
+    # Block reopening context steps (1-3) once generation steps (4+) have started
+    if step_number <= 3:
+        with ENGINE.connect() as conn:
+            if _generation_steps_started(conn, session_id):
+                return jsonify({"success": False, "error": "Cannot reopen context steps after generation has started (step 4+)"}), 400
+
+    # Steps 1-3 are input/config steps → reopen to 'ready'
+    # Steps 4-6 are generation/review steps → reopen to 'waiting_human'
+    target_status = "ready" if step_number <= 3 else "waiting_human"
+
+    with ENGINE.begin() as conn:
+        # Verify the step is actually completed
+        row = conn.execute(
+            text("SELECT status FROM workflow_steps WHERE session_id::text = :sid AND step_number = :step"),
+            {"sid": session_id, "step": step_number},
+        ).fetchone()
+        if not row:
+            return jsonify({"success": False, "error": "Step not found"}), 404
+        if row.status != "completed":
+            return jsonify({"success": False, "error": f"Step is {row.status}, not completed"}), 400
+
+        # Reopen the step
+        conn.execute(
+            text("UPDATE workflow_steps SET status = :status, completed_at = NULL WHERE session_id::text = :sid AND step_number = :step"),
+            {"sid": session_id, "step": step_number, "status": target_status},
+        )
+        # Reset any later steps that are 'ready' back to 'pending'
+        conn.execute(
+            text("UPDATE workflow_steps SET status = 'pending' WHERE session_id::text = :sid AND step_number > :step AND status = 'ready'"),
+            {"sid": session_id, "step": step_number},
+        )
+        # Update current step pointer
+        conn.execute(
+            text("UPDATE workflow_sessions SET current_step = :step, updated_at = NOW() WHERE session_id::text = :sid"),
+            {"sid": session_id, "step": step_number},
+        )
+
+    return jsonify({"success": True, "message": f"Step {step_number} reopened for editing"})
+
+
+@app.route('/api/workflow/<session_id>/step/6/generate', methods=['POST'])
+def workflow_step6_fact_check(session_id):
     """Trigger fact checking in a background thread."""
-    _update_step_status(session_id, 7, "in_progress", progress_message="Starting fact checks...")
+    _update_step_status(session_id, 6, "in_progress", progress_message="Starting fact checks...")
 
     def _run():
         try:
@@ -3259,7 +4057,7 @@ def workflow_step7_fact_check(session_id):
             checker.run_fact_checks()
         except Exception as e:
             logger.exception("Fact check failed for session %s", session_id)
-            _update_step_status(session_id, 7, "waiting_human",
+            _update_step_status(session_id, 6, "waiting_human",
                                 error_message=f"Fact check error: {e}")
 
     t = threading.Thread(target=_run, daemon=True)
@@ -3267,30 +4065,30 @@ def workflow_step7_fact_check(session_id):
     return jsonify({"success": True, "message": "Fact checking started"})
 
 
-@app.route('/api/workflow/<session_id>/step/7/approve', methods=['POST'])
-def workflow_step7_approve(session_id):
-    """Approve fact check results and advance to Step 8."""
-    _update_step_status(session_id, 7, "completed")
-    _advance_workflow(session_id, 7)
+@app.route('/api/workflow/<session_id>/step/6/approve', methods=['POST'])
+def workflow_step6_approve(session_id):
+    """Approve fact check results and advance to Step 7."""
+    _update_step_status(session_id, 6, "completed")
+    _advance_workflow(session_id, 6)
     return jsonify({"success": True})
 
 
-@app.route('/api/workflow/<session_id>/step/8/generate', methods=['POST'])
-def workflow_step8_generate(session_id):
+@app.route('/api/workflow/<session_id>/step/7/generate', methods=['POST'])
+def workflow_step7_generate(session_id):
     """Generate Google Slides (stub)."""
-    _update_step_status(session_id, 8, "in_progress", progress_message="Generating slides...")
+    _update_step_status(session_id, 7, "in_progress", progress_message="Generating slides...")
 
     # Stub implementation
     with ENGINE.begin() as conn:
         conn.execute(
             text(
                 "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content) "
-                "VALUES (CAST(:sid AS uuid), 8, 'google_slides_url', 'slides_link', 'https://docs.google.com/presentation/d/placeholder')"
+                "VALUES (CAST(:sid AS uuid), 7, 'google_slides_url', 'slides_link', 'https://docs.google.com/presentation/d/placeholder')"
             ),
             {"sid": session_id},
         )
 
-    _update_step_status(session_id, 8, "completed")
+    _update_step_status(session_id, 7, "completed")
     with ENGINE.begin() as conn:
         conn.execute(
             text("UPDATE workflow_sessions SET status = 'completed', updated_at = NOW() WHERE session_id::text = :sid"),
@@ -3307,6 +4105,7 @@ def _update_step_status(session_id, step_number, status, progress_current=None, 
 
         if status == "in_progress":
             sets.append("started_at = COALESCE(started_at, NOW())")
+            sets.append("heartbeat_at = NOW()")
         if status in ("completed", "failed"):
             sets.append("completed_at = NOW()")
         if progress_current is not None:
@@ -3333,18 +4132,37 @@ def _update_step_status(session_id, step_number, status, progress_current=None, 
 
 
 def _advance_workflow(session_id, completed_step):
-    """Mark next step as ready after completing a step."""
-    next_step = completed_step + 1
-    if next_step > 8:
-        return
+    """Mark next step as ready after completing a step.
+
+    If subsequent steps are already completed (e.g. after editing an earlier step),
+    skip over them and advance the first pending step in the chain.
+    """
     with ENGINE.begin() as conn:
-        conn.execute(
+        # Find all steps after the completed one, ordered
+        rows = conn.execute(
             text(
-                "UPDATE workflow_steps SET status = 'ready' "
-                "WHERE session_id::text = :sid AND step_number = :step AND status = 'pending'"
+                "SELECT step_number, status FROM workflow_steps "
+                "WHERE session_id::text = :sid AND step_number > :step "
+                "ORDER BY step_number"
             ),
-            {"sid": session_id, "step": next_step},
-        )
+            {"sid": session_id, "step": completed_step},
+        ).fetchall()
+
+        for row in rows:
+            if row.status == "completed":
+                # Already completed — skip and keep looking
+                continue
+            if row.status == "pending":
+                # First pending step — mark it ready
+                conn.execute(
+                    text(
+                        "UPDATE workflow_steps SET status = 'ready' "
+                        "WHERE session_id::text = :sid AND step_number = :step AND status = 'pending'"
+                    ),
+                    {"sid": session_id, "step": row.step_number},
+                )
+            # Stop at the first non-completed step (whether we set it to ready or it's in another state)
+            break
 
 
 # =============================================================================
@@ -3359,6 +4177,7 @@ def workflow_step_prompt_preview(session_id, step_number):
         DEFAULT_PASS1_PROMPT, DEFAULT_PASS2_PROMPT,
         load_prompt_template, render_template as render_prompt,
         format_context_xml, load_pass1_template, load_pass2_template,
+        load_directive_template,
     )
 
     # Load session config
@@ -3393,11 +4212,8 @@ def workflow_step_prompt_preview(session_id, step_number):
     diffs_per_category = session["diffs_per_category"]
 
     if step_number == 1:
-        # Step 1: Show the directive generation prompt
-        directive_prompt = ""
-        if os.path.isfile(DEFAULT_DIRECTIVE_PROMPT):
-            with open(DEFAULT_DIRECTIVE_PROMPT) as f:
-                directive_prompt = f.read()
+        # Step 1: Show the directive generation prompt (DB-first)
+        directive_prompt = load_directive_template(engine=ENGINE)
 
         # Get uploaded slides or default
         slides_content = _get_artifact("directive_upload") or ""
@@ -3438,28 +4254,19 @@ def workflow_step_prompt_preview(session_id, step_number):
         })
 
     elif step_number == 3:
-        # Step 3: No prompt — just category selection
+        # Step 3: Classify Product Categories — no LLM prompt
         return jsonify({
             "step": 3,
-            "title": "Choose Product Categories",
-            "description": "This step selects product categories. No LLM prompt is used.",
-            "prompt": "[No LLM prompt — human selection of categories]",
-        })
-
-    elif step_number == 4:
-        # Step 4: Classify categories — no LLM prompt, human classification
-        return jsonify({
-            "step": 4,
-            "title": "Map Products to Categories",
+            "title": "Classify Product Categories",
             "description": "This step lets the user classify each product category as a core product category (gets its own slide), cross-platform capability, or skip.",
             "prompt": "[No LLM prompt — human classification of categories]",
         })
 
-    elif step_number == 5:
-        # Step 5: Pass 1 prompt
+    elif step_number == 4:
+        # Step 4: Pass 1 prompt
         p1_ver = session["pass1_prompt_template_version"]
         try:
-            template_text, template_file = load_pass1_template(p1_ver)
+            template_text, template_file = load_pass1_template(p1_ver, engine=ENGINE)
         except FileNotFoundError:
             return jsonify({"error": f"Pass 1 prompt template V{p1_ver} not found"}), 404
 
@@ -3469,24 +4276,54 @@ def workflow_step_prompt_preview(session_id, step_number):
 
         categories_content = _get_artifact("product_categories") or ""
         categories = [c.strip() for c in categories_content.split("\n") if c.strip()]
-        categories_text = "\n".join(f"- {c}" for c in categories) if categories else "[No categories selected yet]"
-        total_diffs = len(categories) * diffs_per_category
 
-        variables = {
-            "competitor": competitor,
-            "product_area": product_area,
-            "comparison": f"Databricks vs {competitor}",
-            "product_categories": categories_text,
-            "diffs_per_category": str(diffs_per_category),
-            "total_diffs": str(total_diffs),
-            "directives": directive,
-            "context": context,
-        }
+        # Load category classifications for V3+
+        classifications_content = _get_artifact("category_selections")
+        classifications = {}
+        if classifications_content:
+            try:
+                classifications = json.loads(classifications_content)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        core_cats = classifications.get("core_product_categories", [])
+        cross_cats = classifications.get("cross_platform_capabilities", [])
+
+        if p1_ver >= 3 and core_cats:
+            # V3+: separate core and cross-platform category lists
+            core_text = "\n".join(f"- {c}" for c in core_cats)
+            cross_text = "\n".join(f"- {c}" for c in cross_cats) if cross_cats else "_(none selected)_"
+            total_diffs = len(core_cats) * diffs_per_category
+            variables = {
+                "competitor": competitor,
+                "product_area": product_area,
+                "comparison": f"Databricks vs {competitor}",
+                "core_product_categories": core_text,
+                "cross_platform_capabilities": cross_text,
+                "core_category_count": str(len(core_cats)),
+                "diffs_per_category": str(diffs_per_category),
+                "total_diffs": str(total_diffs),
+                "directives": directive,
+                "context": context,
+            }
+        else:
+            # V1/V2: flat list of all categories
+            categories_text = "\n".join(f"- {c}" for c in categories) if categories else "[No categories selected yet]"
+            total_diffs = len(categories) * diffs_per_category
+            variables = {
+                "competitor": competitor,
+                "product_area": product_area,
+                "comparison": f"Databricks vs {competitor}",
+                "product_categories": categories_text,
+                "diffs_per_category": str(diffs_per_category),
+                "total_diffs": str(total_diffs),
+                "directives": directive,
+                "context": context,
+            }
 
         rendered = render_prompt(template_text, **variables)
 
         return jsonify({
-            "step": 5,
+            "step": 4,
             "title": f"Pass 1: Generate Key Differentiators (V{p1_ver})",
             "template_file": template_file,
             "model": model_name,
@@ -3495,11 +4332,11 @@ def workflow_step_prompt_preview(session_id, step_number):
             "prompt": rendered,
         })
 
-    elif step_number == 6:
-        # Step 6: Pass 2 prompt (show for the first skeleton as example)
+    elif step_number == 5:
+        # Step 5: Pass 2 prompt (show for the first skeleton as example)
         p2_ver = session["pass2_prompt_template_version"]
         try:
-            template_text = load_pass2_template(p2_ver)
+            template_text = load_pass2_template(p2_ver, engine=ENGINE)
         except FileNotFoundError:
             return jsonify({"error": f"Prompt template V{p2_ver} not found"}), 404
 
@@ -3539,7 +4376,7 @@ def workflow_step_prompt_preview(session_id, step_number):
         ver_label = PASS2_PROMPT_TEMPLATES.get(p2_ver, {}).get("label", f"V{p2_ver}")
 
         return jsonify({
-            "step": 6,
+            "step": 5,
             "title": f"Pass 2: Generate Claims — {ver_label}",
             "template_file": f"pass2_template_v{p2_ver}",
             "model": model_name,
@@ -3550,135 +4387,23 @@ def workflow_step_prompt_preview(session_id, step_number):
             "note": "This prompt is rendered for the first skeleton only. Each skeleton gets its own prompt.",
         })
 
-    elif step_number == 7:
+    elif step_number == 6:
         return jsonify({
-            "step": 7,
+            "step": 6,
             "title": "Fact Check Claims",
             "description": "Uses Exa web search to verify each claim, then an LLM judge to evaluate verdicts.",
             "prompt": "[Exa search + LLM judge — queries constructed from claim text]",
         })
 
-    elif step_number == 8:
+    elif step_number == 7:
         return jsonify({
-            "step": 8,
+            "step": 7,
             "title": "Generate Google Slides",
             "description": "This step generates Google Slides from the approved claims.",
             "prompt": "[Slides generation — not yet implemented with LLM]",
         })
 
     return jsonify({"error": "Unknown step"}), 400
-
-
-# =============================================================================
-# Competitor description generation (streaming SSE)
-# =============================================================================
-
-
-@app.route('/api/generate-competitor-description', methods=['POST'])
-def generate_competitor_description():
-    """Generate a competitor description using Databricks Model Serving API with streaming."""
-    from flask import Response, stream_with_context
-
-    data = request.json
-    competitor_id = data.get('competitor_id')
-    competitor_name = data.get('competitor_name')
-
-    if not competitor_id or not competitor_name:
-        return jsonify({"error": "Missing competitor_id or competitor_name"}), 400
-
-    # Get token from WorkspaceClient (works both locally and in Databricks Apps)
-    databricks_host = os.environ.get("DATABRICKS_HOST", "")
-    databricks_token = os.environ.get("DATABRICKS_TOKEN")
-
-    if not databricks_token and _WORKSPACE_CLIENT:
-        try:
-            databricks_token = _WORKSPACE_CLIENT.config.oauth_token().access_token
-            if not databricks_host:
-                databricks_host = _WORKSPACE_CLIENT.config.host
-        except Exception:
-            pass
-
-    if not databricks_token:
-        return jsonify({
-            "error": "No Databricks access token available. Ensure WorkspaceClient is configured or set DATABRICKS_TOKEN.",
-            "prompt": None,
-            "response": None,
-            "duration_ms": 0
-        }), 500
-
-    # Build the prompt - focused on company strategy, ICP, buyers, and user personas
-    prompt = f"""You are a competitive intelligence analyst. Provide a brief overview of {competitor_name} as a company competing in the data and AI market.
-
-Focus ONLY on:
-
-## Company Profile
-One paragraph on company background, size, and market position.
-
-## Go-to-Market Strategy
-How do they sell? What's their current GTM motion (product-led, sales-led, partner-led)? Key channels and approach.
-
-## Key Buyers & Decision Makers
-Who signs the check? List the typical **executive sponsors** and **budget holders** (e.g., **CTO**, **CDO**, **VP of Data**, **VP of Engineering**). What are their priorities and buying criteria?
-
-## User Personas
-Who actually uses the product day-to-day? List the **hands-on practitioners** (e.g., **Data Engineers**, **Data Scientists**, **ML Engineers**, **Data Analysts**, **Platform Engineers**). What problems are they solving?
-
-## Ideal Customer Profile (ICP)
-Target company size, industry verticals, and typical use cases.
-
-Keep it concise - 2-3 sentences per section maximum. Do NOT list their products or features."""
-
-    def generate():
-        try:
-            from openai import OpenAI
-
-            # Send prompt first
-            yield f"data: {json.dumps({'type': 'prompt', 'content': prompt})}\n\n"
-
-            # Initialize Databricks Model Serving client
-            client = OpenAI(
-                api_key=databricks_token,
-                base_url=databricks_host.rstrip("/") + "/serving-endpoints"
-            )
-
-            start_time = time.time()
-
-            # Call Claude Haiku 4.5 via Databricks with streaming
-            stream = client.chat.completions.create(
-                model="databricks-claude-haiku-4-5",
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=1024,
-                stream=True
-            )
-
-            # Stream chunks
-            for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
-                    yield f"data: {json.dumps({'type': 'chunk', 'content': content})}\n\n"
-
-            end_time = time.time()
-            duration_ms = int((end_time - start_time) * 1000)
-
-            # Send completion message with timing
-            yield f"data: {json.dumps({'type': 'done', 'duration_ms': duration_ms, 'model': 'databricks-claude-haiku-4-5'})}\n\n"
-
-        except ImportError:
-            yield f"data: {json.dumps({'type': 'error', 'content': 'openai package not installed. Run: pip install openai'})}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
-
-    return Response(
-        stream_with_context(generate()),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'X-Accel-Buffering': 'no'
-        }
-    )
 
 
 # =============================================================================
@@ -3732,6 +4457,580 @@ def match_fact_checks_to_citations(content, fact_checks):
 
 
 # =============================================================================
+# Admin: Product Category & Mappings Management
+# =============================================================================
+
+
+@app.route('/admin/categories')
+def admin_categories():
+    """Admin page for managing product categories and mappings."""
+    with ENGINE.begin() as conn:
+        categories = [
+            dict(r) for r in conn.execute(
+                text(
+                    "SELECT catalog_id, category_name, category_description, "
+                    "is_core_product_category, is_cross_platform_capability, display_order "
+                    "FROM product_category_catalog ORDER BY display_order"
+                )
+            ).mappings().all()
+        ]
+        mappings = [
+            dict(r) for r in conn.execute(
+                text(
+                    "SELECT mapping_id, catalog_id, vendor, competitor_name, "
+                    "product_name, product_description, display_order "
+                    "FROM product_mappings ORDER BY catalog_id, vendor, display_order"
+                )
+            ).mappings().all()
+        ]
+    return render_template(
+        'admin_categories.html',
+        categories=categories,
+        mappings=mappings,
+    )
+
+
+@app.route('/api/admin/categories', methods=['POST'])
+def create_category():
+    """Create a new product category."""
+    data = request.json
+    name = data.get('name', '').strip()
+    description = data.get('description', '').strip()
+    is_core = bool(data.get('is_core', False))
+    is_cross_platform = bool(data.get('is_cross_platform', False))
+
+    if not name:
+        return jsonify({"error": "Category name is required"}), 400
+
+    with ENGINE.begin() as conn:
+        max_order = conn.execute(
+            text("SELECT COALESCE(MAX(display_order), -1) FROM product_category_catalog")
+        ).scalar()
+        catalog_id = conn.execute(
+            text(
+                "INSERT INTO product_category_catalog "
+                "(category_name, category_description, is_core_product_category, "
+                "is_cross_platform_capability, display_order) "
+                "VALUES (:name, :desc, :is_core, :is_cross, :ord) "
+                "RETURNING catalog_id"
+            ),
+            {
+                "name": name,
+                "desc": description,
+                "is_core": is_core,
+                "is_cross": is_cross_platform,
+                "ord": max_order + 1,
+            },
+        ).scalar()
+
+    return jsonify({"success": True, "catalog_id": catalog_id})
+
+
+@app.route('/api/admin/categories/<int:catalog_id>', methods=['PUT'])
+def update_category(catalog_id):
+    """Update an existing product category."""
+    data = request.json
+    name = data.get('name', '').strip()
+    description = data.get('description', '').strip()
+    is_core = bool(data.get('is_core', False))
+    is_cross_platform = bool(data.get('is_cross_platform', False))
+
+    if not name:
+        return jsonify({"error": "Category name is required"}), 400
+
+    with ENGINE.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE product_category_catalog SET "
+                "category_name = :name, category_description = :desc, "
+                "is_core_product_category = :is_core, "
+                "is_cross_platform_capability = :is_cross "
+                "WHERE catalog_id = :cid"
+            ),
+            {
+                "cid": catalog_id,
+                "name": name,
+                "desc": description,
+                "is_core": is_core,
+                "is_cross": is_cross_platform,
+            },
+        )
+
+    return jsonify({"success": True})
+
+
+@app.route('/api/admin/categories/<int:catalog_id>', methods=['DELETE'])
+def delete_category(catalog_id):
+    """Delete a product category and its related data."""
+    with ENGINE.begin() as conn:
+        # Delete related session_category_selections first
+        conn.execute(
+            text("DELETE FROM session_category_selections WHERE catalog_id = :cid"),
+            {"cid": catalog_id},
+        )
+        # Delete related product_mappings
+        conn.execute(
+            text("DELETE FROM product_mappings WHERE catalog_id = :cid"),
+            {"cid": catalog_id},
+        )
+        # Delete the category itself
+        conn.execute(
+            text("DELETE FROM product_category_catalog WHERE catalog_id = :cid"),
+            {"cid": catalog_id},
+        )
+
+    return jsonify({"success": True})
+
+
+@app.route('/api/admin/categories/reorder', methods=['POST'])
+def reorder_categories():
+    """Reorder product categories."""
+    data = request.json
+    order = data.get('order', [])
+
+    if not order:
+        return jsonify({"error": "Order list is required"}), 400
+
+    with ENGINE.begin() as conn:
+        for idx, catalog_id in enumerate(order):
+            conn.execute(
+                text(
+                    "UPDATE product_category_catalog SET display_order = :ord "
+                    "WHERE catalog_id = :cid"
+                ),
+                {"ord": idx, "cid": catalog_id},
+            )
+
+    return jsonify({"success": True})
+
+
+@app.route('/api/admin/mappings', methods=['POST'])
+def create_mapping():
+    """Create a new product mapping."""
+    data = request.json
+    catalog_id = data.get('catalog_id')
+    vendor = data.get('vendor', '').strip()
+    competitor_name = data.get('competitor_name', '').strip() or None
+    product_name = data.get('product_name', '').strip()
+    product_description = data.get('product_description', '').strip()
+
+    if not catalog_id or not vendor or not product_name:
+        return jsonify({"error": "catalog_id, vendor, and product_name are required"}), 400
+
+    if vendor not in ('databricks', 'competitor'):
+        return jsonify({"error": "vendor must be 'databricks' or 'competitor'"}), 400
+
+    if vendor == 'competitor' and not competitor_name:
+        return jsonify({"error": "competitor_name is required for competitor mappings"}), 400
+
+    if vendor == 'databricks':
+        competitor_name = None
+
+    with ENGINE.begin() as conn:
+        max_order = conn.execute(
+            text(
+                "SELECT COALESCE(MAX(display_order), -1) FROM product_mappings "
+                "WHERE catalog_id = :cid AND vendor = :v"
+            ),
+            {"cid": catalog_id, "v": vendor},
+        ).scalar()
+        mapping_id = conn.execute(
+            text(
+                "INSERT INTO product_mappings "
+                "(catalog_id, vendor, competitor_name, product_name, product_description, display_order) "
+                "VALUES (:cid, :vendor, :comp, :pname, :pdesc, :ord) "
+                "RETURNING mapping_id"
+            ),
+            {
+                "cid": catalog_id,
+                "vendor": vendor,
+                "comp": competitor_name,
+                "pname": product_name,
+                "pdesc": product_description,
+                "ord": max_order + 1,
+            },
+        ).scalar()
+
+    return jsonify({"success": True, "mapping_id": mapping_id})
+
+
+@app.route('/api/admin/mappings/<int:mapping_id>', methods=['PUT'])
+def update_mapping(mapping_id):
+    """Update an existing product mapping."""
+    data = request.json
+    product_name = data.get('product_name', '').strip()
+    product_description = data.get('product_description', '').strip()
+
+    if not product_name:
+        return jsonify({"error": "product_name is required"}), 400
+
+    with ENGINE.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE product_mappings SET "
+                "product_name = :pname, product_description = :pdesc, "
+                "updated_at = CURRENT_TIMESTAMP "
+                "WHERE mapping_id = :mid"
+            ),
+            {
+                "mid": mapping_id,
+                "pname": product_name,
+                "pdesc": product_description,
+            },
+        )
+
+    return jsonify({"success": True})
+
+
+@app.route('/api/admin/mappings/<int:mapping_id>', methods=['DELETE'])
+def delete_mapping(mapping_id):
+    """Delete a product mapping."""
+    with ENGINE.begin() as conn:
+        conn.execute(
+            text("DELETE FROM product_mappings WHERE mapping_id = :mid"),
+            {"mid": mapping_id},
+        )
+
+    return jsonify({"success": True})
+
+
+# =============================================================================
+# Prompt Template Admin
+# =============================================================================
+
+
+@app.route('/admin/prompts')
+def admin_prompts():
+    """Admin page for managing prompt templates."""
+    with ENGINE.begin() as conn:
+        templates = [
+            dict(r) for r in conn.execute(
+                text(
+                    "SELECT template_id, template_name, template_type, version_label, "
+                    "description, LENGTH(template_text) AS char_count, variables, "
+                    "is_active, is_default, display_order, created_at, updated_at "
+                    "FROM prompt_templates ORDER BY template_type, display_order"
+                )
+            ).mappings().all()
+        ]
+    # Compute var_count from variables JSON
+    for t in templates:
+        try:
+            t["var_count"] = len(json.loads(t["variables"])) if t.get("variables") else 0
+        except (json.JSONDecodeError, TypeError):
+            t["var_count"] = 0
+
+    with ENGINE.begin() as conn:
+        # Fetch recent workflow sessions for test panel
+        sessions = [
+            dict(r) for r in conn.execute(
+                text(
+                    "SELECT session_id::text AS session_id, competitor_name, product_area, "
+                    "status, created_at "
+                    "FROM workflow_sessions ORDER BY created_at DESC LIMIT 20"
+                )
+            ).mappings().all()
+        ]
+    return render_template(
+        'admin_prompts.html',
+        templates=templates,
+        sessions=sessions,
+    )
+
+
+@app.route('/api/admin/prompts')
+def api_list_prompts():
+    """List all prompt templates."""
+    with ENGINE.begin() as conn:
+        templates = [
+            dict(r) for r in conn.execute(
+                text(
+                    "SELECT template_id, template_name, template_type, version_label, "
+                    "description, LENGTH(template_text) AS char_count, variables, "
+                    "is_active, is_default, display_order, created_at, updated_at "
+                    "FROM prompt_templates ORDER BY template_type, display_order"
+                )
+            ).mappings().all()
+        ]
+    # Serialize datetimes
+    for t in templates:
+        for k in ("created_at", "updated_at"):
+            if t.get(k):
+                t[k] = str(t[k])
+    return jsonify({"templates": templates})
+
+
+@app.route('/api/admin/prompts/<int:template_id>')
+def api_get_prompt(template_id):
+    """Get a single prompt template with full text."""
+    with ENGINE.begin() as conn:
+        row = conn.execute(
+            text(
+                "SELECT template_id, template_name, template_type, version_label, "
+                "description, template_text, variables, is_active, is_default, "
+                "display_order, created_at, updated_at "
+                "FROM prompt_templates WHERE template_id = :tid"
+            ),
+            {"tid": template_id},
+        ).mappings().first()
+    if not row:
+        return jsonify({"error": "Template not found"}), 404
+    result = dict(row)
+    for k in ("created_at", "updated_at"):
+        if result.get(k):
+            result[k] = str(result[k])
+    return jsonify(result)
+
+
+@app.route('/api/admin/prompts', methods=['POST'])
+def api_create_prompt():
+    """Create a new prompt template."""
+    import re
+    data = request.json
+    name = data.get('template_name', '').strip()
+    ttype = data.get('template_type', '').strip()
+    template_text = data.get('template_text', '')
+
+    if not name or not ttype or not template_text:
+        return jsonify({"error": "template_name, template_type, and template_text are required"}), 400
+
+    if ttype not in ('pass1', 'pass2', 'directive'):
+        return jsonify({"error": "template_type must be 'pass1', 'pass2', or 'directive'"}), 400
+
+    # Auto-extract variables
+    variables = sorted(set(re.findall(r'\{\{(\w+)\}\}', template_text)))
+
+    with ENGINE.begin() as conn:
+        # Determine next display_order for this type
+        max_order = conn.execute(
+            text("SELECT COALESCE(MAX(display_order), 0) FROM prompt_templates WHERE template_type = :ttype"),
+            {"ttype": ttype},
+        ).scalar()
+
+        is_default = bool(data.get('is_default', False))
+        if is_default:
+            conn.execute(
+                text("UPDATE prompt_templates SET is_default = FALSE WHERE template_type = :ttype"),
+                {"ttype": ttype},
+            )
+
+        tid = conn.execute(
+            text(
+                "INSERT INTO prompt_templates "
+                "(template_name, template_type, version_label, description, template_text, "
+                "variables, is_active, is_default, display_order) "
+                "VALUES (:name, :ttype, :label, :desc, :text, :vars, :active, :default, :order) "
+                "RETURNING template_id"
+            ),
+            {
+                "name": name,
+                "ttype": ttype,
+                "label": data.get('version_label', ''),
+                "desc": data.get('description', ''),
+                "text": template_text,
+                "vars": json.dumps(variables),
+                "active": bool(data.get('is_active', True)),
+                "default": is_default,
+                "order": int(max_order) + 1,
+            },
+        ).scalar()
+
+    return jsonify({"success": True, "template_id": tid})
+
+
+@app.route('/api/admin/prompts/<int:template_id>', methods=['PUT'])
+def api_update_prompt(template_id):
+    """Update an existing prompt template."""
+    import re
+    data = request.json
+
+    with ENGINE.begin() as conn:
+        existing = conn.execute(
+            text("SELECT template_type FROM prompt_templates WHERE template_id = :tid"),
+            {"tid": template_id},
+        ).mappings().first()
+        if not existing:
+            return jsonify({"error": "Template not found"}), 404
+
+        ttype = existing["template_type"]
+
+        sets = ["updated_at = NOW()"]
+        params = {"tid": template_id}
+
+        if "template_name" in data:
+            sets.append("template_name = :name")
+            params["name"] = data["template_name"].strip()
+        if "version_label" in data:
+            sets.append("version_label = :label")
+            params["label"] = data["version_label"]
+        if "description" in data:
+            sets.append("description = :desc")
+            params["desc"] = data["description"]
+        if "template_text" in data:
+            sets.append("template_text = :text")
+            params["text"] = data["template_text"]
+            # Auto-update variables
+            variables = sorted(set(re.findall(r'\{\{(\w+)\}\}', data["template_text"])))
+            sets.append("variables = :vars")
+            params["vars"] = json.dumps(variables)
+        if "is_active" in data:
+            sets.append("is_active = :active")
+            params["active"] = bool(data["is_active"])
+        if "display_order" in data:
+            sets.append("display_order = :order")
+            params["order"] = int(data["display_order"])
+        if "is_default" in data and data["is_default"]:
+            # Enforce exclusivity: only one default per type
+            conn.execute(
+                text("UPDATE prompt_templates SET is_default = FALSE WHERE template_type = :ttype"),
+                {"ttype": ttype},
+            )
+            sets.append("is_default = TRUE")
+        elif "is_default" in data:
+            sets.append("is_default = FALSE")
+
+        conn.execute(
+            text(f"UPDATE prompt_templates SET {', '.join(sets)} WHERE template_id = :tid"),
+            params,
+        )
+
+    return jsonify({"success": True})
+
+
+@app.route('/api/admin/prompts/<int:template_id>', methods=['DELETE'])
+def api_delete_prompt(template_id):
+    """Delete a prompt template."""
+    with ENGINE.begin() as conn:
+        conn.execute(
+            text("DELETE FROM prompt_templates WHERE template_id = :tid"),
+            {"tid": template_id},
+        )
+    return jsonify({"success": True})
+
+
+@app.route('/api/admin/prompts/<int:template_id>/test', methods=['POST'])
+def api_test_prompt(template_id):
+    """Render a prompt template with real session data for testing."""
+    from workflow_runner import render_template as render_prompt, format_context_xml
+
+    data = request.json or {}
+    session_id = data.get('session_id')
+
+    with ENGINE.begin() as conn:
+        tpl = conn.execute(
+            text("SELECT template_text, template_type, variables FROM prompt_templates WHERE template_id = :tid"),
+            {"tid": template_id},
+        ).mappings().first()
+        if not tpl:
+            return jsonify({"error": "Template not found"}), 404
+
+    template_text = tpl["template_text"]
+    template_type = tpl["template_type"]
+    variables_json = tpl["variables"]
+    variables_list = json.loads(variables_json) if variables_json else []
+
+    # Build variables from session data (if session_id provided)
+    variables = {}
+    if session_id:
+        with ENGINE.begin() as conn:
+            session = conn.execute(
+                text(
+                    "SELECT competitor_name, product_area, model_name, diffs_per_category "
+                    "FROM workflow_sessions WHERE session_id::text = :sid"
+                ),
+                {"sid": session_id},
+            ).mappings().first()
+
+        if session:
+            competitor = session["competitor_name"]
+            product_area = session["product_area"]
+            variables["competitor"] = competitor
+            variables["product_area"] = product_area
+            variables["comparison"] = f"Databricks vs {competitor}"
+            variables["diffs_per_category"] = str(session["diffs_per_category"])
+
+            # Load artifacts
+            def _get_art(atype):
+                with ENGINE.begin() as conn:
+                    return conn.execute(
+                        text(
+                            "SELECT artifact_content FROM workflow_artifacts "
+                            "WHERE session_id::text = :sid AND artifact_type = :atype "
+                            "ORDER BY created_at DESC LIMIT 1"
+                        ),
+                        {"sid": session_id, "atype": atype},
+                    ).scalar()
+
+            directive = _get_art("directive_generated") or ""
+            old_battlecard = _get_art("old_battlecard_extracted") or ""
+            context = format_context_xml(directive, old_battlecard, competitor)
+
+            variables["directives"] = directive
+            variables["context"] = context
+
+            if template_type == "pass1":
+                cats_content = _get_art("product_categories") or ""
+                categories = [c.strip() for c in cats_content.split("\n") if c.strip()]
+                variables["product_categories"] = "\n".join(f"- {c}" for c in categories)
+                variables["total_diffs"] = str(len(categories) * session["diffs_per_category"])
+                # V3+ fields
+                classifications_content = _get_art("category_selections")
+                if classifications_content:
+                    try:
+                        cls_data = json.loads(classifications_content)
+                        core_cats = cls_data.get("core_product_categories", [])
+                        cross_cats = cls_data.get("cross_platform_capabilities", [])
+                        variables["core_product_categories"] = "\n".join(f"- {c}" for c in core_cats)
+                        variables["cross_platform_capabilities"] = "\n".join(f"- {c}" for c in cross_cats) if cross_cats else "_(none)_"
+                        variables["core_category_count"] = str(len(core_cats))
+                        variables["total_diffs"] = str(len(core_cats) * session["diffs_per_category"])
+                        # V4 per-category fields
+                        if core_cats:
+                            variables["target_category"] = core_cats[0]
+                            variables["other_core_categories"] = "\n".join(f"- {c}" for c in core_cats[1:]) if len(core_cats) > 1 else "_(none)_"
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            elif template_type == "pass2":
+                skeletons_json = _get_art("pass1_skeletons")
+                if skeletons_json:
+                    try:
+                        skeletons = json.loads(skeletons_json)
+                        if skeletons:
+                            first = skeletons[0]
+                            variables["category"] = first.get("category", "")
+                            variables["key_differentiator"] = first.get("key_differentiator", "")
+                            variables["description"] = first.get("description", "")
+                            variables["databricks_rating"] = first.get("databricks_rating", "")
+                            variables["competitor_rating"] = first.get("competitor_rating", "")
+                            variables["selection_reasoning"] = first.get("selection_reasoning", "")
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+    # Fill in any missing variables with placeholders
+    for var in variables_list:
+        if var not in variables:
+            variables[var] = f"[{var}]"
+
+    rendered = render_prompt(template_text, **variables)
+
+    # Token count estimate
+    token_count = 0
+    try:
+        enc = tiktoken.get_encoding("cl100k_base")
+        token_count = len(enc.encode(rendered))
+    except Exception:
+        token_count = len(rendered) // 4
+
+    return jsonify({
+        "rendered_prompt": rendered,
+        "variables": variables,
+        "token_count": token_count,
+        "char_count": len(rendered),
+    })
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -3743,7 +5042,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description="Postgres Battlecard Review App")
-    parser.add_argument("--port", type=int, default=5013, help="Port to run on")
+    parser.add_argument("--port", type=int, default=int(os.getenv("APP_PORT", "8000")), help="Port to run on")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     args = parser.parse_args()
 

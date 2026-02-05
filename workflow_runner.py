@@ -47,6 +47,7 @@ _CITATION_ITEM_SCHEMA = {
     "type": "object",
     "properties": {
         "citation_id": {"type": "string"},
+        "detail_item_index": {"type": "integer"},
         "start_index": {"type": "integer"},
         "end_index": {"type": "integer"},
         "source_index": {"type": "integer"},
@@ -56,7 +57,7 @@ _CITATION_ITEM_SCHEMA = {
         "verdict_rationale": {"type": "string"},
     },
     "required": [
-        "citation_id", "start_index", "end_index",
+        "citation_id", "detail_item_index", "start_index", "end_index",
         "source_index", "source_quote", "verdict",
         "confidence", "verdict_rationale",
     ],
@@ -131,10 +132,16 @@ L200_PASS2_JSON_SCHEMA = {
         "type": "object",
         "properties": {
             "databricks_headline": {"type": "string"},
-            "databricks_details": {"type": "string"},
+            "databricks_details": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
             "databricks_reasoning": {"type": "string"},
             "competitor_headline": {"type": "string"},
-            "competitor_details": {"type": "string"},
+            "competitor_details": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
             "competitor_reasoning": {"type": "string"},
             "citations": {
                 "type": "object",
@@ -180,10 +187,16 @@ L200_PASS3_JSON_SCHEMA = {
             "rank_reasoning": {"type": "string"},
             "directive_alignment": {"type": "string"},
             "databricks_headline": {"type": "string"},
-            "databricks_details": {"type": "string"},
+            "databricks_details": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
             "databricks_reasoning": {"type": "string"},
             "competitor_headline": {"type": "string"},
-            "competitor_details": {"type": "string"},
+            "competitor_details": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
             "competitor_reasoning": {"type": "string"},
             "citations": _CITATIONS_SCHEMA,
             "sources": {"type": "array", "items": _SOURCE_ITEM_SCHEMA},
@@ -267,14 +280,82 @@ def render_template(template: str, **kwargs) -> str:
     return result
 
 
-def load_pass1_template(version: int) -> tuple[str, str]:
+def load_template_from_db(engine, template_type: str, display_order: int):
+    """Load a prompt template from the DB by type and display_order.
+
+    Returns (template_text, template_name) or None if not found / inactive.
+    """
+    if engine is None:
+        return None
+    try:
+        with engine.begin() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT template_text, template_name FROM prompt_templates "
+                    "WHERE template_type = :ttype AND display_order = :dorder AND is_active = TRUE "
+                    "LIMIT 1"
+                ),
+                {"ttype": template_type, "dorder": display_order},
+            ).mappings().first()
+        if row:
+            return row["template_text"], row["template_name"]
+    except Exception as e:
+        logger.warning("Failed to load template from DB (type=%s, order=%d): %s", template_type, display_order, e)
+    return None
+
+
+def load_directive_template(engine=None) -> str:
+    """Load the directive generation prompt template.
+
+    Tries DB first, then filesystem, then hardcoded fallback.
+    """
+    # Try DB first
+    if engine:
+        try:
+            with engine.begin() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT template_text FROM prompt_templates "
+                        "WHERE template_type = 'directive' AND is_default = TRUE AND is_active = TRUE "
+                        "LIMIT 1"
+                    ),
+                ).scalar()
+            if row:
+                return row
+        except Exception as e:
+            logger.warning("Failed to load directive template from DB: %s", e)
+
+    # Filesystem fallback
+    try:
+        from app import DEFAULT_DIRECTIVE_PROMPT as directive_path
+        if os.path.isfile(directive_path):
+            return load_prompt_template(directive_path)
+    except (ImportError, FileNotFoundError):
+        pass
+
+    # Hardcoded fallback
+    return (
+        "Read the following slides content about competing against {{competitor}}.\n\n"
+        "Parse and create a max 10 to 25 bullets on how we (Databricks compete team) should "
+        "take what has been taught to AE account executives and SAs on how to compete against {{competitor}}.\n\n"
+        "Extract this directive as max 10 to 25 bullets that will be used to create an internal battlecard.\n\n"
+        "Write the directive in markdown format."
+    )
+
+
+def load_pass1_template(version: int, engine=None) -> tuple[str, str]:
     """Load the Pass 1 prompt template for the given version.
 
     Returns (template_text, file_path) tuple.
-    V1 = original file on disk (DEFAULT_PASS1_PROMPT).
-    V2+ = loaded at runtime from app.PASS1_PROMPT_TEMPLATES.
-    Falls back to V1 file if version not found.
+    Tries DB first (by display_order == version), then falls back to
+    filesystem / inline templates.
     """
+    # Try DB first
+    result = load_template_from_db(engine, "pass1", version)
+    if result:
+        return result
+
+    # Filesystem / inline fallback
     if version == 1:
         return load_prompt_template(DEFAULT_PASS1_PROMPT), DEFAULT_PASS1_PROMPT
     try:
@@ -291,13 +372,18 @@ def load_pass1_template(version: int) -> tuple[str, str]:
     return load_prompt_template(DEFAULT_PASS1_PROMPT), DEFAULT_PASS1_PROMPT
 
 
-def load_pass2_template(version: int) -> str:
+def load_pass2_template(version: int, engine=None) -> str:
     """Load the Pass 2 prompt template for the given version.
 
-    V1 = original file on disk (DEFAULT_PASS2_PROMPT).
-    V2+ = loaded at runtime from app.PASS2_PROMPT_TEMPLATES (inline template string).
-    Falls back to V1 file if version not found.
+    Tries DB first (by display_order == version), then falls back to
+    filesystem / inline templates.
     """
+    # Try DB first
+    result = load_template_from_db(engine, "pass2", version)
+    if result:
+        return result[0]  # Only return template_text
+
+    # Filesystem / inline fallback
     if version == 1:
         return load_prompt_template(DEFAULT_PASS2_PROMPT)
     try:
@@ -315,8 +401,9 @@ def load_pass2_template(version: int) -> str:
     return load_prompt_template(DEFAULT_PASS2_PROMPT)
 
 
-def format_context_xml(directive: str, old_battlecard: str, competitor: str) -> str:
-    """Wrap directive + old battlecard content in XML tags for the prompt."""
+def format_context_xml(directive: str, old_battlecard: str, competitor: str,
+                       review_feedback: str = "", fact_check_results: str = "") -> str:
+    """Wrap directive + old battlecard + optional review/fact-check content in XML tags for the prompt."""
     parts = []
     if directive:
         parts.append(
@@ -329,6 +416,18 @@ def format_context_xml(directive: str, old_battlecard: str, competitor: str) -> 
             f'<battlecard_archive name="previous_battlecard" doc_type="battlecard_archive" source="human_provided" scope="{competitor}">\n'
             f'{old_battlecard}\n'
             f'</battlecard_archive>'
+        )
+    if review_feedback:
+        parts.append(
+            f'<previous_version_reviews name="review_feedback" doc_type="review_feedback" source="human_reviews">\n'
+            f'{review_feedback}\n'
+            f'</previous_version_reviews>'
+        )
+    if fact_check_results:
+        parts.append(
+            f'<previous_version_fact_checks name="fact_check_results" doc_type="fact_check_results" source="automated_fact_check">\n'
+            f'{fact_check_results}\n'
+            f'</previous_version_fact_checks>'
         )
     return "\n\n".join(parts) if parts else "No additional context provided."
 
@@ -383,9 +482,22 @@ def ensure_prompt_version(engine, prompt_name: str, prompt_file: str, prompt_tex
 class WorkflowRunner:
     """Manages a single workflow session's generation passes."""
 
+    # Unique worker ID for this runner instance (process + thread + time)
+    _worker_id = None
+
+    @classmethod
+    def _get_worker_id(cls):
+        """Generate a unique worker ID for heartbeat tracking."""
+        if cls._worker_id is None:
+            import threading
+            import uuid
+            cls._worker_id = f"{os.getpid()}-{threading.current_thread().ident}-{uuid.uuid4().hex[:8]}"
+        return cls._worker_id
+
     def __init__(self, session_id: str, engine):
         self.session_id = session_id
         self.engine = engine
+        self.worker_id = self._get_worker_id()
         self._load_session()
         self.client = get_openai_client()
 
@@ -419,10 +531,11 @@ class WorkflowRunner:
     def _update_step(self, step_number, status, **kwargs):
         """Update step status in the database."""
         with self.engine.begin() as conn:
-            sets = ["status = :status"]
-            params = {"sid": self.session_id, "step": step_number, "status": status}
+            sets = ["status = :status", "heartbeat_at = NOW()"]
+            params = {"sid": self.session_id, "step": step_number, "status": status, "wid": self.worker_id}
             if status == "in_progress":
                 sets.append("started_at = COALESCE(started_at, NOW())")
+                sets.append("worker_id = :wid")
             if status in ("completed", "failed"):
                 sets.append("completed_at = NOW()")
             if "progress_current" in kwargs:
@@ -440,6 +553,11 @@ class WorkflowRunner:
             if "error_details" in kwargs:
                 sets.append("error_details = CAST(:ed AS jsonb)")
                 params["ed"] = json.dumps(kwargs["error_details"])
+            # Track last_error and increment error_count
+            if "last_error" in kwargs:
+                sets.append("last_error = :le")
+                params["le"] = kwargs["last_error"]
+                sets.append("error_count = COALESCE(error_count, 0) + 1")
 
             conn.execute(
                 text(f"UPDATE workflow_steps SET {', '.join(sets)} WHERE session_id::text = :sid AND step_number = :step"),
@@ -448,6 +566,25 @@ class WorkflowRunner:
             conn.execute(
                 text("UPDATE workflow_sessions SET current_step = :step, updated_at = NOW() WHERE session_id::text = :sid"),
                 {"sid": self.session_id, "step": step_number},
+            )
+
+    def _send_heartbeat(self, step_number, progress_message=None, progress_current=None, progress_total=None):
+        """Send a heartbeat update without changing status."""
+        with self.engine.begin() as conn:
+            sets = ["heartbeat_at = NOW()"]
+            params = {"sid": self.session_id, "step": step_number, "wid": self.worker_id}
+            if progress_message is not None:
+                sets.append("progress_message = :pm")
+                params["pm"] = progress_message
+            if progress_current is not None:
+                sets.append("progress_current = :pc")
+                params["pc"] = progress_current
+            if progress_total is not None:
+                sets.append("progress_total = :pt")
+                params["pt"] = progress_total
+            conn.execute(
+                text(f"UPDATE workflow_steps SET {', '.join(sets)} WHERE session_id::text = :sid AND step_number = :step AND worker_id = :wid"),
+                params,
             )
 
     def _save_artifact(self, step_number, artifact_type, artifact_name, content, metadata=None):
@@ -505,6 +642,23 @@ class WorkflowRunner:
             return [c.strip() for c in content.split("\n") if c.strip()]
         return []
 
+    def _get_category_classifications(self):
+        """Get category classifications (core vs cross-platform) from the category_selections artifact.
+
+        Returns a dict with keys: core_product_categories, cross_platform_capabilities, skipped.
+        Each value is a list of category name strings.
+        Falls back to treating all categories as core if no classification is found.
+        """
+        content = self._get_artifact_content("category_selections")
+        if content:
+            try:
+                return json.loads(content)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        # Fallback: treat all categories as core
+        all_cats = self._get_categories()
+        return {"core_product_categories": all_cats, "cross_platform_capabilities": [], "skipped": []}
+
     def _count_tokens(self, text_content: str) -> int:
         """Return estimated token count using tiktoken (cl100k_base) or char-based fallback."""
         if not text_content:
@@ -541,63 +695,250 @@ class WorkflowRunner:
     # Context building
     # ------------------------------------------------------------------
 
-    def _build_context(self):
-        """Build the XML-tagged context string from directive + old battlecard artifacts."""
-        directive = self._get_artifact_content("directive_generated") or ""
-        old_battlecard = self._get_artifact_content("old_battlecard_extracted") or ""
-        return format_context_xml(directive, old_battlecard, self.competitor)
+    def _get_previous_version_context(self):
+        """Load review feedback and fact-check results from the previous generation (if linked).
+
+        Returns a dict with keys 'review_feedback' and 'fact_check_results',
+        each a plain-text string (empty if unavailable).
+        """
+        result = {"review_feedback": "", "fact_check_results": ""}
+
+        with self.engine.begin() as conn:
+            # Find previous_generation_id via this session's generation
+            row = conn.execute(
+                text(
+                    "SELECT bg.previous_generation_id "
+                    "FROM workflow_sessions ws "
+                    "JOIN battlecard_generations bg ON ws.generation_id = bg.generation_id "
+                    "WHERE ws.session_id::text = :sid"
+                ),
+                {"sid": self.session_id},
+            ).mappings().first()
+
+        if not row or not row["previous_generation_id"]:
+            return result
+
+        prev_gen_id = row["previous_generation_id"]
+
+        # --- Review feedback ---
+        with self.engine.begin() as conn:
+            reviews = conn.execute(
+                text(
+                    "SELECT review_type, feedback_text, reviewed_by, reviewed_at "
+                    "FROM human_reviews WHERE generation_id = :gid ORDER BY reviewed_at"
+                ),
+                {"gid": prev_gen_id},
+            ).mappings().all()
+
+        if reviews:
+            parts = ["## Previous Version Review Feedback\n"]
+            for r in reviews:
+                review_type = r["review_type"]
+                feedback_raw = r["feedback_text"] or ""
+                reviewer = r["reviewed_by"] or "anonymous"
+                comment = ""
+                scope = ""
+                try:
+                    payload = json.loads(feedback_raw)
+                    comment = payload.get("comment", "")
+                    scope = payload.get("scope", "")
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    comment = feedback_raw
+
+                status_label = {
+                    "approve": "APPROVED",
+                    "request_edit": "NEEDS REVISION",
+                    "reject": "REJECTED",
+                }.get(review_type, review_type.upper())
+                line = f"- [{status_label}]"
+                if scope:
+                    line += f" (scope: {scope})"
+                if comment:
+                    line += f": {comment}"
+                line += f"  — {reviewer}"
+                parts.append(line)
+            result["review_feedback"] = "\n".join(parts)
+
+        # --- Fact-check results ---
+        with self.engine.begin() as conn:
+            fact_checks = conn.execute(
+                text(
+                    "SELECT fc.status AS fc_status, fc.reasoning, fc.fact_check_source_text, "
+                    "fc.confidence_score, e.traces_to_text, "
+                    "c.headline AS claim_headline, kd.key_diff_name "
+                    "FROM fact_checks fc "
+                    "JOIN evidence e ON fc.evidence_id = e.evidence_id "
+                    "JOIN claims c ON e.claim_id = c.claim_id "
+                    "JOIN key_differentiators kd ON c.key_diff_id = kd.key_diff_id "
+                    "WHERE c.generation_id = :gid "
+                    "ORDER BY kd.key_diff_name, c.claim_id"
+                ),
+                {"gid": prev_gen_id},
+            ).mappings().all()
+
+        if fact_checks:
+            parts = ["## Previous Version Fact-Check Results\n"]
+            for fc in fact_checks:
+                status = fc["fc_status"] or "pending"
+                kd = fc["key_diff_name"] or ""
+                claim = fc["claim_headline"] or ""
+                reasoning = fc["reasoning"] or ""
+                confidence = fc["confidence_score"]
+                traced = fc["traces_to_text"] or ""
+
+                line = f"- [{status.upper()}] {kd} / {claim}"
+                if traced:
+                    line += f' — claim text: "{traced[:200]}"'
+                if reasoning:
+                    line += f" — reason: {reasoning[:200]}"
+                if confidence is not None:
+                    line += f" (confidence: {confidence}%)"
+                parts.append(line)
+            result["fact_check_results"] = "\n".join(parts)
+
+        return result
+
+    def _build_context(self, context_sources=None):
+        """Build the XML-tagged context string from selected sources.
+
+        Args:
+            context_sources: Optional dict with boolean flags for each source:
+                - directive (default True)
+                - old_battlecard (default True)
+                - review_feedback (default False)
+                - fact_checks (default False)
+            When None, uses default behavior (directive + old_battlecard only).
+        """
+        if context_sources is None:
+            context_sources = {}
+
+        include_directive = context_sources.get("directive", True)
+        include_old_bc = context_sources.get("old_battlecard", True)
+        include_reviews = context_sources.get("review_feedback", False)
+        include_fact_checks = context_sources.get("fact_checks", False)
+
+        directive = (self._get_artifact_content("directive_generated") or "") if include_directive else ""
+        old_battlecard = (self._get_artifact_content("old_battlecard_extracted") or "") if include_old_bc else ""
+
+        review_feedback = ""
+        fact_check_results = ""
+        if include_reviews or include_fact_checks:
+            prev_ctx = self._get_previous_version_context()
+            if include_reviews:
+                review_feedback = prev_ctx.get("review_feedback", "")
+            if include_fact_checks:
+                fact_check_results = prev_ctx.get("fact_check_results", "")
+
+        return format_context_xml(
+            directive, old_battlecard, self.competitor,
+            review_feedback=review_feedback,
+            fact_check_results=fact_check_results,
+        )
 
     # ------------------------------------------------------------------
     # Pass 1: Generate Key Differentiators (Skeletons)
     # ------------------------------------------------------------------
 
-    def run_pass1(self, feedback=None):
+    def _process_single_category(self, category, all_core_cats, cross_cats,
+                                  template_text, directive, context, feedback=None):
+        """Generate Pass 1 skeletons for ONE core product category. Returns list[dict]."""
+        other_cats = [c for c in all_core_cats if c != category]
+        other_text = "\n".join(f"- {c}" for c in other_cats) if other_cats else "_(none)_"
+        cross_text = "\n".join(f"- {c}" for c in cross_cats) if cross_cats else "_(none)_"
+
+        rendered = render_template(
+            template_text,
+            competitor=self.competitor,
+            product_area=self.product_area,
+            comparison=f"Databricks vs {self.competitor}",
+            target_category=category,
+            other_core_categories=other_text,
+            cross_platform_capabilities=cross_text,
+            diffs_per_category=str(self.diffs_per_category),
+            directives=directive,
+            context=context,
+        )
+
+        if feedback:
+            rendered += f"\n\n## Previous Feedback\n{feedback}\n\nPlease regenerate incorporating this feedback."
+
+        raw = call_model(
+            client=self.client,
+            model_name=self.model_name,
+            rendered_prompt=rendered,
+            json_schema=L200_PASS1_JSON_SCHEMA,
+        )
+        return json.loads(raw).get("slides", [])
+
+    def _stub_pass1_category(self, category):
+        """Create N stub skeletons for a category that failed (fallback on error)."""
+        stubs = []
+        for rank in range(1, self.diffs_per_category + 1):
+            stubs.append({
+                "id": f"{category.replace(' ', '_')}_stub_{rank}",
+                "competitor": self.competitor,
+                "category": category,
+                "rank": rank,
+                "key_differentiator": f"Stub Diff {rank}",
+                "description": "Generation failed — stub differentiator.",
+                "selection_reasoning": "Generation failed — stub reasoning.",
+                "rank_reasoning": "Generation failed — stub reasoning.",
+                "directive_alignment": "N/A",
+                "databricks_rating": "partial",
+                "competitor_rating": "partial",
+            })
+        return stubs
+
+    def run_pass1(self, feedback=None, context_sources=None):
         """Run Pass 1 to generate key differentiator skeletons using the LLM."""
-        self._update_step(5, "in_progress",
+        self._update_step(4, "in_progress",
                           progress_message="[1/6] Preparing Pass 1 — loading categories and directive...",
                           progress_current=0, progress_total=6)
 
         categories = self._get_categories()
         if not categories:
-            self._update_step(5, "failed", error_message="No product categories selected. Complete Step 3 first.")
+            self._update_step(4, "failed", error_message="No product categories selected. Complete Step 3 first.")
             return
 
         directive = self._get_artifact_content("directive_generated") or ""
-        total_diffs = len(categories) * self.diffs_per_category
 
         try:
             # Stage 2: Load prompt template
             ver = getattr(self, 'pass1_prompt_template_version', 2)
-            self._update_step(5, "in_progress",
-                              progress_message=f"[2/6] Loading Pass 1 prompt template V{ver} ({total_diffs} diffs across {len(categories)} categories)...",
+
+            # For V3+, use category classifications to compute total_diffs from core categories only
+            classifications = self._get_category_classifications()
+            core_cats = classifications.get("core_product_categories", [])
+            cross_cats = classifications.get("cross_platform_capabilities", [])
+
+            if ver >= 3 and core_cats:
+                # V3: slides are only generated for core product categories
+                total_diffs = len(core_cats) * self.diffs_per_category
+            else:
+                # V1/V2 or fallback: all categories get slides
+                total_diffs = len(categories) * self.diffs_per_category
+
+            # Determine if we should use parallel per-category path
+            use_parallel_pass1 = (ver >= 3 and self.max_workers > 1 and len(core_cats) > 1)
+
+            if use_parallel_pass1:
+                # Load V4 per-category template for parallel execution
+                template_text, template_file = load_pass1_template(4, engine=self.engine)
+                prompt_label = f"V4 (parallel per-category, {len(core_cats)} categories)"
+            else:
+                template_text, template_file = load_pass1_template(ver, engine=self.engine)
+                prompt_label = f"V{ver}"
+
+            self._update_step(4, "in_progress",
+                              progress_message=f"[2/6] Loading Pass 1 prompt template {prompt_label} ({total_diffs} diffs across {len(core_cats) if ver >= 3 else len(categories)} categories)...",
                               progress_current=1, progress_total=6)
 
-            template_text, template_file = load_pass1_template(ver)
-
             # Build context
-            context = self._build_context()
-
-            categories_text = "\n".join(f"- {c}" for c in categories)
-            rendered = render_template(
-                template_text,
-                competitor=self.competitor,
-                product_area=self.product_area,
-                comparison=f"Databricks vs {self.competitor}",
-                product_categories=categories_text,
-                diffs_per_category=str(self.diffs_per_category),
-                total_diffs=str(total_diffs),
-                directives=directive,
-                context=context,
-            )
-
-            # Append feedback if provided (regeneration)
-            if feedback:
-                rendered += f"\n\n## Previous Feedback\n{feedback}\n\nPlease regenerate incorporating this feedback."
+            context = self._build_context(context_sources)
 
             # Stage 3: Store the prompt version
-            prompt_chars = len(rendered)
-            self._update_step(5, "in_progress",
-                              progress_message=f"[3/6] Rendered prompt ({prompt_chars:,} chars). Registering prompt version...",
+            self._update_step(4, "in_progress",
+                              progress_message=f"[3/6] Registering prompt version...",
                               progress_current=2, progress_total=6)
 
             pass1_version_id = ensure_prompt_version(
@@ -612,11 +953,181 @@ class WorkflowRunner:
                     {"vid": pass1_version_id, "sid": self.session_id},
                 )
 
+            # ---------- PARALLEL PER-CATEGORY PATH ----------
+            if use_parallel_pass1:
+                errors = []
+                completed = 0
+                workers_label = f"{self.max_workers} parallel workers"
+
+                # Record a representative prompt for the first category
+                first_cat = core_cats[0]
+                other_text = "\n".join(f"- {c}" for c in core_cats[1:])
+                cross_text_repr = "\n".join(f"- {c}" for c in cross_cats) if cross_cats else "_(none)_"
+                representative_prompt = render_template(
+                    template_text,
+                    competitor=self.competitor,
+                    product_area=self.product_area,
+                    comparison=f"Databricks vs {self.competitor}",
+                    target_category=first_cat,
+                    other_core_categories=other_text,
+                    cross_platform_capabilities=cross_text_repr,
+                    diffs_per_category=str(self.diffs_per_category),
+                    directives=directive,
+                    context=context,
+                )
+                self._record_turn(4, "system_prompt", "system", "pass1_prompt", representative_prompt, model_name=self.model_name)
+
+                self._update_step(4, "in_progress",
+                                  progress_message=f"[4/6] Generating diffs — 0/{len(core_cats)} categories done ({workers_label}, model: {self.model_name})...",
+                                  progress_current=3, progress_total=3 + len(core_cats))
+
+                # Submit one task per core category
+                futures = {}
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    for cat in core_cats:
+                        future = executor.submit(
+                            self._process_single_category,
+                            cat, core_cats, cross_cats,
+                            template_text, directive, context, feedback,
+                        )
+                        futures[future] = cat
+
+                    # Collect results, saving incremental artifacts as each completes
+                    results_by_cat = {}
+                    for future in as_completed(futures):
+                        cat = futures[future]
+                        try:
+                            cat_skeletons = future.result()
+                            results_by_cat[cat] = cat_skeletons
+                        except Exception as e:
+                            logger.error("Pass 1 failed for category '%s': %s", cat, e)
+                            results_by_cat[cat] = self._stub_pass1_category(cat)
+                            errors.append({"category": cat, "error": str(e)})
+
+                        completed += 1
+                        error_suffix = f" ({len(errors)} errors)" if errors else ""
+
+                        # Accumulate results in original order for incremental save
+                        accumulated = []
+                        for c in core_cats:
+                            if c in results_by_cat:
+                                accumulated.extend(results_by_cat[c])
+
+                        self._update_step(4, "in_progress",
+                                          progress_current=3 + completed,
+                                          progress_total=3 + len(core_cats),
+                                          progress_message=f"[4/6] Generating diffs — {completed}/{len(core_cats)} categories done{error_suffix}: {cat}")
+
+                        # Incremental save: partial artifact so the frontend can poll and display
+                        partial_content = json.dumps(accumulated, indent=2)
+                        self._save_artifact(
+                            4, "pass1_skeletons", "key_differentiators.json",
+                            partial_content,
+                            metadata={
+                                "count": len(accumulated),
+                                "partial": completed < len(core_cats),
+                                "completed_categories": completed,
+                                "total_categories": len(core_cats),
+                                "categories": [c for c in core_cats if c in results_by_cat],
+                                "model": self.model_name,
+                                "prompt_version_id": pass1_version_id,
+                            },
+                        )
+
+                # Reassemble all skeletons in original category order
+                all_skeletons = []
+                for c in core_cats:
+                    all_skeletons.extend(results_by_cat.get(c, []))
+
+                logger.info("Pass 1 (parallel) returned %d skeletons across %d categories (expected %d)",
+                            len(all_skeletons), len(core_cats), total_diffs)
+
+                # Stage 5: Save final artifact
+                self._update_step(4, "in_progress",
+                                  progress_message=f"[5/6] Saving {len(all_skeletons)} key differentiators...",
+                                  progress_current=3 + len(core_cats), progress_total=3 + len(core_cats) + 1)
+
+                skeletons_content = json.dumps(all_skeletons, indent=2)
+                art_id = self._save_artifact(
+                    4, "pass1_skeletons", "key_differentiators.json",
+                    skeletons_content,
+                    metadata={
+                        "count": len(all_skeletons),
+                        "partial": False,
+                        "completed_categories": len(core_cats),
+                        "total_categories": len(core_cats),
+                        "categories": core_cats,
+                        "model": self.model_name,
+                        "prompt_version_id": pass1_version_id,
+                        "parallel": True,
+                        "max_workers": self.max_workers,
+                        "errors": errors,
+                    },
+                )
+
+                self._record_turn(4, "model_output", "assistant", "pass1_skeletons", skeletons_content,
+                                  model_name=self.model_name, artifact_id=art_id)
+
+                # Stage 6: Save to Lakebase tables
+                self._update_step(4, "in_progress",
+                                  progress_message=f"[6/6] Writing {len(all_skeletons)} key differentiators to database...",
+                                  progress_current=3 + len(core_cats) + 1, progress_total=3 + len(core_cats) + 2)
+
+                try:
+                    self._save_skeletons_to_lakebase(all_skeletons)
+                except Exception as e:
+                    logger.exception("Failed to save skeletons to Lakebase (non-fatal)")
+
+                error_suffix = f" ({len(errors)} had errors — used fallback stubs)" if errors else ""
+                self._update_step(4, "waiting_human",
+                                  progress_message=f"Generated {len(all_skeletons)} key differentiators across {len(core_cats)} categories (parallel).{error_suffix} Review and approve or provide feedback.",
+                                  progress_current=6, progress_total=6,
+                                  error_details={"errors": errors} if errors else None)
+                return
+
+            # ---------- SINGLE-CALL PATH (V1/V2 or non-parallel) ----------
+            # Build template variables based on version
+            if ver >= 3 and core_cats:
+                # V3+: separate core and cross-platform category lists
+                core_text = "\n".join(f"- {c}" for c in core_cats)
+                cross_text = "\n".join(f"- {c}" for c in cross_cats) if cross_cats else "_(none selected)_"
+                rendered = render_template(
+                    template_text,
+                    competitor=self.competitor,
+                    product_area=self.product_area,
+                    comparison=f"Databricks vs {self.competitor}",
+                    core_product_categories=core_text,
+                    cross_platform_capabilities=cross_text,
+                    core_category_count=str(len(core_cats)),
+                    diffs_per_category=str(self.diffs_per_category),
+                    total_diffs=str(total_diffs),
+                    directives=directive,
+                    context=context,
+                )
+            else:
+                # V1/V2: flat list of all categories
+                categories_text = "\n".join(f"- {c}" for c in categories)
+                rendered = render_template(
+                    template_text,
+                    competitor=self.competitor,
+                    product_area=self.product_area,
+                    comparison=f"Databricks vs {self.competitor}",
+                    product_categories=categories_text,
+                    diffs_per_category=str(self.diffs_per_category),
+                    total_diffs=str(total_diffs),
+                    directives=directive,
+                    context=context,
+                )
+
+            # Append feedback if provided (regeneration)
+            if feedback:
+                rendered += f"\n\n## Previous Feedback\n{feedback}\n\nPlease regenerate incorporating this feedback."
+
             # Record the prompt as an agent turn
-            self._record_turn(5, "system_prompt", "system", "pass1_prompt", rendered, model_name=self.model_name)
+            self._record_turn(4, "system_prompt", "system", "pass1_prompt", rendered, model_name=self.model_name)
 
             # Stage 4: Call the model
-            self._update_step(5, "in_progress",
+            self._update_step(4, "in_progress",
                               progress_message=f"[4/6] Calling {self.model_name} — generating {total_diffs} key differentiators across {len(categories)} categories...",
                               progress_current=3, progress_total=6)
 
@@ -628,7 +1139,7 @@ class WorkflowRunner:
             )
 
             # Stage 5: Parse and save
-            self._update_step(5, "in_progress",
+            self._update_step(4, "in_progress",
                               progress_message="[5/6] Parsing LLM response and saving artifacts...",
                               progress_current=4, progress_total=6)
 
@@ -640,10 +1151,11 @@ class WorkflowRunner:
             # Save artifact
             skeletons_content = json.dumps(skeletons, indent=2)
             art_id = self._save_artifact(
-                5, "pass1_skeletons", "key_differentiators.json",
+                4, "pass1_skeletons", "key_differentiators.json",
                 skeletons_content,
                 metadata={
                     "count": len(skeletons),
+                    "partial": False,
                     "categories": categories,
                     "model": self.model_name,
                     "prompt_version_id": pass1_version_id,
@@ -651,11 +1163,11 @@ class WorkflowRunner:
             )
 
             # Record the output as an agent turn
-            self._record_turn(5, "model_output", "assistant", "pass1_skeletons", skeletons_content,
+            self._record_turn(4, "model_output", "assistant", "pass1_skeletons", skeletons_content,
                               model_name=self.model_name, artifact_id=art_id)
 
             # Stage 6: Save to Lakebase tables
-            self._update_step(5, "in_progress",
+            self._update_step(4, "in_progress",
                               progress_message=f"[6/6] Writing {len(skeletons)} key differentiators to database...",
                               progress_current=5, progress_total=6)
 
@@ -665,18 +1177,18 @@ class WorkflowRunner:
                 logger.exception("Failed to save skeletons to Lakebase (non-fatal)")
                 # Continue — artifact was saved, Lakebase write is bonus
 
-            self._update_step(5, "waiting_human",
+            self._update_step(4, "waiting_human",
                               progress_message=f"Generated {len(skeletons)} key differentiators across {len(categories)} categories. Review and approve or provide feedback.",
                               progress_current=6, progress_total=6)
 
         except json.JSONDecodeError as e:
             logger.exception("Pass 1 failed: invalid JSON from LLM")
-            self._update_step(5, "failed",
+            self._update_step(4, "failed",
                               error_message=f"LLM returned invalid JSON: {e}",
                               error_details={"stage": "parse_response", "raw_preview": raw[:500] if raw else ""})
         except Exception as e:
             logger.exception("Pass 1 generation failed")
-            self._update_step(5, "failed", error_message=f"Pass 1 failed: {e}")
+            self._update_step(4, "failed", error_message=f"Pass 1 failed: {e}")
 
     def _save_skeletons_to_lakebase(self, skeletons):
         """Save skeleton key differentiators to the Lakebase tables."""
@@ -713,29 +1225,29 @@ class WorkflowRunner:
     # Pass 2: Generate Claims for each Key Differentiator
     # ------------------------------------------------------------------
 
-    def run_pass2(self):
+    def run_pass2(self, context_sources=None):
         """Run Pass 2 to generate detailed claims for each key differentiator."""
-        self._update_step(6, "in_progress",
+        self._update_step(5, "in_progress",
                           progress_message="[1/5] Loading skeletons from Pass 1...",
                           progress_current=0, progress_total=5)
 
         skeletons_json = self._get_artifact_content("pass1_skeletons")
         if not skeletons_json:
-            self._update_step(6, "failed", error_message="No skeletons found. Complete Step 5 first.")
+            self._update_step(5, "failed", error_message="No skeletons found. Complete Step 4 first.")
             return
 
         skeletons = json.loads(skeletons_json)
         total = len(skeletons)
         directive = self._get_artifact_content("directive_generated") or ""
-        context = self._build_context()
+        context = self._build_context(context_sources)
 
         try:
             # Stage 2: Load template (version-aware)
             ver = getattr(self, 'pass2_prompt_template_version', 2)
-            self._update_step(6, "in_progress",
+            self._update_step(5, "in_progress",
                               progress_message=f"[2/5] Loading Pass 2 prompt template V{ver} ({total} diffs to process)...",
                               progress_current=1, progress_total=5)
-            template_text = load_pass2_template(ver)
+            template_text = load_pass2_template(ver, engine=self.engine)
             logger.info("Using Pass 2 prompt template version %d (%d chars)", ver, len(template_text))
 
             # Store the prompt version
@@ -771,7 +1283,7 @@ class WorkflowRunner:
                     directives=directive,
                     context=context,
                 )
-                self._record_turn(6, "system_prompt", "system", "pass2_prompt",
+                self._record_turn(5, "system_prompt", "system", "pass2_prompt",
                                   representative_prompt, model_name=self.model_name)
 
             def _process_single_diff(idx: int, sk: dict) -> dict:
@@ -799,7 +1311,7 @@ class WorkflowRunner:
 
             # Stage 3: Generate claims
             workers_label = f"{self.max_workers} parallel workers" if self.max_workers > 1 else "sequential"
-            self._update_step(6, "in_progress",
+            self._update_step(5, "in_progress",
                               progress_message=f"[3/5] Generating claims — 0/{total} done ({workers_label}, model: {self.model_name}, prompt: V{ver})...",
                               progress_current=0, progress_total=total)
 
@@ -820,15 +1332,34 @@ class WorkflowRunner:
                             claim = future.result()
                             results_by_idx[idx] = claim
                         except Exception as e:
-                            logger.error("Pass 2 failed for skeleton %d (%s): %s", idx, kd_name, e)
+                            error_str = str(e)
+                            logger.error("Pass 2 failed for skeleton %d (%s): %s", idx, kd_name, error_str)
                             results_by_idx[idx] = self._stub_pass2_claim(sk)
-                            errors.append({"index": idx, "key_differentiator": kd_name, "error": str(e)})
+                            errors.append({"index": idx, "key_differentiator": kd_name, "error": error_str})
+                            # Store error in step for visibility
+                            self._update_step(5, "in_progress", last_error=f"[{kd_name}] {error_str[:500]}")
 
                         completed += 1
                         error_suffix = f" ({len(errors)} errors)" if errors else ""
-                        self._update_step(6, "in_progress",
+                        self._update_step(5, "in_progress",
                                           progress_current=completed, progress_total=total,
                                           progress_message=f"[3/5] Generating claims — {completed}/{total} done{error_suffix}: {kd_name}")
+
+                        # Incremental save: partial artifact so the frontend can poll and display
+                        accumulated_claims = [results_by_idx[i] for i in range(total) if i in results_by_idx]
+                        partial_content = json.dumps(accumulated_claims, indent=2)
+                        self._save_artifact(
+                            5, "pass2_claims", "claims.json",
+                            partial_content,
+                            metadata={
+                                "count": len(accumulated_claims),
+                                "partial": completed < total,
+                                "completed": completed,
+                                "total": total,
+                                "model": self.model_name,
+                                "errors": errors,
+                            },
+                        )
 
                 # Reassemble in original order
                 all_claims = [results_by_idx[i] for i in range(total)]
@@ -836,26 +1367,29 @@ class WorkflowRunner:
                 # Sequential processing
                 for idx, sk in enumerate(skeletons):
                     kd_name = sk.get("key_differentiator", "")[:50]
-                    self._update_step(6, "in_progress",
+                    self._update_step(5, "in_progress",
                                       progress_current=idx, progress_total=total,
                                       progress_message=f"[3/5] Generating claim {idx + 1}/{total}: {kd_name}")
 
                     try:
                         claim = _process_single_diff(idx, sk)
                     except Exception as e:
-                        logger.error("Pass 2 failed for skeleton %d (%s): %s", idx, kd_name, e)
+                        error_str = str(e)
+                        logger.error("Pass 2 failed for skeleton %d (%s): %s", idx, kd_name, error_str)
                         claim = self._stub_pass2_claim(sk)
-                        errors.append({"index": idx, "key_differentiator": kd_name, "error": str(e)})
+                        errors.append({"index": idx, "key_differentiator": kd_name, "error": error_str})
+                        # Store error in step for visibility
+                        self._update_step(5, "in_progress", last_error=f"[{kd_name}] {error_str[:500]}")
                     all_claims.append(claim)
 
             # Stage 4: Save artifact
-            self._update_step(6, "in_progress",
+            self._update_step(5, "in_progress",
                               progress_message=f"[4/5] Saving {len(all_claims)} claims to artifacts...",
                               progress_current=total, progress_total=total)
 
             claims_content = json.dumps(all_claims, indent=2)
             art_id = self._save_artifact(
-                6, "pass2_claims", "claims.json",
+                5, "pass2_claims", "claims.json",
                 claims_content,
                 metadata={
                     "count": len(all_claims),
@@ -867,11 +1401,11 @@ class WorkflowRunner:
             )
 
             # Record the output as an agent turn
-            self._record_turn(6, "model_output", "assistant", "pass2_claims", claims_content,
+            self._record_turn(5, "model_output", "assistant", "pass2_claims", claims_content,
                               model_name=self.model_name, artifact_id=art_id)
 
             # Stage 5: Save to Lakebase tables
-            self._update_step(6, "in_progress",
+            self._update_step(5, "in_progress",
                               progress_message=f"[5/5] Writing {len(all_claims)} claims to database...",
                               progress_current=total, progress_total=total)
 
@@ -882,14 +1416,14 @@ class WorkflowRunner:
                 errors.append({"index": -1, "key_differentiator": "lakebase_write", "error": str(e)})
 
             error_suffix = f" ({len(errors)} had errors — used fallback stubs)" if errors else ""
-            self._update_step(6, "waiting_human",
+            self._update_step(5, "waiting_human",
                               progress_message=f"Generated {len(all_claims)} claim pairs.{error_suffix} Review and approve or provide feedback.",
                               progress_current=total, progress_total=total,
                               error_details={"errors": errors} if errors else None)
 
         except Exception as e:
             logger.exception("Pass 2 generation failed")
-            self._update_step(6, "failed", error_message=f"Pass 2 failed: {e}",
+            self._update_step(5, "failed", error_message=f"Pass 2 failed: {e}",
                               error_details={"errors": errors} if errors else None)
 
     def _stub_pass2_claim(self, skeleton):
@@ -897,10 +1431,10 @@ class WorkflowRunner:
         kd_name = skeleton.get("key_differentiator", "Unknown")
         return {
             "databricks_headline": f"Databricks: {kd_name}",
-            "databricks_details": f"Databricks provides strong capabilities in {kd_name}.",
+            "databricks_details": [f"Databricks provides strong capabilities in {kd_name}."],
             "databricks_reasoning": "Generation failed — stub reasoning.",
             "competitor_headline": f"{self.competitor}: {kd_name}",
-            "competitor_details": f"{self.competitor} has partial support for {kd_name}.",
+            "competitor_details": [f"{self.competitor} has partial support for {kd_name}."],
             "competitor_reasoning": "Generation failed — stub reasoning.",
             "citations": {
                 "databricks_details": [],
@@ -936,6 +1470,27 @@ class WorkflowRunner:
                 )
 
             # Clear any existing claims for this generation (in case of regeneration)
+            conn.execute(
+                text(
+                    "DELETE FROM fact_checks WHERE evidence_id IN "
+                    "(SELECT e.evidence_id FROM evidence e JOIN claims c ON e.claim_id = c.claim_id WHERE c.generation_id = :gid)"
+                ),
+                {"gid": gen_id},
+            )
+            conn.execute(
+                text(
+                    "DELETE FROM evidence WHERE claim_id IN "
+                    "(SELECT claim_id FROM claims WHERE generation_id = :gid)"
+                ),
+                {"gid": gen_id},
+            )
+            conn.execute(
+                text(
+                    "DELETE FROM claim_detail_items WHERE claim_id IN "
+                    "(SELECT claim_id FROM claims WHERE generation_id = :gid)"
+                ),
+                {"gid": gen_id},
+            )
             conn.execute(
                 text("DELETE FROM claims WHERE generation_id = :gid"),
                 {"gid": gen_id},
@@ -990,6 +1545,11 @@ class WorkflowRunner:
 
                 # Databricks claim
                 db_rating = _rating_to_db(sk.get("databricks_rating", ""))
+                db_details_raw = claim.get("databricks_details", [])
+                if isinstance(db_details_raw, str):
+                    db_details_raw = [db_details_raw] if db_details_raw else []
+                db_desc_flat = " ".join(db_details_raw)
+
                 db_claim_id = conn.execute(
                     text(
                         "INSERT INTO claims (generation_id, key_diff_id, company_id, rating, rating_symbol, headline, description, change_type) "
@@ -1002,13 +1562,30 @@ class WorkflowRunner:
                         "rating": db_rating,
                         "symbol": _rating_to_symbol(sk.get("databricks_rating", "")),
                         "head": claim.get("databricks_headline", ""),
-                        "desc": claim.get("databricks_details", ""),
+                        "desc": db_desc_flat,
                     },
                 ).scalar()
                 total_claims += 1
 
+                # Insert detail items for Databricks claim
+                db_detail_item_ids = []
+                for order, item_text in enumerate(db_details_raw):
+                    did = conn.execute(
+                        text(
+                            "INSERT INTO claim_detail_items (claim_id, item_order, item_text) "
+                            "VALUES (:cid, :ord, :txt) RETURNING detail_item_id"
+                        ),
+                        {"cid": db_claim_id, "ord": order, "txt": item_text},
+                    ).scalar()
+                    db_detail_item_ids.append(did)
+
                 # Competitor claim
                 comp_rating = _rating_to_db(sk.get("competitor_rating", ""))
+                comp_details_raw = claim.get("competitor_details", [])
+                if isinstance(comp_details_raw, str):
+                    comp_details_raw = [comp_details_raw] if comp_details_raw else []
+                comp_desc_flat = " ".join(comp_details_raw)
+
                 comp_claim_id = conn.execute(
                     text(
                         "INSERT INTO claims (generation_id, key_diff_id, company_id, rating, rating_symbol, headline, description, change_type) "
@@ -1021,17 +1598,29 @@ class WorkflowRunner:
                         "rating": comp_rating,
                         "symbol": _rating_to_symbol(sk.get("competitor_rating", "")),
                         "head": claim.get("competitor_headline", ""),
-                        "desc": claim.get("competitor_details", ""),
+                        "desc": comp_desc_flat,
                     },
                 ).scalar()
                 total_claims += 1
 
+                # Insert detail items for competitor claim
+                comp_detail_item_ids = []
+                for order, item_text in enumerate(comp_details_raw):
+                    did = conn.execute(
+                        text(
+                            "INSERT INTO claim_detail_items (claim_id, item_order, item_text) "
+                            "VALUES (:cid, :ord, :txt) RETURNING detail_item_id"
+                        ),
+                        {"cid": comp_claim_id, "ord": order, "txt": item_text},
+                    ).scalar()
+                    comp_detail_item_ids.append(did)
+
                 # Save evidence + fact checks from citations
                 self._save_evidence_and_fact_checks(
-                    conn, gen_id, db_claim_id, claim, "databricks"
+                    conn, gen_id, db_claim_id, claim, "databricks", db_detail_item_ids
                 )
                 self._save_evidence_and_fact_checks(
-                    conn, gen_id, comp_claim_id, claim, "competitor"
+                    conn, gen_id, comp_claim_id, claim, "competitor", comp_detail_item_ids
                 )
 
             conn.execute(
@@ -1039,10 +1628,12 @@ class WorkflowRunner:
                 {"tc": total_claims, "gid": gen_id},
             )
 
-    def _save_evidence_and_fact_checks(self, conn, gen_id, claim_id, claim_data, side):
+    def _save_evidence_and_fact_checks(self, conn, gen_id, claim_id, claim_data, side, detail_item_ids=None):
         """Save evidence rows and fact checks from the citations in the claim."""
         citations = claim_data.get("citations", {})
         sources_list = claim_data.get("sources", [])
+        if detail_item_ids is None:
+            detail_item_ids = []
 
         # Build source_index -> source mapping
         source_map = {}
@@ -1052,7 +1643,6 @@ class WorkflowRunner:
         for field_suffix in ("details", "reasoning"):
             field_key = f"{side}_{field_suffix}"
             field_citations = citations.get(field_key, [])
-            traces_to_field = "description" if field_suffix == "details" else "headline"
 
             for cite in field_citations:
                 source_index = cite.get("source_index")
@@ -1079,16 +1669,26 @@ class WorkflowRunner:
                             },
                         ).scalar()
 
+                # Resolve detail_item_id for details citations
+                detail_item_id = None
+                if field_suffix == "details" and detail_item_ids:
+                    detail_idx = cite.get("detail_item_index", 0)
+                    if 0 <= detail_idx < len(detail_item_ids):
+                        detail_item_id = detail_item_ids[detail_idx]
+
+                traces_to_field = "detail_item" if detail_item_id else ("description" if field_suffix == "details" else "headline")
+
                 # Insert evidence
                 traces_text = cite.get("source_quote", "")[:500]
                 evidence_id = conn.execute(
                     text(
-                        "INSERT INTO evidence (claim_id, traces_to_field, traces_to_start_index, traces_to_end_index, "
+                        "INSERT INTO evidence (claim_id, detail_item_id, traces_to_field, traces_to_start_index, traces_to_end_index, "
                         "traces_to_text, generation_source_id, generation_source_text) "
-                        "VALUES (:claim, :field, :start, :end, :trace, :src, :src_text) RETURNING evidence_id"
+                        "VALUES (:claim, :did, :field, :start, :end, :trace, :src, :src_text) RETURNING evidence_id"
                     ),
                     {
                         "claim": claim_id,
+                        "did": detail_item_id,
                         "field": traces_to_field,
                         "start": cite.get("start_index", 0),
                         "end": cite.get("end_index", 0),
@@ -1097,32 +1697,6 @@ class WorkflowRunner:
                         "src_text": traces_text,
                     },
                 ).scalar()
-
-                # Insert fact check from verdict
-                verdict = cite.get("verdict", "unverified")
-                if verdict not in ("verified", "unverified", "disputed", "outdated"):
-                    verdict = "unverified"
-                confidence = cite.get("confidence", 0)
-                if isinstance(confidence, float) and confidence <= 1.0:
-                    confidence = int(confidence * 100)
-                else:
-                    confidence = int(confidence) if confidence else 0
-
-                conn.execute(
-                    text(
-                        "INSERT INTO fact_checks (evidence_id, status, fact_check_source_id, fact_check_source_text, reasoning, "
-                        "checked_by, check_method, confidence_score) "
-                        "VALUES (:ev, :status, :src, :text, :reason, 'workflow_runner', 'llm_assisted', :conf)"
-                    ),
-                    {
-                        "ev": evidence_id,
-                        "status": verdict,
-                        "src": source_id,
-                        "text": traces_text,
-                        "reason": cite.get("verdict_rationale", ""),
-                        "conf": confidence,
-                    },
-                )
 
     def _map_source_type(self, src_type: str) -> str:
         """Map a source type string to the DB enum value."""
@@ -1140,9 +1714,9 @@ class WorkflowRunner:
     # Pass 3: Regenerate Claims from Feedback
     # ------------------------------------------------------------------
 
-    def run_pass3(self, feedback=""):
+    def run_pass3(self, feedback="", context_sources=None):
         """Run Pass 3 to regenerate claims incorporating feedback."""
-        self._update_step(6, "in_progress",
+        self._update_step(5, "in_progress",
                           progress_message="[1/4] Loading existing claims and skeletons for regeneration...",
                           progress_current=0, progress_total=4)
 
@@ -1150,29 +1724,29 @@ class WorkflowRunner:
         skeletons_json = self._get_artifact_content("pass1_skeletons")
 
         if not claims_json or not skeletons_json:
-            self._update_step(6, "failed", error_message="No existing claims found. Complete Step 6 generation first.")
+            self._update_step(5, "failed", error_message="No existing claims found. Complete Step 5 generation first.")
             return
 
         skeletons = json.loads(skeletons_json)
         claims = json.loads(claims_json)
         total = len(skeletons)
         directive = self._get_artifact_content("directive_generated") or ""
-        context = self._build_context()
+        context = self._build_context(context_sources)
         errors = []
 
         try:
             # Stage 2: Load template
             ver = getattr(self, 'pass2_prompt_template_version', 2)
-            self._update_step(6, "in_progress",
+            self._update_step(5, "in_progress",
                               progress_message=f"[2/4] Loading Pass 2 prompt template V{ver} for regeneration ({total} claims)...",
                               progress_current=1, progress_total=4)
-            template_text = load_pass2_template(ver)
+            template_text = load_pass2_template(ver, engine=self.engine)
 
             # Stage 3: Regenerate claims sequentially
             updated_claims = []
             for idx, (sk, claim) in enumerate(zip(skeletons, claims)):
                 kd_name = sk.get('key_differentiator', '')[:50]
-                self._update_step(6, "in_progress",
+                self._update_step(5, "in_progress",
                                   progress_current=idx, progress_total=total,
                                   progress_message=f"[3/4] Regenerating claim {idx + 1}/{total}: {kd_name}")
 
@@ -1208,32 +1782,34 @@ class WorkflowRunner:
                     )
                     updated = json.loads(raw)
                 except Exception as e:
-                    logger.error("Pass 3 regen failed for %d (%s): %s", idx, kd_name, e)
+                    error_str = str(e)
+                    logger.error("Pass 3 regen failed for %d (%s): %s", idx, kd_name, error_str)
                     updated = claim  # Keep original on failure
-                    errors.append({"index": idx, "key_differentiator": kd_name, "error": str(e)})
+                    errors.append({"index": idx, "key_differentiator": kd_name, "error": error_str})
+                    self._update_step(5, "in_progress", last_error=f"[Regen {kd_name}] {error_str[:500]}")
 
                 updated_claims.append(updated)
 
             # Stage 4: Save artifacts and to Lakebase
             error_suffix = f" ({len(errors)} errors)" if errors else ""
-            self._update_step(6, "in_progress",
+            self._update_step(5, "in_progress",
                               progress_message=f"[4/4] Saving {len(updated_claims)} regenerated claims{error_suffix}...",
                               progress_current=total, progress_total=total)
 
             regen_content = json.dumps(updated_claims, indent=2)
             art_id = self._save_artifact(
-                6, "pass3_regenerated", "claims_regenerated.json",
+                5, "pass3_regenerated", "claims_regenerated.json",
                 regen_content,
                 metadata={"count": len(updated_claims), "feedback": feedback[:200], "errors": errors},
             )
 
             # Record the regenerated output as an agent turn
-            self._record_turn(6, "model_output", "assistant", "pass3_regenerated", regen_content,
+            self._record_turn(5, "model_output", "assistant", "pass3_regenerated", regen_content,
                               model_name=self.model_name, artifact_id=art_id)
 
             # Update pass2_claims artifact so it becomes the "current" version
             self._save_artifact(
-                6, "pass2_claims", "claims.json",
+                5, "pass2_claims", "claims.json",
                 regen_content,
                 metadata={"count": len(updated_claims), "regenerated": True},
             )
@@ -1246,12 +1822,12 @@ class WorkflowRunner:
                 errors.append({"index": -1, "key_differentiator": "lakebase_write", "error": str(e)})
 
             error_suffix = f" ({len(errors)} had errors — kept originals)" if errors else ""
-            self._update_step(6, "waiting_human",
+            self._update_step(5, "waiting_human",
                               progress_message=f"Regenerated {len(updated_claims)} claims.{error_suffix} Review again.",
                               progress_current=total, progress_total=total,
                               error_details={"errors": errors} if errors else None)
 
         except Exception as e:
             logger.exception("Pass 3 generation failed")
-            self._update_step(6, "failed", error_message=f"Pass 3 failed: {e}",
+            self._update_step(5, "failed", error_message=f"Pass 3 failed: {e}",
                               error_details={"errors": errors} if errors else None)

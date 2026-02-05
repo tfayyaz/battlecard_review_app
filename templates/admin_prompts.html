@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prompt Template Admin</title>
+    <style>
+        :root {
+            --primary: #FF3621;
+            --primary-dark: #E02E1B;
+            --success: #00A972;
+            --warning: #F5A623;
+            --danger: #E02E1B;
+            --info: #2196F3;
+            --bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --text: #1F2937;
+            --text-secondary: #6B7280;
+            --border: #E5E7EB;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: text; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+
+        header {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+        header h1 { font-size: 28px; font-weight: 600; margin-bottom: 8px; }
+        header p { opacity: 0.9; font-size: 14px; }
+
+        .header-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 16px;
+        }
+        .header-btn {
+            padding: 8px 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            background: rgba(255,255,255,0.1);
+            color: white;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .header-btn:hover {
+            background: rgba(255,255,255,0.2);
+            border-color: rgba(255,255,255,0.5);
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        .card-header h2 {
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: var(--primary-dark); }
+        .btn-success { background: var(--success); color: white; }
+        .btn-success:hover { opacity: 0.9; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:hover { opacity: 0.9; }
+        .btn-secondary { background: var(--border); color: var(--text); }
+        .btn-secondary:hover { background: #d1d5db; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .btn-info { background: var(--info); color: white; }
+        .btn-info:hover { opacity: 0.9; }
+
+        /* Tabs */
+        .tab-bar {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 20px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 4px;
+        }
+        .tab-btn {
+            padding: 8px 20px;
+            border: none;
+            background: transparent;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text-secondary);
+        }
+        .tab-btn.active {
+            background: var(--primary);
+            color: white;
+        }
+        .tab-btn:hover:not(.active) {
+            background: var(--bg);
+        }
+
+        /* Tables */
+        .admin-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .admin-table th {
+            text-align: left;
+            padding: 10px 12px;
+            background: var(--bg);
+            border-bottom: 2px solid var(--border);
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+        .admin-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: middle;
+        }
+        .admin-table tr:hover { background: #f9fafb; }
+
+        .toggle-checkbox {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            accent-color: var(--primary);
+        }
+
+        .action-btns {
+            display: flex;
+            gap: 6px;
+            white-space: nowrap;
+        }
+        .action-btn {
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+        .action-btn:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        .action-btn.delete:hover {
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        .badge-active { background: #dcfce7; color: #166534; }
+        .badge-inactive { background: #fef2f2; color: #991b1b; }
+        .badge-default { background: #dbeafe; color: #1e40af; }
+        .badge-type { background: #f3f4f6; color: var(--text-secondary); }
+
+        .desc-text {
+            max-width: 300px;
+            color: var(--text-secondary);
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            font-size: 12px;
+        }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal {
+            background: white;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 900px;
+            max-height: 90vh;
+            overflow-y: auto;
+            padding: 32px;
+        }
+        .modal h2 { font-size: 20px; margin-bottom: 20px; }
+        .modal .form-group {
+            margin-bottom: 16px;
+        }
+        .modal label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .modal input[type="text"],
+        .modal select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        .modal textarea {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            resize: vertical;
+            min-height: 300px;
+        }
+        .modal textarea:focus,
+        .modal input:focus,
+        .modal select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(255, 54, 33, 0.1);
+        }
+        .modal .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        .modal .form-row-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 16px;
+        }
+        .modal .form-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 20px;
+        }
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .checkbox-row label { margin-bottom: 0; font-weight: 400; }
+
+        /* Test panel */
+        .test-panel {
+            margin-top: 20px;
+            border-top: 1px solid var(--border);
+            padding-top: 20px;
+        }
+        .test-panel h3 {
+            font-size: 16px;
+            margin-bottom: 12px;
+        }
+        .test-controls {
+            display: flex;
+            gap: 12px;
+            align-items: flex-end;
+            margin-bottom: 16px;
+        }
+        .test-controls .form-group {
+            margin-bottom: 0;
+            flex: 1;
+        }
+        .test-output {
+            background: #1a1a2e;
+            color: #e0e0e0;
+            border-radius: 8px;
+            padding: 16px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            max-height: 500px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .test-stats {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 12px;
+        }
+        .test-stat {
+            background: var(--bg);
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        .test-stat strong { font-weight: 600; }
+        .var-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+        .var-pill {
+            padding: 3px 10px;
+            background: #ede9fe;
+            color: #5b21b6;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: #1f2937;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 2000;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s;
+        }
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        .toast.error { background: var(--danger); }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Prompt Template Admin</h1>
+        <p>Manage prompt templates for directive, Pass 1, and Pass 2 generation. Edit, test, and version prompts.</p>
+        <div class="header-actions">
+            <a href="/" class="header-btn">&larr; Home</a>
+            <button class="header-btn" onclick="openEditor()">+ New Template</button>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Tab bar -->
+        <div class="tab-bar">
+            <button class="tab-btn active" onclick="filterTab('all', this)">All</button>
+            <button class="tab-btn" onclick="filterTab('directive', this)">Directive</button>
+            <button class="tab-btn" onclick="filterTab('pass1', this)">Pass 1</button>
+            <button class="tab-btn" onclick="filterTab('pass2', this)">Pass 2</button>
+        </div>
+
+        <!-- Template table -->
+        <div class="card">
+            <div class="card-header">
+                <h2>Templates</h2>
+            </div>
+            <table class="admin-table" id="templatesTable">
+                <thead>
+                    <tr>
+                        <th>Order</th>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Version</th>
+                        <th>Description</th>
+                        <th>Vars</th>
+                        <th>Chars</th>
+                        <th>Active</th>
+                        <th>Default</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for t in templates %}
+                    <tr data-type="{{ t.template_type }}" data-id="{{ t.template_id }}">
+                        <td>{{ t.display_order }}</td>
+                        <td style="font-weight:500; font-size:12px;">{{ t.template_name }}</td>
+                        <td><span class="badge badge-type">{{ t.template_type }}</span></td>
+                        <td>{{ t.version_label or '' }}</td>
+                        <td><div class="desc-text">{{ t.description or '' }}</div></td>
+                        <td>{{ t.var_count if t.var_count is defined else 0 }}</td>
+                        <td>{{ "{:,}".format(t.char_count or 0) }}</td>
+                        <td>
+                            <input type="checkbox" class="toggle-checkbox"
+                                   {{ 'checked' if t.is_active else '' }}
+                                   onchange="toggleField({{ t.template_id }}, 'is_active', this.checked)">
+                        </td>
+                        <td>
+                            <input type="radio" name="default_{{ t.template_type }}"
+                                   {{ 'checked' if t.is_default else '' }}
+                                   onchange="setDefault({{ t.template_id }})">
+                        </td>
+                        <td>
+                            <div class="action-btns">
+                                <button class="action-btn" onclick="editTemplate({{ t.template_id }})">Edit</button>
+                                <button class="action-btn" onclick="testTemplate({{ t.template_id }})">Test</button>
+                                <button class="action-btn delete" onclick="deleteTemplate({{ t.template_id }}, '{{ t.template_name }}')">Del</button>
+                            </div>
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Editor Modal -->
+    <div class="modal-overlay" id="editorModal">
+        <div class="modal">
+            <h2 id="editorTitle">New Prompt Template</h2>
+            <input type="hidden" id="editId" value="">
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="editName">Template Name</label>
+                    <input type="text" id="editName" placeholder="e.g. pass1_v5_custom">
+                </div>
+                <div class="form-group">
+                    <label for="editType">Type</label>
+                    <select id="editType">
+                        <option value="pass1">Pass 1</option>
+                        <option value="pass2">Pass 2</option>
+                        <option value="directive">Directive</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="editLabel">Version Label</label>
+                    <input type="text" id="editLabel" placeholder="e.g. V5 - Custom Focus">
+                </div>
+                <div class="form-group">
+                    <label for="editOrder">Display Order</label>
+                    <input type="text" id="editOrder" placeholder="e.g. 5">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="editDescription">Description</label>
+                <input type="text" id="editDescription" placeholder="Short description of what this template does">
+            </div>
+
+            <div class="form-group">
+                <label for="editText">Template Text</label>
+                <textarea id="editText" placeholder="Prompt template text with {{variable}} placeholders..."></textarea>
+            </div>
+
+            <div class="form-row">
+                <div class="checkbox-row">
+                    <input type="checkbox" id="editActive" checked>
+                    <label for="editActive">Active</label>
+                </div>
+                <div class="checkbox-row">
+                    <input type="checkbox" id="editDefault">
+                    <label for="editDefault">Default for this type</label>
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <button class="btn btn-secondary" onclick="closeEditor()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveTemplate()">Save</button>
+            </div>
+
+            <!-- Test Panel (shown when editing existing) -->
+            <div class="test-panel" id="testPanel" style="display:none;">
+                <h3>Test Rendering</h3>
+                <div class="test-controls">
+                    <div class="form-group">
+                        <label for="testSession">Workflow Session</label>
+                        <select id="testSession">
+                            <option value="">(No session - use placeholders)</option>
+                            {% for s in sessions %}
+                            <option value="{{ s.session_id }}">{{ s.competitor_name }} - {{ s.product_area }} ({{ s.status }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <button class="btn btn-info" onclick="runTest()">Render</button>
+                </div>
+                <div id="testResults" style="display:none;">
+                    <div class="test-stats" id="testStats"></div>
+                    <div class="var-pills" id="testVars"></div>
+                    <div class="test-output" id="testOutput"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+    // Template data from server
+    const SESSIONS = {{ sessions | tojson }};
+    </script>
+    {% raw %}
+    <script>
+    function showToast(message, isError) {
+        const toast = document.getElementById('toast');
+        toast.textContent = message;
+        toast.className = 'toast show' + (isError ? ' error' : '');
+        setTimeout(() => toast.className = 'toast', 3000);
+    }
+
+    function filterTab(type, btn) {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        document.querySelectorAll('#templatesTable tbody tr').forEach(row => {
+            if (type === 'all' || row.dataset.type === type) {
+                row.style.display = '';
+            } else {
+                row.style.display = 'none';
+            }
+        });
+    }
+
+    async function toggleField(id, field, value) {
+        try {
+            const resp = await fetch(`/api/admin/prompts/${id}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({[field]: value}),
+            });
+            const data = await resp.json();
+            if (data.success) {
+                showToast('Updated');
+            } else {
+                showToast(data.error || 'Failed', true);
+            }
+        } catch (e) {
+            showToast('Error: ' + e.message, true);
+        }
+    }
+
+    async function setDefault(id) {
+        try {
+            const resp = await fetch(`/api/admin/prompts/${id}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({is_default: true}),
+            });
+            const data = await resp.json();
+            if (data.success) {
+                showToast('Default updated');
+            } else {
+                showToast(data.error || 'Failed', true);
+            }
+        } catch (e) {
+            showToast('Error: ' + e.message, true);
+        }
+    }
+
+    function openEditor(id) {
+        document.getElementById('editId').value = id || '';
+        document.getElementById('editorTitle').textContent = id ? 'Edit Template' : 'New Prompt Template';
+        document.getElementById('editName').value = '';
+        document.getElementById('editType').value = 'pass1';
+        document.getElementById('editLabel').value = '';
+        document.getElementById('editOrder').value = '';
+        document.getElementById('editDescription').value = '';
+        document.getElementById('editText').value = '';
+        document.getElementById('editActive').checked = true;
+        document.getElementById('editDefault').checked = false;
+        document.getElementById('testPanel').style.display = id ? '' : 'none';
+        document.getElementById('testResults').style.display = 'none';
+        document.getElementById('editorModal').classList.add('show');
+    }
+
+    function closeEditor() {
+        document.getElementById('editorModal').classList.remove('show');
+    }
+
+    async function editTemplate(id) {
+        try {
+            const resp = await fetch(`/api/admin/prompts/${id}`);
+            const data = await resp.json();
+            if (data.error) { showToast(data.error, true); return; }
+
+            document.getElementById('editId').value = data.template_id;
+            document.getElementById('editorTitle').textContent = 'Edit: ' + data.template_name;
+            document.getElementById('editName').value = data.template_name;
+            document.getElementById('editType').value = data.template_type;
+            document.getElementById('editLabel').value = data.version_label || '';
+            document.getElementById('editOrder').value = data.display_order || '';
+            document.getElementById('editDescription').value = data.description || '';
+            document.getElementById('editText').value = data.template_text;
+            document.getElementById('editActive').checked = data.is_active;
+            document.getElementById('editDefault').checked = data.is_default;
+            document.getElementById('testPanel').style.display = '';
+            document.getElementById('testResults').style.display = 'none';
+            document.getElementById('editorModal').classList.add('show');
+        } catch (e) {
+            showToast('Error loading template: ' + e.message, true);
+        }
+    }
+
+    async function saveTemplate() {
+        const id = document.getElementById('editId').value;
+        const payload = {
+            template_name: document.getElementById('editName').value,
+            template_type: document.getElementById('editType').value,
+            version_label: document.getElementById('editLabel').value,
+            description: document.getElementById('editDescription').value,
+            template_text: document.getElementById('editText').value,
+            is_active: document.getElementById('editActive').checked,
+            is_default: document.getElementById('editDefault').checked,
+        };
+        const order = document.getElementById('editOrder').value;
+        if (order) payload.display_order = parseInt(order);
+
+        try {
+            const url = id ? `/api/admin/prompts/${id}` : '/api/admin/prompts';
+            const method = id ? 'PUT' : 'POST';
+            const resp = await fetch(url, {
+                method,
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload),
+            });
+            const data = await resp.json();
+            if (data.success) {
+                showToast(id ? 'Template updated' : 'Template created');
+                closeEditor();
+                setTimeout(() => location.reload(), 500);
+            } else {
+                showToast(data.error || 'Failed', true);
+            }
+        } catch (e) {
+            showToast('Error: ' + e.message, true);
+        }
+    }
+
+    async function deleteTemplate(id, name) {
+        if (!confirm(`Delete template "${name}"?`)) return;
+        try {
+            const resp = await fetch(`/api/admin/prompts/${id}`, {method: 'DELETE'});
+            const data = await resp.json();
+            if (data.success) {
+                showToast('Deleted');
+                document.querySelector(`tr[data-id="${id}"]`)?.remove();
+            } else {
+                showToast(data.error || 'Failed', true);
+            }
+        } catch (e) {
+            showToast('Error: ' + e.message, true);
+        }
+    }
+
+    function testTemplate(id) {
+        editTemplate(id);
+    }
+
+    async function runTest() {
+        const id = document.getElementById('editId').value;
+        if (!id) { showToast('Save template first', true); return; }
+
+        const sessionId = document.getElementById('testSession').value;
+
+        try {
+            const resp = await fetch(`/api/admin/prompts/${id}/test`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({session_id: sessionId || null}),
+            });
+            const data = await resp.json();
+            if (data.error) { showToast(data.error, true); return; }
+
+            // Show stats
+            document.getElementById('testStats').innerHTML = `
+                <div class="test-stat"><strong>Tokens:</strong> ${data.token_count?.toLocaleString() || '?'}</div>
+                <div class="test-stat"><strong>Characters:</strong> ${data.char_count?.toLocaleString() || '?'}</div>
+            `;
+
+            // Show variable pills
+            const vars = data.variables || {};
+            const pillsHtml = Object.keys(vars).map(v => {
+                const val = vars[v];
+                const preview = typeof val === 'string' ? val.substring(0, 50) : String(val);
+                return `<span class="var-pill" title="${v}: ${preview.replace(/"/g, '&quot;')}">{{${v}}}</span>`;
+            }).join('');
+            document.getElementById('testVars').innerHTML = pillsHtml;
+
+            // Show rendered output
+            document.getElementById('testOutput').textContent = data.rendered_prompt || '';
+            document.getElementById('testResults').style.display = '';
+
+        } catch (e) {
+            showToast('Test failed: ' + e.message, true);
+        }
+    }
+
+    // Close modal on backdrop click
+    document.getElementById('editorModal').addEventListener('click', function(e) {
+        if (e.target === this) closeEditor();
+    });
+
+    // Close on Escape
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closeEditor();
+    });
+    </script>
+    {% endraw %}
+</body>
+</html>

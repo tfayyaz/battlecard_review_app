@@ -349,6 +349,7 @@
         .step-status-badge.completed { background: #D1FAE5; color: #065F46; }
         .step-status-badge.failed { background: #FEE2E2; color: #991B1B; }
         .step-status-badge.skipped { background: #F3F4F6; color: #6B7280; }
+        .step-status-badge.stuck { background: #FEF3C7; color: #92400E; }
 
         .step-status-dot {
             width: 6px;
@@ -361,6 +362,52 @@
         .step-status-badge.waiting_human .step-status-dot { background: #7C3AED; }
         .step-status-badge.completed .step-status-dot { background: #059669; }
         .step-status-badge.failed .step-status-dot { background: #DC2626; }
+        .step-status-badge.stuck .step-status-dot { background: #D97706; }
+
+        /* Stuck step styling */
+        .step-number.stuck {
+            background: #FEF3C7 !important;
+            color: #92400E !important;
+            border-color: #F59E0B !important;
+        }
+        .stuck-warning {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: #FFFBEB;
+            border: 1px solid #FCD34D;
+            border-radius: 8px;
+            margin: 12px 0;
+        }
+        .stuck-icon {
+            font-size: 24px;
+        }
+        .stuck-message {
+            flex: 1;
+            font-size: 13px;
+            color: #92400E;
+        }
+        .stuck-message strong {
+            color: #78350F;
+        }
+        .stuck-reason {
+            font-size: 12px;
+            color: #A16207;
+        }
+        .btn-warning {
+            background: #F59E0B;
+            color: #fff;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+        }
+        .btn-warning:hover {
+            background: #D97706;
+        }
 
         @keyframes pulse {
             0%, 100% { opacity: 1; }
@@ -591,6 +638,30 @@
             color: #991B1B;
             font-size: 13px;
             margin: 10px 0;
+        }
+
+        /* Last error indicator (inline during in_progress) */
+        .last-error-indicator {
+            background: #FFFBEB;
+            border: 1px solid #FDE68A;
+            border-radius: 6px;
+            padding: 8px 12px;
+            color: #92400E;
+            font-size: 12px;
+            margin: 8px 0;
+        }
+        .last-error-indicator .error-count {
+            font-weight: 600;
+            color: #B45309;
+        }
+        .last-error-indicator .error-text {
+            font-family: monospace;
+            font-size: 11px;
+            display: block;
+            margin-top: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         /* Skeleton table */
@@ -829,6 +900,71 @@
         .rating-prefix.positive { color: var(--success); }
         .rating-prefix.neutral { color: var(--warning); }
         .rating-prefix.negative { color: #DC2626; }
+
+        /* Toggle controls */
+        .toggle-bar {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin: 10px 0;
+            flex-wrap: wrap;
+        }
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 12px;
+            background: var(--bg);
+            border-radius: 6px;
+            margin-right: 12px;
+        }
+        .toggle-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+        .toggle-switch {
+            position: relative;
+            width: 40px;
+            height: 22px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #ccc;
+            transition: 0.3s;
+            border-radius: 22px;
+        }
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: var(--teal);
+        }
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(18px);
+        }
+        /* Body-class visibility toggles for Step 5 claims */
+        body.hide-keydiff-eval .claims-table .diff-feedback-row { display: none !important; }
+        body.hide-rating-eval .claims-table td:nth-child(2) .score-buttons { display: none !important; }
+        body.hide-rating-eval .claims-table td:nth-child(2) .diff-comment-input { display: none !important; }
+        body.hide-rating-eval .claims-table td:nth-child(3) .score-buttons { display: none !important; }
+        body.hide-rating-eval .claims-table td:nth-child(3) .diff-comment-input { display: none !important; }
+        body.hide-details .vendor-details { display: none !important; }
 
         /* Prompt modal */
         .modal-overlay {
@@ -1399,6 +1535,129 @@
             .step-number { left: 0; width: 28px; height: 28px; font-size: 12px; }
             .category-grid { grid-template-columns: 1fr; }
         }
+
+        /* File delete button */
+        .file-delete-btn {
+            background: none;
+            border: none;
+            color: #9CA3AF;
+            font-size: 16px;
+            cursor: pointer;
+            padding: 0 4px;
+            margin-left: 6px;
+            line-height: 1;
+            border-radius: 3px;
+            vertical-align: middle;
+        }
+        .file-delete-btn:hover {
+            color: #991B1B;
+            background: #FEE2E2;
+        }
+
+        /* Context Sources Picker */
+        .context-sources-panel {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin: 10px 0;
+            background: #FAFBFC;
+        }
+        .context-sources-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            user-select: none;
+        }
+        .context-sources-header:hover {
+            background: #F3F4F6;
+            border-radius: 8px;
+        }
+        .context-sources-count {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            background: #E5E7EB;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+        .context-sources-toggle {
+            font-size: 10px;
+            color: var(--text-secondary);
+            transition: transform 0.2s;
+        }
+        .context-sources-toggle.open {
+            transform: rotate(180deg);
+        }
+        .context-sources-body {
+            display: none;
+            padding: 0 14px 12px;
+        }
+        .context-sources-body.open {
+            display: block;
+        }
+        .context-source-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #F3F4F6;
+        }
+        .context-source-item:last-child {
+            border-bottom: none;
+        }
+        .context-source-item input[type="checkbox"] {
+            margin-top: 3px;
+            accent-color: var(--teal);
+            width: 16px;
+            height: 16px;
+        }
+        .context-source-item input[type="checkbox"]:disabled {
+            opacity: 0.4;
+        }
+        .context-source-info {
+            flex: 1;
+        }
+        .context-source-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+        }
+        .context-source-desc {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        .context-source-preview {
+            font-size: 11px;
+            color: #9CA3AF;
+            margin-top: 4px;
+            font-style: italic;
+            max-height: 40px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .context-source-unavailable .context-source-label {
+            color: var(--text-secondary);
+        }
+        .context-source-badge {
+            font-size: 10px;
+            padding: 1px 6px;
+            border-radius: 8px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .context-source-badge.available {
+            background: #ECFDF5;
+            color: #065F46;
+        }
+        .context-source-badge.unavailable {
+            background: #FEF2F2;
+            color: #991B1B;
+        }
     </style>
 </head>
 <body>
@@ -1410,8 +1669,8 @@
                     <h1 class="header-title" style="margin-top: 4px;">{{ session.competitor_name }} Battlecard Workflow</h1>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    {% if battlecard_id %}
-                    <a href="/battlecard/{{ battlecard_id }}" style="font-size: 12px; font-weight: 600; color: var(--teal); text-decoration: none; padding: 4px 10px; border: 1px solid var(--border); border-radius: 5px;">View Battlecard &rarr;</a>
+                    {% if battlecard_link_id %}
+                    <a href="/battlecard/{{ battlecard_link_id }}" style="font-size: 12px; font-weight: 600; color: var(--teal); text-decoration: none; padding: 4px 10px; border: 1px solid var(--border); border-radius: 5px;">View Battlecard &rarr;</a>
                     {% endif %}
                     <span class="step-status-badge {{ session.status }}">
                         <span class="step-status-dot"></span>
@@ -1492,6 +1751,12 @@
                         </div>
                         {% endif %}
 
+                        <!-- Last error indicator (shown during in_progress when errors occur) -->
+                        <div id="last-error-{{ step.step_number }}" class="last-error-indicator" style="{% if not step.last_error %}display: none;{% endif %}">
+                            <span class="error-count" id="error-count-{{ step.step_number }}">{{ step.error_count or 0 }} error(s)</span> during execution
+                            <span class="error-text" id="error-text-{{ step.step_number }}" title="{{ step.last_error or '' }}">{{ step.last_error or '' }}</span>
+                        </div>
+
                         {% if step.error_details and step.error_details.errors %}
                         <div class="error-details-list">
                             <details>
@@ -1514,7 +1779,10 @@
                             </div>
                             <ul class="uploaded-files" id="uploaded-files-1">
                                 {% for a in artifacts_by_step.get(1, []) if a.artifact_type == 'directive_upload' %}
-                                <li>{{ a.artifact_name }}</li>
+                                <li class="uploaded-file-item" data-filename="{{ a.artifact_name }}">
+                                    <span style="color: var(--success);">&#x25CF;</span> {{ a.artifact_name }}
+                                    <button class="file-delete-btn" onclick="deleteUploadedFile(this, '{{ a.artifact_name|e }}', 1)" title="Remove file">&times;</button>
+                                </li>
                                 {% endfor %}
                             </ul>
                             <div class="btn-group">
@@ -1527,6 +1795,11 @@
                                 <div class="artifact-header">
                                     <span class="artifact-title">Generated Directive</span>
                                     <span class="artifact-badge">Completed</span>
+                                    {% if not context_steps_locked %}
+                                    <button class="btn" style="margin-left:auto; font-size:11px; padding:2px 10px;" onclick="editStep(1)">Edit</button>
+                                    {% else %}
+                                    <span style="margin-left:auto; font-size:10px; color:var(--text-secondary);" title="Locked — generation steps have started">&#x1F512; Locked</span>
+                                    {% endif %}
                                 </div>
                                 {% for a in artifacts_by_step.get(1, []) if a.artifact_type == 'directive_generated' %}
                                 <pre>{{ a.artifact_content[:500] }}{% if a.artifact_content|length > 500 %}...{% endif %}</pre>
@@ -1545,6 +1818,7 @@
                                 {% for a in artifacts_by_step.get(2, []) if a.artifact_type == 'old_battlecard_upload' %}
                                 <li class="uploaded-file-item" data-filename="{{ a.artifact_name }}">
                                     <span style="color: var(--success);">&#x25CF;</span> {{ a.artifact_name }}
+                                    <button class="file-delete-btn" onclick="deleteUploadedFile(this, '{{ a.artifact_name|e }}', 2)" title="Remove file">&times;</button>
                                 </li>
                                 {% endfor %}
                             </ul>
@@ -1563,6 +1837,11 @@
                                 <div class="artifact-header">
                                     <span class="artifact-title">Extracted Content</span>
                                     <span class="artifact-badge">Completed</span>
+                                    {% if not context_steps_locked %}
+                                    <button class="btn" style="margin-left:auto; font-size:11px; padding:2px 10px;" onclick="editStep(2)">Edit</button>
+                                    {% else %}
+                                    <span style="margin-left:auto; font-size:10px; color:var(--text-secondary);" title="Locked — generation steps have started">&#x1F512; Locked</span>
+                                    {% endif %}
                                 </div>
                                 {% for a in artifacts_by_step.get(2, []) if a.artifact_type == 'old_battlecard_extracted' %}
                                 <pre>{{ a.artifact_content[:500] }}{% if a.artifact_content|length > 500 %}...{% endif %}</pre>
@@ -1570,36 +1849,8 @@
                             </div>
                             {% endif %}
 
-                        <!-- Step 3: Choose Product Categories -->
+                        <!-- Step 3: Classify Product Categories -->
                         {% elif step.step_number == 3 %}
-                            {% if step.status in ('ready', 'pending') %}
-                            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">Select the product categories to include in the battlecard:</p>
-                            <div class="category-grid" id="category-grid">
-                                {% for cat in categories %}
-                                <label class="category-checkbox">
-                                    <input type="checkbox" name="category" value="{{ cat }}" checked>
-                                    {{ cat }}
-                                </label>
-                                {% endfor %}
-                            </div>
-                            <div class="btn-group">
-                                <button class="btn btn-primary" onclick="saveCategories()">Save Categories</button>
-                                <button class="btn" onclick="viewPrompt(3)">View Prompt</button>
-                            </div>
-                            {% elif step.status == 'completed' %}
-                            <div class="artifact-panel">
-                                <div class="artifact-header">
-                                    <span class="artifact-title">Selected Categories</span>
-                                    <span class="artifact-badge">{{ (artifacts_by_step.get(3, [{}])[0] or {}).get('artifact_metadata', {}).get('categories', []) | length }} selected</span>
-                                </div>
-                                {% for a in artifacts_by_step.get(3, []) if a.artifact_type == 'product_categories' %}
-                                <pre>{{ a.artifact_content }}</pre>
-                                {% endfor %}
-                            </div>
-                            {% endif %}
-
-                        <!-- Step 4: Map Products to Categories -->
-                        {% elif step.step_number == 4 %}
                             {% if step.status in ('ready', 'pending') %}
                             <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">
                                 Classify each product category for the battlecard. Choose <strong>Core Product Category</strong> (gets its own slide),
@@ -1643,15 +1894,20 @@
                             </div>
                             <div class="btn-group" style="margin-top: 12px;">
                                 <button class="btn btn-primary" onclick="saveCategorySelections()">Save &amp; Continue</button>
-                                <button class="btn" onclick="viewPrompt(4)">View Prompt</button>
+                                <button class="btn" onclick="viewPrompt(3)">View Prompt</button>
                             </div>
                             {% elif step.status == 'completed' %}
                             <div class="artifact-panel">
                                 <div class="artifact-header">
                                     <span class="artifact-title">Category Classifications</span>
                                     <span class="artifact-badge">Saved</span>
+                                    {% if not context_steps_locked %}
+                                    <button class="btn" style="margin-left:auto; font-size:11px; padding:2px 10px;" onclick="editStep(3)">Edit</button>
+                                    {% else %}
+                                    <span style="margin-left:auto; font-size:10px; color:var(--text-secondary);" title="Locked — generation steps have started">&#x1F512; Locked</span>
+                                    {% endif %}
                                 </div>
-                                {% for a in artifacts_by_step.get(4, []) if a.artifact_type == 'category_selections' %}
+                                {% for a in artifacts_by_step.get(3, []) if a.artifact_type == 'category_selections' %}
                                 <div style="font-size: 12px; margin-top: 8px;">
                                     {% set sel_data = a.artifact_content if a.artifact_content is mapping else {} %}
                                     {% if sel_data.get('core_product_categories') %}
@@ -1677,16 +1933,24 @@
                             </div>
                             {% endif %}
 
-                        <!-- Step 5: Generate Key Differentiators -->
-                        {% elif step.step_number == 5 %}
+                        <!-- Step 4: Generate Key Differentiators -->
+                        {% elif step.step_number == 4 %}
                             {% if step.status == 'ready' %}
+                            <div class="context-sources-panel" id="context-sources-panel-4">
+                                <div class="context-sources-header" onclick="toggleContextSources(4)">
+                                    <span>Context Sources <span class="context-sources-count" id="ctx-count-4">loading...</span></span>
+                                    <span class="context-sources-toggle" id="ctx-toggle-4">&#9660;</span>
+                                </div>
+                                <div class="context-sources-body" id="ctx-body-4"></div>
+                            </div>
+                            <script>document.addEventListener('DOMContentLoaded', function() { loadContextSources(4); });</script>
                             <div class="btn-group">
-                                <button class="btn btn-primary" onclick="triggerStep(5, 'generate')" id="btn-step5-generate">Generate Key Differentiators</button>
-                                <button class="btn" onclick="viewPrompt(5)">View Prompt</button>
+                                <button class="btn btn-primary" onclick="triggerStep(4, 'generate')" id="btn-step4-generate">Generate Key Differentiators</button>
+                                <button class="btn" onclick="viewPrompt(4)">View Prompt</button>
                             </div>
                             {% elif step.status == 'waiting_human' %}
                             <div id="skeletons-preview">
-                                {% set skel_artifacts = artifacts_by_step.get(5, []) %}
+                                {% set skel_artifacts = artifacts_by_step.get(4, []) %}
                                 {% for a in skel_artifacts if a.artifact_type == 'pass1_skeletons' %}
                                 <div class="artifact-header">
                                     <span class="artifact-title">Key Differentiator Skeletons</span>
@@ -1748,7 +2012,7 @@
                                 </script>
                                 {% endfor %}
                             </div>
-                            <textarea class="feedback-area" id="feedback-step5" placeholder="Optional: provide overall feedback on all key differentiators..."></textarea>
+                            <textarea class="feedback-area" id="feedback-step4" placeholder="Optional: provide overall feedback on all key differentiators..."></textarea>
                             {% if review_summary and review_summary.total > 0 %}
                             <div style="background: #ECFDF5; border: 1px solid #A7F3D0; border-radius: 6px; padding: 10px 14px; margin: 8px 0; font-size: 13px;">
                                 <strong style="color: #065F46;">Battlecard Review Feedback:</strong>
@@ -1758,39 +2022,79 @@
                                 {% if battlecard_id %}&mdash; <a href="/battlecard/{{ battlecard_id }}" style="color: var(--teal); font-weight: 600;">View full review details</a>{% endif %}
                             </div>
                             {% endif %}
+                            <div class="context-sources-panel" id="context-sources-panel-4-regen">
+                                <div class="context-sources-header" onclick="toggleContextSources('4-regen')">
+                                    <span>Context Sources <span class="context-sources-count" id="ctx-count-4-regen">loading...</span></span>
+                                    <span class="context-sources-toggle" id="ctx-toggle-4-regen">&#9660;</span>
+                                </div>
+                                <div class="context-sources-body" id="ctx-body-4-regen"></div>
+                            </div>
+                            <script>document.addEventListener('DOMContentLoaded', function() { loadContextSources('4-regen'); });</script>
                             <div class="btn-group">
-                                <button class="btn btn-success" onclick="approveStep(5)">Approve &amp; Continue</button>
-                                <button class="btn btn-primary" onclick="regenerateStep(5)">Regenerate with Feedback</button>
+                                <button class="btn btn-success" onclick="approveStep(4)">Approve &amp; Continue</button>
+                                <button class="btn btn-primary" onclick="regenerateStep(4)">Regenerate with Feedback</button>
                                 {% if review_summary and review_summary.total > 0 %}
-                                <button class="btn" style="border-color: var(--success); color: var(--success);" onclick="regenerateWithReviewFeedback(5)">Regenerate with Review Feedback</button>
+                                <button class="btn" style="border-color: var(--success); color: var(--success);" onclick="regenerateWithReviewFeedback(4)">Regenerate with Review Feedback</button>
                                 {% endif %}
-                                <button class="btn" onclick="viewPrompt(5)">View Prompt</button>
+                                <button class="btn" onclick="viewPrompt(4)">View Prompt</button>
                             </div>
                             {% elif step.status == 'completed' %}
                             <div class="artifact-panel">
                                 <div class="artifact-header">
                                     <span class="artifact-title">Key Differentiators</span>
                                     <span class="artifact-badge">Approved</span>
+                                    <button class="btn" style="margin-left:auto; font-size:11px; padding:2px 10px;" onclick="editStep(4)">Edit</button>
                                 </div>
-                                <pre>{{ (artifacts_by_step.get(5, [{}])[0] or {}).get('artifact_content', '')[:300] }}...</pre>
+                                <pre>{{ (artifacts_by_step.get(4, [{}])[0] or {}).get('artifact_content', '')[:300] }}...</pre>
                             </div>
                             {% endif %}
 
-                        <!-- Step 6: Generate Key Diff Claims -->
-                        {% elif step.step_number == 6 %}
+                        <!-- Step 5: Generate Key Diff Claims -->
+                        {% elif step.step_number == 5 %}
                             {% if step.status == 'ready' %}
+                            <div class="context-sources-panel" id="context-sources-panel-5">
+                                <div class="context-sources-header" onclick="toggleContextSources(5)">
+                                    <span>Context Sources <span class="context-sources-count" id="ctx-count-5">loading...</span></span>
+                                    <span class="context-sources-toggle" id="ctx-toggle-5">&#9660;</span>
+                                </div>
+                                <div class="context-sources-body" id="ctx-body-5"></div>
+                            </div>
+                            <script>document.addEventListener('DOMContentLoaded', function() { loadContextSources(5); });</script>
                             <div class="btn-group">
-                                <button class="btn btn-primary" onclick="triggerStep(6, 'generate')" id="btn-step6-generate">Generate Claims</button>
-                                <button class="btn" onclick="viewPrompt(6)">View Prompt</button>
+                                <button class="btn btn-primary" onclick="triggerStep(5, 'generate')" id="btn-step5-generate">Generate Claims</button>
+                                <button class="btn" onclick="viewPrompt(5)">View Prompt</button>
                             </div>
                             {% elif step.status == 'waiting_human' %}
                             <div id="claims-preview">
                                 {% set skel_json = None %}
-                                {% for a in artifacts_by_step.get(5, []) if a.artifact_type == 'pass1_skeletons' %}{% set skel_json = a.artifact_content %}{% endfor %}
-                                {% for a in artifacts_by_step.get(6, []) if a.artifact_type in ('pass2_claims', 'pass3_regenerated') %}
+                                {% for a in artifacts_by_step.get(4, []) if a.artifact_type == 'pass1_skeletons' %}{% set skel_json = a.artifact_content %}{% endfor %}
+                                {% for a in artifacts_by_step.get(5, []) if a.artifact_type in ('pass2_claims', 'pass3_regenerated') %}
                                 <div class="artifact-header">
                                     <span class="artifact-title">Generated Claims</span>
                                     <span class="artifact-badge">{{ (a.artifact_metadata or {}).get('count', '?') }} claim pairs</span>
+                                </div>
+                                <div class="toggle-bar">
+                                    <div class="toggle-container">
+                                        <span class="toggle-label">Show Details</span>
+                                        <label class="toggle-switch">
+                                            <input type="checkbox" id="details-toggle" checked onchange="toggleDetails()">
+                                            <span class="toggle-slider"></span>
+                                        </label>
+                                    </div>
+                                    <div class="toggle-container">
+                                        <span class="toggle-label">Rating Eval</span>
+                                        <label class="toggle-switch">
+                                            <input type="checkbox" id="rating-eval-toggle" checked onchange="toggleRatingEval()">
+                                            <span class="toggle-slider"></span>
+                                        </label>
+                                    </div>
+                                    <div class="toggle-container">
+                                        <span class="toggle-label">Key Diff Eval</span>
+                                        <label class="toggle-switch">
+                                            <input type="checkbox" id="keydiff-eval-toggle" checked onchange="toggleKeyDiffEval()">
+                                            <span class="toggle-slider"></span>
+                                        </label>
+                                    </div>
                                 </div>
                                 <div style="overflow-x: auto; margin: 10px 0;">
                                     <table class="claims-table">
@@ -1836,7 +2140,7 @@
                                                 '</td>' +
                                                 '<td>' +
                                                     '<div class="vendor-headline">' + ratingPrefix(dbRating) + (claim.databricks_headline || '') + '</div>' +
-                                                    '<div class="vendor-details">' + (claim.databricks_details || '') + '</div>' +
+                                                    '<div class="vendor-details">' + (Array.isArray(claim.databricks_details) ? claim.databricks_details.map(function(d){return '<div>&ndash; '+d+'</div>';}).join('') : (claim.databricks_details || '')) + '</div>' +
                                                     '<div class="diff-feedback-row" style="border-top:1px solid #E5E7EB;margin-top:8px;padding-top:8px">' +
                                                         '<div class="score-buttons">' +
                                                             '<button class="score-btn approve" onclick="setClaimFeedback(\'' + id + '\', \'db\', \'approved\', this)" title="Approve">&#10003;</button>' +
@@ -1848,7 +2152,7 @@
                                                 '</td>' +
                                                 '<td>' +
                                                     '<div class="vendor-headline">' + ratingPrefix(compRating) + (claim.competitor_headline || '') + '</div>' +
-                                                    '<div class="vendor-details">' + (claim.competitor_details || '') + '</div>' +
+                                                    '<div class="vendor-details">' + (Array.isArray(claim.competitor_details) ? claim.competitor_details.map(function(d){return '<div>&ndash; '+d+'</div>';}).join('') : (claim.competitor_details || '')) + '</div>' +
                                                     '<div class="diff-feedback-row" style="border-top:1px solid #E5E7EB;margin-top:8px;padding-top:8px">' +
                                                         '<div class="score-buttons">' +
                                                             '<button class="score-btn approve" onclick="setClaimFeedback(\'' + id + '\', \'comp\', \'approved\', this)" title="Approve">&#10003;</button>' +
@@ -1865,7 +2169,7 @@
                                 </script>
                                 {% endfor %}
                             </div>
-                            <textarea class="feedback-area" id="feedback-step6" placeholder="Optional: provide overall feedback on all claims..."></textarea>
+                            <textarea class="feedback-area" id="feedback-step5" placeholder="Optional: provide overall feedback on all claims..."></textarea>
                             {% if review_summary and review_summary.total > 0 %}
                             <div style="background: #ECFDF5; border: 1px solid #A7F3D0; border-radius: 6px; padding: 10px 14px; margin: 8px 0; font-size: 13px;">
                                 <strong style="color: #065F46;">Battlecard Review Feedback:</strong>
@@ -1875,21 +2179,30 @@
                                 {% if battlecard_id %}&mdash; <a href="/battlecard/{{ battlecard_id }}" style="color: var(--teal); font-weight: 600;">View full review details</a>{% endif %}
                             </div>
                             {% endif %}
+                            <div class="context-sources-panel" id="context-sources-panel-5-regen">
+                                <div class="context-sources-header" onclick="toggleContextSources('5-regen')">
+                                    <span>Context Sources <span class="context-sources-count" id="ctx-count-5-regen">loading...</span></span>
+                                    <span class="context-sources-toggle" id="ctx-toggle-5-regen">&#9660;</span>
+                                </div>
+                                <div class="context-sources-body" id="ctx-body-5-regen"></div>
+                            </div>
+                            <script>document.addEventListener('DOMContentLoaded', function() { loadContextSources('5-regen'); });</script>
                             <div class="btn-group">
-                                <button class="btn btn-success" onclick="approveStep(6)">Approve &amp; Continue</button>
-                                <button class="btn btn-primary" onclick="regenerateStep(6)">Regenerate with Feedback</button>
+                                <button class="btn btn-success" onclick="approveStep(5)">Approve &amp; Continue</button>
+                                <button class="btn btn-primary" onclick="regenerateStep(5)">Regenerate with Feedback</button>
                                 {% if review_summary and review_summary.total > 0 %}
-                                <button class="btn" style="border-color: var(--success); color: var(--success);" onclick="regenerateWithReviewFeedback(6)">Regenerate with Review Feedback</button>
+                                <button class="btn" style="border-color: var(--success); color: var(--success);" onclick="regenerateWithReviewFeedback(5)">Regenerate with Review Feedback</button>
                                 {% endif %}
-                                <button class="btn" onclick="viewPrompt(6)">View Prompt</button>
+                                <button class="btn" onclick="viewPrompt(5)">View Prompt</button>
                             </div>
                             {% elif step.status == 'completed' %}
                             <div class="artifact-panel">
                                 <div class="artifact-header">
                                     <span class="artifact-title">Claims</span>
                                     <span class="artifact-badge">Approved</span>
+                                    <button class="btn" style="margin-left:auto; font-size:11px; padding:2px 10px;" onclick="editStep(5)">Edit</button>
                                 </div>
-                                <pre>{{ (artifacts_by_step.get(6, [{}])[0] or {}).get('artifact_content', '')[:300] }}...</pre>
+                                <pre>{{ (artifacts_by_step.get(5, [{}])[0] or {}).get('artifact_content', '')[:300] }}...</pre>
                             </div>
                             {% if battlecard_id %}
                             <div style="margin-top: 8px;">
@@ -1898,19 +2211,19 @@
                             {% endif %}
                             {% endif %}
 
-                        <!-- Step 7: Fact Check Claims -->
-                        {% elif step.step_number == 7 %}
+                        <!-- Step 6: Fact Check Claims -->
+                        {% elif step.step_number == 6 %}
                             {% if step.status == 'ready' %}
                             <div class="btn-group">
-                                <button class="btn btn-primary" onclick="runFactCheck()" id="btn-step7-factcheck">Run Fact Check</button>
-                                <button class="btn" onclick="viewPrompt(7)">View Prompt</button>
+                                <button class="btn btn-primary" onclick="runFactCheck()" id="btn-step6-factcheck">Run Fact Check</button>
+                                <button class="btn" onclick="viewPrompt(6)">View Prompt</button>
                             </div>
                             {% elif step.status == 'in_progress' %}
-                            <div class="progress-container" id="step7-progress">
+                            <div class="progress-container" id="step6-progress">
                                 <div class="progress-bar">
-                                    <div class="progress-fill" id="step7-progress-fill" style="width: {{ step.progress_current|default(0) / step.progress_total|default(1) * 100 if step.progress_total else 0 }}%"></div>
+                                    <div class="progress-fill" id="step6-progress-fill" style="width: {{ step.progress_current|default(0) / step.progress_total|default(1) * 100 if step.progress_total else 0 }}%"></div>
                                 </div>
-                                <div class="progress-text" id="step7-progress-text">{{ step.progress_message or 'Fact checking claims...' }}</div>
+                                <div class="progress-text" id="step6-progress-text">{{ step.progress_message or 'Fact checking claims...' }}</div>
                             </div>
                             {% elif step.status == 'waiting_human' %}
                             <!-- Fact Check Summary Bar -->
@@ -1968,14 +2281,15 @@
                             </div>
                             {% endif %}
                             <div class="btn-group" style="margin-top: 12px;">
-                                <button class="btn btn-primary" onclick="approveFactCheck()" id="btn-step7-approve">Approve &amp; Continue</button>
-                                <button class="btn" onclick="runFactCheck()" id="btn-step7-rerun">Re-run Fact Check</button>
+                                <button class="btn btn-primary" onclick="approveFactCheck()" id="btn-step6-approve">Approve &amp; Continue</button>
+                                <button class="btn" onclick="runFactCheck()" id="btn-step6-rerun">Re-run Fact Check</button>
                             </div>
                             {% elif step.status == 'completed' %}
                             <div class="artifact-panel">
                                 <div class="artifact-header">
                                     <span class="artifact-title">Fact Check Results</span>
                                     <span class="artifact-badge">Completed</span>
+                                    <button class="btn" style="margin-left:auto; font-size:11px; padding:2px 10px;" onclick="editStep(6)">Edit</button>
                                 </div>
                                 {% if fact_check_summary %}
                                 <div class="fc-summary-bar" style="margin-top: 8px;">
@@ -1988,20 +2302,21 @@
                             </div>
                             {% endif %}
 
-                        <!-- Step 8: Generate Google Slides -->
-                        {% elif step.step_number == 8 %}
+                        <!-- Step 7: Generate Google Slides -->
+                        {% elif step.step_number == 7 %}
                             {% if step.status == 'ready' %}
                             <div class="btn-group">
-                                <button class="btn btn-primary" onclick="triggerStep(8, 'generate')" id="btn-step8-generate">Generate Slides</button>
-                                <button class="btn" onclick="viewPrompt(8)">View Prompt</button>
+                                <button class="btn btn-primary" onclick="triggerStep(7, 'generate')" id="btn-step7-generate">Generate Slides</button>
+                                <button class="btn" onclick="viewPrompt(7)">View Prompt</button>
                             </div>
                             {% elif step.status == 'completed' %}
                             <div class="artifact-panel">
                                 <div class="artifact-header">
                                     <span class="artifact-title">Google Slides</span>
                                     <span class="artifact-badge">Generated</span>
+                                    <button class="btn" style="margin-left:auto; font-size:11px; padding:2px 10px;" onclick="editStep(7)">Edit</button>
                                 </div>
-                                {% for a in artifacts_by_step.get(8, []) if a.artifact_type == 'google_slides_url' %}
+                                {% for a in artifacts_by_step.get(7, []) if a.artifact_type == 'google_slides_url' %}
                                 <a href="{{ a.artifact_content }}" target="_blank" style="font-size: 14px; color: var(--teal); font-weight: 600;">Open in Google Slides &rarr;</a>
                                 {% endfor %}
                             </div>
@@ -2024,228 +2339,169 @@
     <!-- RESIZE HANDLE -->
     <div class="resize-handle" id="resize-handle"></div>
 
-    <!-- RIGHT PANEL: Battlecard Preview / Full View -->
+    <!-- RIGHT PANEL: Battlecard Cards Preview -->
     <div class="panel-right" id="panel-right">
-        {% if battlecard_id %}
-        <iframe id="battlecard-iframe"
-                src="/battlecard/{{ battlecard_id }}?embedded=true"
-                style="width:100%; height:100%; border:none;"
-                title="Battlecard Review"></iframe>
-        {% else %}
-        <div class="container">
-            <div class="battlecard-preview-header">
-                <div>
-                    <div class="battlecard-preview-title" id="bc-preview-title">{{ session.competitor_name }} Battlecard</div>
-                    <div class="battlecard-preview-subtitle">Preview builds as you complete each step</div>
-                </div>
-            </div>
+        <style>
+            .bc-cards-header {
+                padding: 16px 20px;
+                background: var(--card-bg);
+                border-bottom: 1px solid var(--border);
+                position: sticky;
+                top: 0;
+                z-index: 10;
+            }
+            .bc-cards-title {
+                font-size: 18px;
+                font-weight: 700;
+                color: var(--text);
+            }
+            .bc-cards-subtitle {
+                font-size: 12px;
+                color: var(--text-secondary);
+                margin-top: 2px;
+            }
+            .bc-cards-stats {
+                display: flex;
+                gap: 16px;
+                margin-top: 8px;
+            }
+            .bc-cards-stat {
+                font-size: 12px;
+                color: var(--text-secondary);
+            }
+            .bc-cards-stat strong {
+                color: var(--teal);
+            }
+            .bc-cards-container {
+                padding: 16px 20px;
+            }
+            .bc-category-section {
+                margin-bottom: 20px;
+                background: var(--card-bg);
+                border-radius: 10px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+                overflow: hidden;
+            }
+            .bc-category-header {
+                background: var(--teal);
+                color: #fff;
+                padding: 10px 14px;
+                font-size: 13px;
+                font-weight: 600;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .bc-category-count {
+                background: rgba(255,255,255,0.2);
+                padding: 2px 8px;
+                border-radius: 10px;
+                font-size: 11px;
+            }
+            .bc-card-table {
+                width: 100%;
+                border-collapse: collapse;
+            }
+            .bc-card-table thead th {
+                background: #f8f9fa;
+                padding: 8px 12px;
+                text-align: left;
+                font-size: 11px;
+                font-weight: 600;
+                color: var(--text-secondary);
+                border-bottom: 1px solid var(--border);
+            }
+            .bc-card-table thead th:first-child { width: 26%; }
+            .bc-card-table thead th:nth-child(2),
+            .bc-card-table thead th:nth-child(3) { width: 37%; }
+            .bc-card-row {
+                border-bottom: 1px solid var(--border);
+            }
+            .bc-card-row:last-child {
+                border-bottom: none;
+            }
+            .bc-card-row td {
+                padding: 10px 12px;
+                vertical-align: top;
+                font-size: 12px;
+            }
+            .bc-card-row td:not(:last-child) {
+                border-right: 1px solid var(--border);
+            }
+            .bc-diff-name {
+                font-weight: 600;
+                font-size: 13px;
+                color: var(--text);
+                margin-bottom: 4px;
+            }
+            .bc-diff-desc {
+                font-size: 11px;
+                color: var(--text-secondary);
+                line-height: 1.4;
+            }
+            .bc-rating-row {
+                display: flex;
+                gap: 6px;
+                margin-top: 6px;
+            }
+            .bc-rating {
+                padding: 2px 6px;
+                border-radius: 3px;
+                font-size: 9px;
+                font-weight: 600;
+                text-transform: uppercase;
+            }
+            .bc-rating.strong_advantage { background: #dcfce7; color: #166534; }
+            .bc-rating.advantage { background: #d1fae5; color: #047857; }
+            .bc-rating.partial { background: #fef3c7; color: #92400e; }
+            .bc-rating.disadvantage { background: #fee2e2; color: #991b1b; }
+            .bc-vendor-cell {
+                background: #fafafa;
+            }
+            .bc-vendor-headline {
+                font-weight: 600;
+                font-size: 12px;
+                color: var(--text);
+                margin-bottom: 4px;
+            }
+            .bc-vendor-details {
+                font-size: 11px;
+                color: var(--text-secondary);
+                line-height: 1.5;
+            }
+            .bc-vendor-details div {
+                margin-bottom: 2px;
+            }
+            .bc-placeholder-card {
+                padding: 20px;
+                text-align: center;
+                color: var(--text-secondary);
+                font-size: 13px;
+                font-style: italic;
+            }
+            .bc-skeleton-row td {
+                background: #f9fafb;
+            }
+            .bc-skeleton-pending {
+                color: #9ca3af;
+                font-style: italic;
+            }
+        </style>
 
-            <div id="bc-preview-content">
-                <!-- Section 1: Competitive Directive -->
-                <div class="bc-section" id="bc-section-directive">
-                    <div class="bc-section-header" onclick="toggleBcSection('directive')">
-                        <span class="bc-section-title">1. Competitive Directive</span>
-                        <span class="bc-section-badge" id="bc-badge-directive">
-                            {% if artifacts_by_step.get(1, [])|selectattr('artifact_type', 'eq', 'directive_generated')|list %}
-                            <span class="bc-section-badge done">Done</span>
-                            {% else %}
-                            <span class="bc-section-badge pending">Pending</span>
-                            {% endif %}
-                        </span>
-                    </div>
-                    <div class="bc-section-body" id="bc-body-directive">
-                        {% set directive_arts = artifacts_by_step.get(1, [])|selectattr('artifact_type', 'eq', 'directive_generated')|list %}
-                        {% if directive_arts %}
-                        <pre style="font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; background: #F9FAFB; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">{{ directive_arts[0].artifact_content[:1000] }}{% if directive_arts[0].artifact_content|length > 1000 %}...{% endif %}</pre>
-                        {% else %}
-                        <p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 1 to generate the competitive directive.</p>
-                        {% endif %}
-                    </div>
-                </div>
-
-                <!-- Section 2: Prior Battlecard -->
-                <div class="bc-section" id="bc-section-prior">
-                    <div class="bc-section-header" onclick="toggleBcSection('prior')">
-                        <span class="bc-section-title">2. Prior Battlecard Context</span>
-                        <span class="bc-section-badge" id="bc-badge-prior">
-                            {% if artifacts_by_step.get(2, [])|selectattr('artifact_type', 'eq', 'old_battlecard_extracted')|list %}
-                            <span class="bc-section-badge done">Done</span>
-                            {% else %}
-                            <span class="bc-section-badge pending">Pending</span>
-                            {% endif %}
-                        </span>
-                    </div>
-                    <div class="bc-section-body collapsed" id="bc-body-prior">
-                        {% set prior_arts = artifacts_by_step.get(2, [])|selectattr('artifact_type', 'eq', 'old_battlecard_extracted')|list %}
-                        {% if prior_arts %}
-                        <pre style="font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; background: #F9FAFB; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">{{ prior_arts[0].artifact_content[:1000] }}{% if prior_arts[0].artifact_content|length > 1000 %}...{% endif %}</pre>
-                        {% else %}
-                        <p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 2 to add prior battlecard context.</p>
-                        {% endif %}
-                    </div>
-                </div>
-
-                <!-- Section 3: Product Categories -->
-                <div class="bc-section" id="bc-section-categories">
-                    <div class="bc-section-header" onclick="toggleBcSection('categories')">
-                        <span class="bc-section-title">3. Product Categories</span>
-                        <span class="bc-section-badge" id="bc-badge-categories">
-                            {% if artifacts_by_step.get(3, [])|selectattr('artifact_type', 'eq', 'product_categories')|list %}
-                            <span class="bc-section-badge done">Done</span>
-                            {% else %}
-                            <span class="bc-section-badge pending">Pending</span>
-                            {% endif %}
-                        </span>
-                    </div>
-                    <div class="bc-section-body collapsed" id="bc-body-categories">
-                        {% set cat_arts = artifacts_by_step.get(3, [])|selectattr('artifact_type', 'eq', 'product_categories')|list %}
-                        {% if cat_arts %}
-                        <div style="display: flex; flex-wrap: wrap; gap: 6px;">
-                            {% for cat in cat_arts[0].artifact_content.split('\n') if cat.strip() %}
-                            <span style="padding: 4px 10px; background: #DBEAFE; color: #1E40AF; border-radius: 12px; font-size: 11px; font-weight: 600;">{{ cat.strip() }}</span>
-                            {% endfor %}
-                        </div>
-                        {% else %}
-                        <p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 3 to select categories.</p>
-                        {% endif %}
-                    </div>
-                </div>
-
-                <!-- Section 4: Category Classifications -->
-                <div class="bc-section" id="bc-section-classifications">
-                    <div class="bc-section-header" onclick="toggleBcSection('classifications')">
-                        <span class="bc-section-title">4. Category Classifications</span>
-                        <span class="bc-section-badge" id="bc-badge-classifications">
-                            {% set class_arts = artifacts_by_step.get(4, [])|selectattr('artifact_type', 'eq', 'category_selections')|list %}
-                            {% if class_arts %}
-                            <span class="bc-section-badge done">Classified</span>
-                            {% else %}
-                            <span class="bc-section-badge pending">Pending</span>
-                            {% endif %}
-                        </span>
-                    </div>
-                    <div class="bc-section-body collapsed" id="bc-body-classifications">
-                        {% if class_arts %}
-                        {% set sel_data = class_arts[0].artifact_content if class_arts[0].artifact_content is mapping else {} %}
-                        {% if sel_data.get('core_product_categories') %}
-                        <div style="margin-bottom: 6px;">
-                            <strong style="font-size: 11px; color: #4CAF50;">Core:</strong>
-                            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px;">
-                                {% for c in sel_data['core_product_categories'] %}
-                                <span style="padding: 2px 8px; background: #E8F5E9; color: #2E7D32; border-radius: 10px; font-size: 10px; font-weight: 600;">{{ c }}</span>
-                                {% endfor %}
-                            </div>
-                        </div>
-                        {% endif %}
-                        {% if sel_data.get('cross_platform_capabilities') %}
-                        <div style="margin-bottom: 6px;">
-                            <strong style="font-size: 11px; color: #2196F3;">Cross-Platform:</strong>
-                            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px;">
-                                {% for c in sel_data['cross_platform_capabilities'] %}
-                                <span style="padding: 2px 8px; background: #E3F2FD; color: #1565C0; border-radius: 10px; font-size: 10px; font-weight: 600;">{{ c }}</span>
-                                {% endfor %}
-                            </div>
-                        </div>
-                        {% endif %}
-                        {% if sel_data.get('skipped') %}
-                        <div>
-                            <strong style="font-size: 11px; color: var(--text-secondary);">Skipped:</strong>
-                            <span style="font-size: 11px; color: var(--text-secondary);">{{ sel_data['skipped'] | join(', ') }}</span>
-                        </div>
-                        {% endif %}
-                        {% else %}
-                        <p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 4 to classify categories.</p>
-                        {% endif %}
-                    </div>
-                </div>
-
-                <!-- Section 5: Key Differentiators -->
-                <div class="bc-section" id="bc-section-diffs">
-                    <div class="bc-section-header" onclick="toggleBcSection('diffs')">
-                        <span class="bc-section-title">5. Key Differentiators</span>
-                        <span class="bc-section-badge" id="bc-badge-diffs">
-                            {% set skel_arts = artifacts_by_step.get(5, [])|selectattr('artifact_type', 'eq', 'pass1_skeletons')|list %}
-                            {% if skel_arts %}
-                            <span class="bc-section-badge done">{{ (skel_arts[0].artifact_metadata or {}).get('count', '?') }} items</span>
-                            {% else %}
-                            <span class="bc-section-badge pending">Pending</span>
-                            {% endif %}
-                        </span>
-                    </div>
-                    <div class="bc-section-body" id="bc-body-diffs">
-                        <div id="bc-diffs-list"></div>
-                    </div>
-                </div>
-
-                <!-- Section 6: Claims -->
-                <div class="bc-section" id="bc-section-claims">
-                    <div class="bc-section-header" onclick="toggleBcSection('claims')">
-                        <span class="bc-section-title">6. Competitive Claims</span>
-                        <span class="bc-section-badge" id="bc-badge-claims">
-                            {% set claim_arts = artifacts_by_step.get(6, [])|selectattr('artifact_type', 'in', ['pass2_claims', 'pass3_regenerated'])|list %}
-                            {% if claim_arts %}
-                            <span class="bc-section-badge done">{{ (claim_arts[0].artifact_metadata or {}).get('count', '?') }} pairs</span>
-                            {% else %}
-                            <span class="bc-section-badge pending">Pending</span>
-                            {% endif %}
-                        </span>
-                    </div>
-                    <div class="bc-section-body" id="bc-body-claims">
-                        <div id="bc-claims-list"></div>
-                    </div>
-                </div>
-
-                <!-- Section 7: Fact Checks -->
-                <div class="bc-section" id="bc-section-factchecks">
-                    <div class="bc-section-header" onclick="toggleBcSection('factchecks')">
-                        <span class="bc-section-title">7. Fact Checks</span>
-                        <span class="bc-section-badge" id="bc-badge-factchecks">
-                            {% if fact_check_summary %}
-                            <span class="bc-section-badge done">{{ fact_check_summary.verified }} verified</span>
-                            {% else %}
-                            <span class="bc-section-badge pending">Pending</span>
-                            {% endif %}
-                        </span>
-                    </div>
-                    <div class="bc-section-body collapsed" id="bc-body-factchecks">
-                        {% if fact_check_summary %}
-                        <p style="font-size: 12px; color: var(--text-secondary);">
-                            {{ fact_check_summary.total_claims }} claims checked:
-                            {{ fact_check_summary.verified }} verified,
-                            {{ fact_check_summary.unverified }} unverified,
-                            {{ fact_check_summary.disputed }} disputed,
-                            {{ fact_check_summary.outdated }} outdated
-                        </p>
-                        {% else %}
-                        <p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 7 to fact check claims.</p>
-                        {% endif %}
-                    </div>
-                </div>
-
-                <!-- Section 8: Slides -->
-                <div class="bc-section" id="bc-section-slides">
-                    <div class="bc-section-header" onclick="toggleBcSection('slides')">
-                        <span class="bc-section-title">8. Google Slides</span>
-                        <span class="bc-section-badge" id="bc-badge-slides">
-                            {% if artifacts_by_step.get(8, [])|selectattr('artifact_type', 'eq', 'google_slides_url')|list %}
-                            <span class="bc-section-badge done">Generated</span>
-                            {% else %}
-                            <span class="bc-section-badge pending">Pending</span>
-                            {% endif %}
-                        </span>
-                    </div>
-                    <div class="bc-section-body collapsed" id="bc-body-slides">
-                        {% set slide_arts = artifacts_by_step.get(8, [])|selectattr('artifact_type', 'eq', 'google_slides_url')|list %}
-                        {% if slide_arts %}
-                        <a href="{{ slide_arts[0].artifact_content }}" target="_blank" style="font-size: 13px; color: var(--teal); font-weight: 600;">Open in Google Slides &rarr;</a>
-                        {% else %}
-                        <p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 8 to generate slides.</p>
-                        {% endif %}
-                    </div>
-                </div>
+        <div class="bc-cards-header">
+            <div class="bc-cards-title">{{ session.competitor_name }} Battlecard</div>
+            <div class="bc-cards-subtitle">Live preview — updates as you generate</div>
+            <div class="bc-cards-stats">
+                <span class="bc-cards-stat" id="bc-stats-diffs"><strong>0</strong> differentiators</span>
+                <span class="bc-cards-stat" id="bc-stats-claims"><strong>0</strong> claims filled</span>
             </div>
         </div>
-        {% endif %}
+
+        <div class="bc-cards-container" id="bc-cards-container">
+            <div class="bc-placeholder-card" id="bc-placeholder">
+                Complete Step 3 to see category placeholders, then Step 4 to generate key differentiators.
+            </div>
+        </div>
     </div><!-- /panel-right -->
 
     </div><!-- /split-layout -->
@@ -2253,6 +2509,111 @@
     <script>
     const SESSION_ID = "{{ session.session_id }}";
     let pollingInterval = null;
+
+    // --- Context Sources ---
+    // Cache of loaded sources (shared across all panels for this session)
+    var _contextSourcesCache = null;
+
+    async function loadContextSources(panelId) {
+        var body = document.getElementById('ctx-body-' + panelId);
+        var countEl = document.getElementById('ctx-count-' + panelId);
+        if (!body) return;
+
+        try {
+            var data;
+            if (_contextSourcesCache) {
+                data = _contextSourcesCache;
+            } else {
+                var resp = await fetch('/api/workflow/' + SESSION_ID + '/context-sources');
+                data = await resp.json();
+                _contextSourcesCache = data;
+            }
+
+            var sources = data.sources || [];
+            var selectedCount = 0;
+            body.innerHTML = '';
+
+            sources.forEach(function(src) {
+                var isChecked = src.available && src['default'];
+                if (isChecked) selectedCount++;
+
+                var item = document.createElement('div');
+                item.className = 'context-source-item' + (src.available ? '' : ' context-source-unavailable');
+
+                var checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = 'ctx-' + panelId + '-' + src.key;
+                checkbox.dataset.key = src.key;
+                checkbox.checked = isChecked;
+                checkbox.disabled = !src.available;
+                checkbox.addEventListener('change', function() {
+                    updateContextSourceCount(panelId);
+                });
+
+                var info = document.createElement('div');
+                info.className = 'context-source-info';
+
+                var label = document.createElement('div');
+                label.className = 'context-source-label';
+                label.textContent = src.label;
+
+                var desc = document.createElement('div');
+                desc.className = 'context-source-desc';
+                desc.textContent = src.description;
+
+                info.appendChild(label);
+                info.appendChild(desc);
+
+                if (src.preview) {
+                    var preview = document.createElement('div');
+                    preview.className = 'context-source-preview';
+                    preview.textContent = src.preview + '...';
+                    info.appendChild(preview);
+                }
+
+                var badge = document.createElement('span');
+                badge.className = 'context-source-badge ' + (src.available ? 'available' : 'unavailable');
+                badge.textContent = src.available ? 'Available' : 'N/A';
+
+                item.appendChild(checkbox);
+                item.appendChild(info);
+                item.appendChild(badge);
+                body.appendChild(item);
+            });
+
+            if (countEl) countEl.textContent = selectedCount + ' selected';
+        } catch (err) {
+            console.error('Failed to load context sources:', err);
+            if (countEl) countEl.textContent = 'error';
+        }
+    }
+
+    function toggleContextSources(panelId) {
+        var body = document.getElementById('ctx-body-' + panelId);
+        var toggle = document.getElementById('ctx-toggle-' + panelId);
+        if (body) body.classList.toggle('open');
+        if (toggle) toggle.classList.toggle('open');
+    }
+
+    function updateContextSourceCount(panelId) {
+        var body = document.getElementById('ctx-body-' + panelId);
+        var countEl = document.getElementById('ctx-count-' + panelId);
+        if (!body || !countEl) return;
+        var checked = body.querySelectorAll('input[type="checkbox"]:checked');
+        countEl.textContent = checked.length + ' selected';
+    }
+
+    function getContextSources(panelId) {
+        var body = document.getElementById('ctx-body-' + panelId);
+        if (!body) return null;
+        var checkboxes = body.querySelectorAll('input[type="checkbox"]');
+        if (checkboxes.length === 0) return null;
+        var sources = {};
+        checkboxes.forEach(function(cb) {
+            sources[cb.dataset.key] = cb.checked;
+        });
+        return sources;
+    }
 
     // Start polling if any step is in_progress
     function checkAndStartPolling() {
@@ -2287,17 +2648,59 @@
                 const badge = document.getElementById('step-badge-' + n);
                 const statusText = document.getElementById('step-status-text-' + n);
 
-                if (badge) {
-                    badge.className = 'step-status-badge ' + step.status;
-                }
-                if (statusText) {
-                    statusText.textContent = step.status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                // Handle stuck steps
+                if (step.is_stuck) {
+                    if (badge) {
+                        badge.className = 'step-status-badge stuck';
+                        badge.textContent = 'Stuck';
+                    }
+                    if (statusText) {
+                        statusText.textContent = 'Stuck';
+                    }
+                    // Show stuck warning and reset button
+                    let stuckEl = document.getElementById('stuck-warning-' + n);
+                    if (!stuckEl) {
+                        const body = document.getElementById('step-body-' + n);
+                        if (body) {
+                            const html = '<div class="stuck-warning" id="stuck-warning-' + n + '">' +
+                                '<div class="stuck-icon">⚠️</div>' +
+                                '<div class="stuck-message">' +
+                                    '<strong>Step appears to be stuck</strong><br>' +
+                                    '<span class="stuck-reason">' + (step.stuck_reason || 'Worker may have crashed') + '</span>' +
+                                '</div>' +
+                                '<button class="btn btn-warning btn-sm" onclick="resetStuckStep(' + n + ')">Reset & Retry</button>' +
+                            '</div>';
+                            const progressEl = document.getElementById('progress-' + n);
+                            if (progressEl) {
+                                progressEl.insertAdjacentHTML('afterend', html);
+                            } else {
+                                body.insertAdjacentHTML('afterbegin', html);
+                            }
+                        }
+                    } else {
+                        // Update the reason text
+                        const reasonEl = stuckEl.querySelector('.stuck-reason');
+                        if (reasonEl && step.stuck_reason) {
+                            reasonEl.textContent = step.stuck_reason;
+                        }
+                    }
+                } else {
+                    // Remove stuck warning if step is no longer stuck
+                    const stuckEl = document.getElementById('stuck-warning-' + n);
+                    if (stuckEl) stuckEl.remove();
+
+                    if (badge) {
+                        badge.className = 'step-status-badge ' + step.status;
+                    }
+                    if (statusText) {
+                        statusText.textContent = step.status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                    }
                 }
 
                 // Update step number circle
                 const circle = document.querySelector('#step-block-' + n + ' .step-number');
                 if (circle) {
-                    circle.className = 'step-number ' + step.status;
+                    circle.className = 'step-number ' + (step.is_stuck ? 'stuck' : step.status);
                 }
 
                 // Update progress if in_progress
@@ -2359,6 +2762,26 @@
                             }
                         }
                     }
+
+                    // Show last_error indicator (real-time error tracking)
+                    if (step.last_error || step.error_count > 0) {
+                        const lastErrEl = document.getElementById('last-error-' + n);
+                        if (lastErrEl) {
+                            lastErrEl.style.display = 'block';
+                            const countEl = document.getElementById('error-count-' + n);
+                            const textEl = document.getElementById('error-text-' + n);
+                            if (countEl) countEl.textContent = (step.error_count || 0) + ' error(s)';
+                            if (textEl) {
+                                textEl.textContent = step.last_error || '';
+                                textEl.title = step.last_error || '';
+                            }
+                        }
+                    }
+                }
+
+                // Poll partial artifacts for progressive display during Steps 4 & 5
+                if (step.status === 'in_progress' && (n === 4 || n === 5)) {
+                    pollPartialArtifacts();
                 }
 
                 // If status changed from in_progress, reload the page
@@ -2366,8 +2789,15 @@
                     const body = document.getElementById('step-body-' + n);
                     const progressEl = document.getElementById('progress-' + n);
                     if (progressEl && (step.status === 'completed' || step.status === 'waiting_human' || step.status === 'failed')) {
-                        // Reload page to get fresh template rendering
-                        window.location.reload();
+                        // For Steps 4 & 5: do one final partial artifact poll, then delayed reload
+                        if (n === 4 || n === 5) {
+                            pollPartialArtifacts().then(function() {
+                                setTimeout(function() { window.location.reload(); }, 800);
+                            });
+                        } else {
+                            // For other steps: reload immediately
+                            window.location.reload();
+                        }
                     }
                 }
             });
@@ -2377,6 +2807,26 @@
             }
         } catch (err) {
             console.error('Poll error:', err);
+        }
+    }
+
+    async function resetStuckStep(stepNum) {
+        if (!confirm('Reset this stuck step and retry? Any partial progress will be lost.')) {
+            return;
+        }
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/reset-stuck', {
+                method: 'POST',
+            });
+            const data = await resp.json();
+            if (data.success) {
+                // Reload the page to show the reset step
+                window.location.reload();
+            } else {
+                alert(data.error || 'Failed to reset step');
+            }
+        } catch (err) {
+            alert('Reset error: ' + err.message);
         }
     }
 
@@ -2397,7 +2847,8 @@
                     const li = document.createElement('li');
                     li.className = 'uploaded-file-item';
                     li.dataset.filename = data.filename;
-                    li.innerHTML = '<span style="color: var(--success);">&#x25CF;</span> ' + data.filename;
+                    li.innerHTML = '<span style="color: var(--success);">&#x25CF;</span> ' + data.filename +
+                        ' <button class="file-delete-btn" onclick="deleteUploadedFile(this, \'' + data.filename.replace(/'/g, "\\'") + '\', ' + stepNum + ')" title="Remove file">&times;</button>';
                     list.appendChild(li);
                 }
                 fetchContextPills();
@@ -2430,6 +2881,46 @@
         }
     }
 
+    async function deleteUploadedFile(btn, filename, stepNum) {
+        if (!confirm('Remove "' + filename + '"?')) return;
+        btn.disabled = true;
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/delete-upload', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: filename}),
+            });
+            const data = await resp.json();
+            if (data.success) {
+                // Remove the <li> from the DOM
+                var li = btn.closest('.uploaded-file-item');
+                if (li) li.remove();
+                fetchContextPills();
+                // Re-evaluate step 2 button state based on remaining files
+                if (stepNum === 2) {
+                    var remaining = document.querySelectorAll('#uploaded-files-2 .uploaded-file-item');
+                    if (remaining.length === 0) {
+                        // Hide Use As-Is and info banner if no files remain
+                        var infoBanner = document.getElementById('step2-text-info');
+                        var useBtn = document.getElementById('btn-step2-use');
+                        if (infoBanner) infoBanner.style.display = 'none';
+                        if (useBtn) useBtn.style.display = 'none';
+                    } else {
+                        // Check if remaining files need button update
+                        var lastFile = remaining[remaining.length - 1].dataset.filename || '';
+                        updateStep2Buttons(lastFile);
+                    }
+                }
+            } else {
+                alert(data.error || 'Delete failed');
+                btn.disabled = false;
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+            btn.disabled = false;
+        }
+    }
+
     async function step2UseAsIs() {
         const btn = document.getElementById('btn-step2-use');
         if (btn) btn.disabled = true;
@@ -2456,16 +2947,22 @@
         const btn = document.getElementById('btn-step' + stepNum + '-' + action);
         if (btn) btn.disabled = true;
         try {
+            var bodyObj = {};
+            // Include context sources for steps 4 and 5 generate actions
+            if ((stepNum === 4 || stepNum === 5) && action === 'generate') {
+                var cs = getContextSources(stepNum);
+                if (cs) bodyObj.context_sources = cs;
+            }
             const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/' + action, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: '{}',
+                body: JSON.stringify(bodyObj),
             });
             const data = await resp.json();
             if (data.success) {
                 startPolling();
-                // Step 8 completes synchronously, reload immediately
-                if (action === 'generate' && stepNum === 8) {
+                // Step 7 completes synchronously, reload immediately
+                if (action === 'generate' && stepNum === 7) {
                     setTimeout(function() { window.location.reload(); }, 500);
                 }
             } else {
@@ -2479,10 +2976,10 @@
     }
 
     async function runFactCheck() {
-        const btn = document.getElementById('btn-step7-factcheck') || document.getElementById('btn-step7-rerun');
+        const btn = document.getElementById('btn-step6-factcheck') || document.getElementById('btn-step6-rerun');
         if (btn) btn.disabled = true;
         try {
-            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/7/generate', {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/6/generate', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: '{}',
@@ -2501,10 +2998,10 @@
     }
 
     async function approveFactCheck() {
-        const btn = document.getElementById('btn-step7-approve');
+        const btn = document.getElementById('btn-step6-approve');
         if (btn) btn.disabled = true;
         try {
-            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/7/approve', {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/6/approve', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: '{}',
@@ -2531,31 +3028,7 @@
         }
     }
 
-    async function saveCategories() {
-        const checkboxes = document.querySelectorAll('#category-grid input[name="category"]:checked');
-        const categories = Array.from(checkboxes).map(cb => cb.value);
-        if (categories.length === 0) {
-            alert('Please select at least one category.');
-            return;
-        }
-        try {
-            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/3/save', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({categories: categories}),
-            });
-            const data = await resp.json();
-            if (data.success) {
-                window.location.reload();
-            } else {
-                alert(data.error || 'Save failed');
-            }
-        } catch (err) {
-            alert('Error: ' + err.message);
-        }
-    }
-
-    // --- Step 4: Category Classification (form-based) ---
+    // --- Step 3: Category Classification (form-based) ---
 
     async function saveCategorySelections() {
         var selections = {};
@@ -2577,7 +3050,7 @@
         }
 
         try {
-            var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/4/save', {
+            var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/3/save', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({selections: selections}),
@@ -2587,6 +3060,25 @@
                 window.location.reload();
             } else {
                 alert(data.error || 'Save failed');
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    }
+
+    async function editStep(stepNum) {
+        if (!confirm('Reopen step ' + stepNum + ' for editing? Later steps that are "ready" will be reset to pending.')) return;
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/reopen', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: '{}',
+            });
+            const data = await resp.json();
+            if (data.success) {
+                window.location.reload();
+            } else {
+                alert(data.error || 'Reopen failed');
             }
         } catch (err) {
             alert('Error: ' + err.message);
@@ -2618,10 +3110,14 @@
             if (!confirm('No feedback provided. Regenerate anyway?')) return;
         }
         try {
+            var bodyObj = {feedback: feedback};
+            // Include context sources from the regen panel
+            var cs = getContextSources(stepNum + '-regen');
+            if (cs) bodyObj.context_sources = cs;
             const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/regenerate', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({feedback: feedback}),
+                body: JSON.stringify(bodyObj),
             });
             const data = await resp.json();
             if (data.success) {
@@ -2692,6 +3188,52 @@
         window._claimFeedback[id][side + '_comment'] = comment;
     }
 
+    // --- Toggle controls for Step 5 claims ---
+    function toggleDetails() {
+        var cb = document.getElementById('details-toggle');
+        if (cb.checked) {
+            document.body.classList.remove('hide-details');
+            localStorage.setItem('wf_detailsVisible', 'true');
+        } else {
+            document.body.classList.add('hide-details');
+            localStorage.setItem('wf_detailsVisible', 'false');
+        }
+    }
+    function toggleRatingEval() {
+        var cb = document.getElementById('rating-eval-toggle');
+        if (cb.checked) {
+            document.body.classList.remove('hide-rating-eval');
+            localStorage.setItem('wf_ratingEvalVisible', 'true');
+        } else {
+            document.body.classList.add('hide-rating-eval');
+            localStorage.setItem('wf_ratingEvalVisible', 'false');
+        }
+    }
+    function toggleKeyDiffEval() {
+        var cb = document.getElementById('keydiff-eval-toggle');
+        if (cb.checked) {
+            document.body.classList.remove('hide-keydiff-eval');
+            localStorage.setItem('wf_keydiffEvalVisible', 'true');
+        } else {
+            document.body.classList.add('hide-keydiff-eval');
+            localStorage.setItem('wf_keydiffEvalVisible', 'false');
+        }
+    }
+    // Restore toggle states from localStorage
+    (function restoreToggles() {
+        function applyToggle(key, toggleId, bodyClass) {
+            var stored = localStorage.getItem(key);
+            var cb = document.getElementById(toggleId);
+            if (stored === 'false' && cb) {
+                cb.checked = false;
+                document.body.classList.add(bodyClass);
+            }
+        }
+        applyToggle('wf_detailsVisible', 'details-toggle', 'hide-details');
+        applyToggle('wf_ratingEvalVisible', 'rating-eval-toggle', 'hide-rating-eval');
+        applyToggle('wf_keydiffEvalVisible', 'keydiff-eval-toggle', 'hide-keydiff-eval');
+    })();
+
     // Collect per-item feedback into the overall feedback text
     function collectItemFeedback(stepNum) {
         var parts = [];
@@ -2739,10 +3281,14 @@
             if (!confirm('No feedback provided. Regenerate anyway?')) return;
         }
         try {
+            var bodyObj = {feedback: combined};
+            // Include context sources from the regen panel
+            var cs = getContextSources(stepNum + '-regen');
+            if (cs) bodyObj.context_sources = cs;
             var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/regenerate', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({feedback: combined}),
+                body: JSON.stringify(bodyObj),
             });
             var data = await resp.json();
             if (data.success) {
@@ -2910,10 +3456,14 @@
             combined = (combined ? combined + '\n\n' : '') + 'Per-item feedback:\n' + itemFeedback;
         }
         try {
+            var bodyObj = {feedback: combined, include_review_feedback: true};
+            // Include context sources from the regen panel
+            var cs = getContextSources(stepNum + '-regen');
+            if (cs) bodyObj.context_sources = cs;
             var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/regenerate', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({feedback: combined, include_review_feedback: true}),
+                body: JSON.stringify(bodyObj),
             });
             var data = await resp.json();
             if (data.success) {
@@ -3230,132 +3780,226 @@
         });
     })();
 
-    // ---- Battlecard Preview Section Toggle ----
-    function toggleBcSection(sectionId) {
-        var body = document.getElementById('bc-body-' + sectionId);
-        if (body) {
-            body.classList.toggle('collapsed');
+    // ---- Global render functions for Battlecard Cards (table format) ----
+    var _lastDiffsCount = 0;
+    var _lastClaimsCount = 0;
+    var _currentSkeletons = [];
+    var _currentClaims = [];
+    var _competitor = "{{ session.competitor_name }}";
+
+    // Render battlecard as category tables with Databricks/Competitor columns
+    window.renderBattlecardCards = function(skeletons, claims) {
+        var container = document.getElementById('bc-cards-container');
+        var placeholder = document.getElementById('bc-placeholder');
+        if (!container) return;
+
+        _currentSkeletons = skeletons || _currentSkeletons || [];
+        _currentClaims = claims || _currentClaims || [];
+
+        // Update stats
+        var statsEl = document.getElementById('bc-stats-diffs');
+        if (statsEl) statsEl.innerHTML = '<strong>' + _currentSkeletons.length + '</strong> differentiators';
+        var claimsStatsEl = document.getElementById('bc-stats-claims');
+        if (claimsStatsEl) claimsStatsEl.innerHTML = '<strong>' + _currentClaims.length + '</strong> claims filled';
+
+        if (!_currentSkeletons.length) {
+            if (placeholder) placeholder.style.display = 'block';
+            return;
+        }
+        if (placeholder) placeholder.style.display = 'none';
+
+        // Group skeletons by category
+        var categories = {};
+        _currentSkeletons.forEach(function(sk, i) {
+            var cat = sk.category || 'Uncategorized';
+            if (!categories[cat]) categories[cat] = [];
+            // Pair with claim if available
+            var claim = _currentClaims[i] || null;
+            categories[cat].push({ skeleton: sk, claim: claim, index: i });
+        });
+
+        // Build HTML
+        var html = '';
+        Object.keys(categories).forEach(function(catName) {
+            var items = categories[catName];
+            html += '<div class="bc-category-section">';
+            html += '<div class="bc-category-header">' +
+                '<span>' + catName + '</span>' +
+                '<span class="bc-category-count">' + items.length + ' diffs</span>' +
+            '</div>';
+            html += '<table class="bc-card-table">';
+            html += '<thead><tr><th>Key Differentiator</th><th>Databricks</th><th>' + _competitor + '</th></tr></thead>';
+            html += '<tbody>';
+
+            items.forEach(function(item) {
+                var sk = item.skeleton;
+                var cl = item.claim;
+                var dbRating = sk.databricks_rating || '';
+                var compRating = sk.competitor_rating || '';
+
+                html += '<tr class="bc-card-row' + (cl ? '' : ' bc-skeleton-row') + '">';
+
+                // Key Diff column
+                html += '<td>';
+                html += '<div class="bc-diff-name">' + (sk.key_differentiator || '') + '</div>';
+                html += '<div class="bc-diff-desc">' + (sk.description || '') + '</div>';
+                html += '<div class="bc-rating-row">';
+                html += '<span class="bc-rating ' + dbRating + '">DB: ' + dbRating.replace('_', ' ') + '</span>';
+                html += '<span class="bc-rating ' + compRating + '">' + _competitor.substring(0,3) + ': ' + compRating.replace('_', ' ') + '</span>';
+                html += '</div>';
+                html += '</td>';
+
+                // Databricks column
+                html += '<td class="bc-vendor-cell">';
+                if (cl && cl.databricks_headline) {
+                    html += '<div class="bc-vendor-headline">' + cl.databricks_headline + '</div>';
+                    if (Array.isArray(cl.databricks_details)) {
+                        html += '<div class="bc-vendor-details">';
+                        cl.databricks_details.forEach(function(d) {
+                            html += '<div>&ndash; ' + d + '</div>';
+                        });
+                        html += '</div>';
+                    }
+                } else {
+                    html += '<div class="bc-skeleton-pending">Pending Step 5...</div>';
+                }
+                html += '</td>';
+
+                // Competitor column
+                html += '<td class="bc-vendor-cell">';
+                if (cl && cl.competitor_headline) {
+                    html += '<div class="bc-vendor-headline">' + cl.competitor_headline + '</div>';
+                    if (Array.isArray(cl.competitor_details)) {
+                        html += '<div class="bc-vendor-details">';
+                        cl.competitor_details.forEach(function(d) {
+                            html += '<div>&ndash; ' + d + '</div>';
+                        });
+                        html += '</div>';
+                    }
+                } else {
+                    html += '<div class="bc-skeleton-pending">Pending Step 5...</div>';
+                }
+                html += '</td>';
+
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            html += '</div>';
+        });
+
+        container.innerHTML = html;
+    };
+
+    // Render category placeholders before Step 4
+    window.renderCategoryPlaceholders = function(categorySelections) {
+        var container = document.getElementById('bc-cards-container');
+        var placeholder = document.getElementById('bc-placeholder');
+        if (!container) return;
+
+        var core = (categorySelections && categorySelections.core_product_categories) || [];
+        if (!core.length) return;
+
+        if (placeholder) placeholder.style.display = 'none';
+
+        var html = '';
+        core.forEach(function(catName) {
+            html += '<div class="bc-category-section" style="opacity: 0.6;">';
+            html += '<div class="bc-category-header">' +
+                '<span>' + catName + '</span>' +
+                '<span class="bc-category-count">waiting...</span>' +
+            '</div>';
+            html += '<table class="bc-card-table">';
+            html += '<thead><tr><th>Key Differentiator</th><th>Databricks</th><th>' + _competitor + '</th></tr></thead>';
+            html += '<tbody>';
+            html += '<tr class="bc-card-row bc-skeleton-row">';
+            html += '<td colspan="3" style="text-align: center; padding: 20px; color: #9ca3af; font-style: italic;">Run Step 4 to generate key differentiators for this category</td>';
+            html += '</tr>';
+            html += '</tbody></table>';
+            html += '</div>';
+        });
+
+        container.innerHTML = html;
+
+        var statsEl = document.getElementById('bc-stats-diffs');
+        if (statsEl) statsEl.innerHTML = '<strong>' + core.length + '</strong> categories';
+    };
+
+    // Poll partial artifacts during generation
+    async function pollPartialArtifacts() {
+        try {
+            var resp = await fetch('/api/workflow/' + SESSION_ID + '/partial-artifacts');
+            var data = await resp.json();
+
+            var needsRender = false;
+
+            // Update skeletons if changed
+            if (data.pass1_skeletons && Array.isArray(data.pass1_skeletons) && data.pass1_skeletons.length > 0) {
+                if (data.pass1_skeletons.length !== _lastDiffsCount) {
+                    _lastDiffsCount = data.pass1_skeletons.length;
+                    _currentSkeletons = data.pass1_skeletons;
+                    needsRender = true;
+                }
+            }
+
+            // Update claims if changed
+            if (data.pass2_claims && Array.isArray(data.pass2_claims) && data.pass2_claims.length > 0) {
+                if (data.pass2_claims.length !== _lastClaimsCount) {
+                    _lastClaimsCount = data.pass2_claims.length;
+                    _currentClaims = data.pass2_claims;
+                    needsRender = true;
+                }
+            }
+
+            // Show category placeholders if categories exist but no skeletons yet
+            if (data.category_selections && (!data.pass1_skeletons || data.pass1_skeletons.length === 0) && _lastDiffsCount === 0) {
+                window.renderCategoryPlaceholders(data.category_selections);
+            } else if (needsRender) {
+                window.renderBattlecardCards(_currentSkeletons, _currentClaims);
+            }
+        } catch (err) {
+            console.error('Partial artifacts poll error:', err);
         }
     }
 
-    {% if not battlecard_id %}
-    // ---- Populate Battlecard Preview: Key Differentiators (from Step 5 data) ----
+    // ---- Initial population on page load ----
     (function() {
-        var container = document.getElementById('bc-diffs-list');
-        if (!container) return;
-
-        // Try to get skeleton data from window._skeletonData (set by left panel's Step 5 script)
-        // or parse directly from artifact
-        function renderDiffs(data) {
-            if (!data || !data.length) {
-                container.innerHTML = '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 5 to generate key differentiators.</p>';
-                return;
-            }
-            container.innerHTML = '';
-            data.forEach(function(sk, i) {
-                var dbRating = sk.databricks_rating || '';
-                var compRating = sk.competitor_rating || '';
-                var item = document.createElement('div');
-                item.className = 'bc-diff-item';
-                item.innerHTML =
-                    '<div class="bc-diff-header">' +
-                        '<span class="bc-diff-category">' + (sk.category || '') + '</span>' +
-                        '<span>' + (sk.key_differentiator || '') + '</span>' +
-                        '<div class="bc-diff-ratings">' +
-                            '<span class="rating-badge ' + dbRating + '" style="font-size:9px">' + dbRating + '</span>' +
-                            '<span class="rating-badge ' + compRating + '" style="font-size:9px">' + compRating + '</span>' +
-                        '</div>' +
-                    '</div>';
-                container.appendChild(item);
-            });
-        }
-
-        // Wait a tick for left panel's script to set window._skeletonData
         setTimeout(function() {
-            if (window._skeletonData) {
-                renderDiffs(window._skeletonData);
-            } else {
-                // Try from artifact data passed by Jinja
-                {% set skel_arts = artifacts_by_step.get(5, [])|selectattr('artifact_type', 'eq', 'pass1_skeletons')|list %}
-                {% if skel_arts %}
-                try {
-                    var skelData = {{ skel_arts[0].artifact_content | safe }};
-                    renderDiffs(skelData);
-                } catch(e) {
-                    container.innerHTML = '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 5 to generate key differentiators.</p>';
-                }
-                {% else %}
-                container.innerHTML = '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 5 to generate key differentiators.</p>';
-                {% endif %}
+            {% set skel_arts = artifacts_by_step.get(4, [])|selectattr('artifact_type', 'eq', 'pass1_skeletons')|list %}
+            {% set claim_arts = artifacts_by_step.get(5, [])|selectattr('artifact_type', 'in', ['pass2_claims', 'pass3_regenerated'])|list %}
+            {% set cat_sel_arts = artifacts_by_step.get(3, [])|selectattr('artifact_type', 'eq', 'category_selections')|list %}
+
+            var skeletons = [];
+            var claims = [];
+            var catSel = null;
+
+            {% if skel_arts %}
+            try {
+                skeletons = {{ skel_arts[0].artifact_content | safe }};
+                _lastDiffsCount = skeletons.length;
+            } catch(e) { console.error('Failed to parse skeletons:', e); }
+            {% endif %}
+
+            {% if claim_arts %}
+            try {
+                claims = {{ claim_arts[0].artifact_content | safe }};
+                _lastClaimsCount = claims.length;
+            } catch(e) { console.error('Failed to parse claims:', e); }
+            {% endif %}
+
+            {% if cat_sel_arts %}
+            try {
+                catSel = {{ cat_sel_arts[0].artifact_content | safe }};
+            } catch(e) { console.error('Failed to parse category selections:', e); }
+            {% endif %}
+
+            if (skeletons.length > 0) {
+                window.renderBattlecardCards(skeletons, claims);
+            } else if (catSel) {
+                window.renderCategoryPlaceholders(catSel);
             }
         }, 100);
     })();
-
-    // ---- Populate Battlecard Preview: Claims (from Step 6 data) ----
-    (function() {
-        var container = document.getElementById('bc-claims-list');
-        if (!container) return;
-        var competitor = "{{ session.competitor_name }}";
-
-        function renderClaims(claims, skeletons) {
-            if (!claims || !claims.length) {
-                container.innerHTML = '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 6 to generate competitive claims.</p>';
-                return;
-            }
-            container.innerHTML = '';
-            claims.forEach(function(claim, i) {
-                var sk = (skeletons && skeletons[i]) || {};
-                var dbRating = sk.databricks_rating || '';
-                var compRating = sk.competitor_rating || '';
-                var item = document.createElement('div');
-                item.className = 'bc-diff-item';
-                item.innerHTML =
-                    '<div class="bc-diff-header">' +
-                        '<span class="bc-diff-category">' + (sk.category || '') + '</span>' +
-                        '<span>' + (sk.key_differentiator || 'Diff ' + (i+1)) + '</span>' +
-                        '<div class="bc-diff-ratings">' +
-                            '<span class="rating-badge ' + dbRating + '" style="font-size:9px">' + dbRating + '</span>' +
-                            '<span class="rating-badge ' + compRating + '" style="font-size:9px">' + compRating + '</span>' +
-                        '</div>' +
-                    '</div>' +
-                    '<div class="bc-diff-body">' +
-                        '<div class="bc-vendor-col databricks">' +
-                            '<div class="bc-vendor-col-label">Databricks</div>' +
-                            '<div class="bc-vendor-headline">' + (claim.databricks_headline || '') + '</div>' +
-                            '<div class="bc-vendor-details">' + (claim.databricks_details || '') + '</div>' +
-                        '</div>' +
-                        '<div class="bc-vendor-col competitor">' +
-                            '<div class="bc-vendor-col-label">' + competitor + '</div>' +
-                            '<div class="bc-vendor-headline">' + (claim.competitor_headline || '') + '</div>' +
-                            '<div class="bc-vendor-details">' + (claim.competitor_details || '') + '</div>' +
-                        '</div>' +
-                    '</div>';
-                container.appendChild(item);
-            });
-        }
-
-        // Wait a tick for left panel scripts to populate window data
-        setTimeout(function() {
-            if (window._claimsData) {
-                renderClaims(window._claimsData, window._skeletonData || []);
-            } else {
-                {% set claim_arts = artifacts_by_step.get(6, [])|selectattr('artifact_type', 'in', ['pass2_claims', 'pass3_regenerated'])|list %}
-                {% set skel_arts2 = artifacts_by_step.get(5, [])|selectattr('artifact_type', 'eq', 'pass1_skeletons')|list %}
-                {% if claim_arts %}
-                try {
-                    var claimsData = {{ claim_arts[0].artifact_content | safe }};
-                    var skelData2 = {% if skel_arts2 %}{{ skel_arts2[0].artifact_content | safe }}{% else %}[]{% endif %};
-                    renderClaims(claimsData, skelData2);
-                } catch(e) {
-                    container.innerHTML = '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 6 to generate competitive claims.</p>';
-                }
-                {% else %}
-                container.innerHTML = '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Complete Step 6 to generate competitive claims.</p>';
-                {% endif %}
-            }
-        }, 150);
-    })();
-    {% endif %}
 
     // ---- Panel Collapse/Expand ----
     function togglePanelCollapse() {

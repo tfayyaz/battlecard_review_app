@@ -211,16 +211,6 @@ PASS1_PROMPT_TEMPLATES = {
         "description": "Per-category parallel execution. One LLM call per core product category with cross-platform context.",
         "file": DEFAULT_PASS1_PROMPT_V4,
     },
-    5: {
-        "label": "V5 — L200 Only (Concise)",
-        "description": "Per-category execution. Generates complete key diffs with L200-only details (1-2 bullet points). No Pass 2 needed.",
-        "template": "inline",  # Will be loaded from DB or inline fallback
-    },
-    6: {
-        "label": "V6 — L200 + L300 (Full Detail)",
-        "description": "Per-category execution. Generates L200 (1-2 bullets) and L300 (2-5 detailed bullets) for each key diff. No Pass 2 needed.",
-        "template": "inline",  # Will be loaded from DB or inline fallback
-    },
 }
 
 # ---------------------------------------------------------------------------
@@ -363,6 +353,16 @@ Return ONLY a JSON object with these fields:
 
 Return ONLY the JSON object. No markdown fences, no explanation text.
 """,
+    },
+    3: {
+        "label": "V3 — Per-Category L200 (8 parallel calls)",
+        "description": "Processes ALL key diffs for one category in a single call. L200-only (1-2 concise bullets). 8 calls instead of 80.",
+        "template": "inline",  # Will be loaded from DB or inline fallback
+    },
+    4: {
+        "label": "V4 — Per-Category L200+L300 (8 parallel calls)",
+        "description": "Processes ALL key diffs for one category in a single call. L200 (1-2 bullets) + L300 (2-5 detailed bullets). 8 calls instead of 80.",
+        "template": "inline",  # Will be loaded from DB or inline fallback
     },
 }
 
@@ -1098,226 +1098,14 @@ Return ONLY the JSON array. No markdown fences, no explanation text.
         "## Task\nGenerate exactly"
     )
 
-    # V5 — L200 Only (Concise) — Complete output, no Pass 2 needed
-    _PASS1_V5_INLINE = """\
-You generate a **complete competitive battlecard section** for the product category **{{category}}** comparing Databricks to {{competitor}}.
-
-## Execution Mode
-This prompt generates **{{diffs_per_category}} key differentiators** for ONE product category: **{{category}}**.
-Each differentiator includes complete L200 details for both Databricks and the competitor.
-**No second pass is needed** — output is ready for the battlecard.
-
-## Context
-- **Competitor**: {{competitor}}
-- **Product Area**: {{product_area}}
-- **Category**: {{category}}
-
-## Cross-Platform Context
-The following cross-platform capabilities may be relevant to this category. Weave them in where they naturally fit:
-{{cross_platform_categories}}
-
-## Audience
-This battlecard is for **C-suite executives** (CIO, CTO, CDO, VP Data/AI) and **data/ML/AI practitioners**.
-- C-suite cares about: strategic direction, TCO, vendor risk, governance, time-to-value, AI readiness.
-- Practitioners care about: performance, developer experience, tooling, open standards, reliability.
-
-## Directives
-{{directives}}
-
-## Additional Context
-{{context}}
-
-## Task
-Generate exactly **{{diffs_per_category}} key differentiators** for the **{{category}}** category.
-
-For each differentiator, provide:
-1. A **2-4 word key differentiator name** (generic capability label, NO brand names)
-2. A **1-sentence description** (max 12 words, benefit-focused)
-3. **Databricks L200 details**: 1-2 concise bullet points (max 15 words each)
-4. **Competitor L200 details**: 1-2 concise bullet points (max 15 words each)
-5. Ratings and reasoning
-
-## L200 Writing Style — CRITICAL
-
-L200 bullets are **executive-ready sound bites**. They must be:
-- **Outcome-focused**: Lead with the benefit or limitation, NOT technology
-- **Concise**: 1-2 bullets, max 15 words each
-- **No jargon**: Write for a VP, not an engineer
-- **Specific**: Include proof points where possible (benchmarks, percentages)
-
-### Examples of GOOD L200 bullets:
-**Semantic Understanding** (Databricks advantage):
-- Genie leverages Unity Catalog semantics for accurate, context-aware answers without extensive configuration.
-
-**Cost Model** (Databricks advantage):
-- Scale analytics to every employee without seat licensing.
-- Pay only for compute consumed.
-
-**Query Performance** (Databricks advantage):
-- 2-3x faster query execution in independent benchmarks.
-- Photon engine optimizes automatically without tuning.
-
-**BI Integration** (Competitor advantage):
-- Native Power BI integration with no additional connectors needed.
-- Familiar Excel-like experience for business users.
-
-### Examples of BAD L200 bullets — DO NOT write like this:
-- "Databricks uses Delta Lake with ACID transactions and time travel capabilities for reliable data management." (too technical, too long)
-- "The platform provides comprehensive data governance features." (vague, no proof point)
-- "Unity Catalog enables fine-grained access control with row-level and column-level security." (too technical)
-
-## Output Format
-Return ONLY a JSON array. Each object must have this exact shape:
-
-```json
-{
-  "id": "{{category}}_<Differentiator>_<rank>",
-  "competitor": "{{competitor}}",
-  "category": "{{category}}",
-  "rank": 1,
-  "key_differentiator": "<2-4 word name>",
-  "description": "<1 sentence, max 12 words>",
-  "databricks_rating": "strong_advantage|advantage|partial|disadvantage",
-  "databricks_l200": ["<bullet 1>", "<bullet 2 (optional)>"],
-  "databricks_reasoning": "<why this rating — 1-2 sentences>",
-  "competitor_rating": "strong_advantage|advantage|partial|disadvantage",
-  "competitor_l200": ["<bullet 1>", "<bullet 2 (optional)>"],
-  "competitor_reasoning": "<why this rating — 1-2 sentences>",
-  "selection_reasoning": "<who cares (C-suite/practitioners/both) and why>",
-  "sources": ["<source 1>", "<source 2>"]
-}
-```
-
-## Rules
-1. Generate exactly **{{diffs_per_category}} differentiators** for **{{category}}**.
-2. Rank by importance (1 = most important for platform selection).
-3. Databricks rating >= competitor rating for majority, but be fair — include 1-2 genuine competitor strengths.
-4. **NO BRAND NAMES** in key_differentiator or description fields.
-5. **L200 bullets must be outcome-focused**, not technology-focused.
-6. Each L200 array should have 1-2 bullets (not more).
-
-Return ONLY the JSON array. No markdown fences, no explanation text.
-"""
-
-    # V6 — L200 + L300 (Full Detail) — Complete output with detailed bullets
-    _PASS1_V6_INLINE = """\
-You generate a **complete competitive battlecard section** for the product category **{{category}}** comparing Databricks to {{competitor}}.
-
-## Execution Mode
-This prompt generates **{{diffs_per_category}} key differentiators** for ONE product category: **{{category}}**.
-Each differentiator includes both L200 (executive summary) and L300 (technical detail) for Databricks and the competitor.
-**No second pass is needed** — output is ready for the battlecard.
-
-## Context
-- **Competitor**: {{competitor}}
-- **Product Area**: {{product_area}}
-- **Category**: {{category}}
-
-## Cross-Platform Context
-The following cross-platform capabilities may be relevant to this category. Weave them in where they naturally fit:
-{{cross_platform_categories}}
-
-## Audience
-This battlecard is for **C-suite executives** (CIO, CTO, CDO, VP Data/AI) and **data/ML/AI practitioners**.
-- C-suite cares about: strategic direction, TCO, vendor risk, governance, time-to-value, AI readiness.
-- Practitioners care about: performance, developer experience, tooling, open standards, reliability.
-
-## Directives
-{{directives}}
-
-## Additional Context
-{{context}}
-
-## Task
-Generate exactly **{{diffs_per_category}} key differentiators** for the **{{category}}** category.
-
-For each differentiator, provide:
-1. A **2-4 word key differentiator name** (generic capability label, NO brand names)
-2. A **1-sentence description** (max 12 words, benefit-focused)
-3. **Databricks L200**: 1-2 concise bullets (executive summary, max 15 words each)
-4. **Databricks L300**: 2-5 detailed bullets (technical depth for practitioners)
-5. **Competitor L200**: 1-2 concise bullets (executive summary)
-6. **Competitor L300**: 2-5 detailed bullets (technical depth)
-7. Ratings and reasoning
-
-## L200 vs L300 Writing Style — CRITICAL
-
-**L200 (Executive Summary)** — For C-suite and quick scanning:
-- Outcome-focused: Lead with benefit or limitation
-- 1-2 bullets, max 15 words each
-- No technical jargon
-- Include proof points (benchmarks, percentages)
-
-**L300 (Technical Detail)** — For practitioners who want depth:
-- 2-5 bullets with technical specifics
-- Architecture details, version numbers, benchmarks
-- Comparison points with specific features
-- Can include product names (Delta Lake, Photon, etc.)
-
-### L200 Examples (GOOD):
-**Semantic Understanding**:
-- Genie leverages Unity Catalog semantics for accurate, context-aware answers without extensive configuration.
-
-**Cost Model**:
-- Scale analytics to every employee without seat licensing.
-- Pay only for compute consumed.
-
-### L300 Examples (GOOD):
-**Semantic Understanding**:
-- Unity Catalog provides table/column descriptions, tags, and business glossary terms that Genie uses for disambiguation.
-- AI-generated suggestions for common questions based on schema analysis.
-- Natural language to SQL with 95%+ accuracy on trained domains.
-- Supports follow-up questions with conversation context retention.
-
-**Cost Model**:
-- Serverless SQL warehouses auto-scale from 0 with sub-second startup.
-- Per-query pricing with no minimum commits or idle charges.
-- Predictive autoscaling reduces over-provisioning by 40-60%.
-
-## Output Format
-Return ONLY a JSON array. Each object must have this exact shape:
-
-```json
-{
-  "id": "{{category}}_<Differentiator>_<rank>",
-  "competitor": "{{competitor}}",
-  "category": "{{category}}",
-  "rank": 1,
-  "key_differentiator": "<2-4 word name>",
-  "description": "<1 sentence, max 12 words>",
-  "databricks_rating": "strong_advantage|advantage|partial|disadvantage",
-  "databricks_l200": ["<bullet 1>", "<bullet 2 (optional)>"],
-  "databricks_l300": ["<detail 1>", "<detail 2>", "...up to 5"],
-  "databricks_reasoning": "<why this rating — 1-2 sentences>",
-  "competitor_rating": "strong_advantage|advantage|partial|disadvantage",
-  "competitor_l200": ["<bullet 1>", "<bullet 2 (optional)>"],
-  "competitor_l300": ["<detail 1>", "<detail 2>", "...up to 5"],
-  "competitor_reasoning": "<why this rating — 1-2 sentences>",
-  "selection_reasoning": "<who cares (C-suite/practitioners/both) and why>",
-  "sources": ["<source 1>", "<source 2>"]
-}
-```
-
-## Rules
-1. Generate exactly **{{diffs_per_category}} differentiators** for **{{category}}**.
-2. Rank by importance (1 = most important for platform selection).
-3. Databricks rating >= competitor rating for majority, but be fair — include 1-2 genuine competitor strengths.
-4. **NO BRAND NAMES** in key_differentiator or description fields.
-5. **L200 = outcome-focused** (1-2 bullets), **L300 = technical depth** (2-5 bullets).
-6. L300 CAN include product names and technical details.
-
-Return ONLY the JSON array. No markdown fences, no explanation text.
-"""
-
     _PASS1_INLINE_FALLBACKS = {
         1: _PASS1_V1_INLINE,
         2: _PASS1_V2_INLINE,
         3: _PASS1_V3_INLINE,
         4: _PASS1_V4_INLINE,
-        5: _PASS1_V5_INLINE,
-        6: _PASS1_V6_INLINE,
     }
 
+    # ── Pass 2 inline fallbacks ──
     _PASS2_V1_INLINE = """\
 You fill in detailed competitive analysis for a single key differentiator on a Databricks vs {{competitor}} platform battlecard.
 
@@ -1358,6 +1146,180 @@ Return a JSON object with these fields:
 
 Return ONLY the JSON object. No markdown fences, no explanation text.
 """
+
+    # V3 — Per-Category L200 Only (8 parallel calls instead of 80)
+    _PASS2_V3_INLINE = """\
+You generate L200 details for ALL key differentiators in the **{{category}}** category for a Databricks vs {{competitor}} battlecard.
+
+## Execution Mode
+This prompt processes **ALL key differentiators for one category** in a single call.
+You will receive {{num_diffs}} key differentiators for the {{category}} category.
+Generate L200 details (1-2 concise bullets) for EACH differentiator.
+
+## Category: {{category}}
+
+## Key Differentiators to Process
+{{key_diffs_json}}
+
+## Audience
+This battlecard is for **C-suite executives** (CIO, CTO, CDO, VP Data/AI) and **data/ML/AI practitioners**.
+- C-suite cares about: strategic direction, TCO, vendor risk, governance, time-to-value, AI readiness.
+- Practitioners care about: performance, developer experience, tooling, open standards, reliability.
+
+## Directives
+{{directives}}
+
+## Additional Context
+{{context}}
+
+## L200 Writing Style — CRITICAL
+
+L200 bullets are **executive-ready sound bites**. They must be:
+- **Outcome-focused**: Lead with the benefit or limitation, NOT technology
+- **Concise**: 1-2 bullets, max 15 words each
+- **No jargon**: Write for a VP, not an engineer
+- **Specific**: Include proof points where possible (benchmarks, percentages)
+
+### Examples of GOOD L200 bullets:
+**Semantic Understanding** (Databricks advantage):
+- Genie leverages Unity Catalog semantics for accurate, context-aware answers without extensive configuration.
+
+**Cost Model** (Databricks advantage):
+- Scale analytics to every employee without seat licensing.
+- Pay only for compute consumed.
+
+**Query Performance** (Databricks advantage):
+- 2-3x faster query execution in independent benchmarks.
+- Photon engine optimizes automatically without tuning.
+
+**BI Integration** (Competitor advantage):
+- Native Power BI integration with no additional connectors needed.
+- Familiar Excel-like experience for business users.
+
+### Examples of BAD L200 bullets — DO NOT write like this:
+- "Databricks uses Delta Lake with ACID transactions and time travel capabilities for reliable data management." (too technical, too long)
+- "The platform provides comprehensive data governance features." (vague, no proof point)
+
+## Output Format
+Return a JSON array with one object per key differentiator. Each object must have:
+
+```json
+{
+  "id": "<same id from input>",
+  "databricks_headline": "<3-8 word headline for Databricks position>",
+  "databricks_l200": ["<bullet 1: 10-15 words, outcome-focused>", "<bullet 2 (optional)>"],
+  "databricks_reasoning": "<why this rating — 1-2 sentences with technical depth>",
+  "competitor_headline": "<3-8 word headline for competitor position>",
+  "competitor_l200": ["<bullet 1: 10-15 words, outcome-focused>", "<bullet 2 (optional)>"],
+  "competitor_reasoning": "<why this rating — 1-2 sentences with technical depth>",
+  "sources": ["<source 1>", "<source 2>"]
+}
+```
+
+## Rules
+1. Process ALL {{num_diffs}} key differentiators provided in the input.
+2. **L200 bullets must be outcome-focused**, not technology-focused.
+3. Each L200 array should have 1-2 bullets (not more).
+4. Headlines should be punchy and memorable (3-8 words).
+5. Put technical depth in the reasoning field, not in L200 bullets.
+6. Be fair — if the competitor genuinely excels, reflect that honestly.
+
+Return ONLY the JSON array. No markdown fences, no explanation text.
+"""
+
+    # V4 — Per-Category L200 + L300 (8 parallel calls instead of 80)
+    _PASS2_V4_INLINE = """\
+You generate L200 and L300 details for ALL key differentiators in the **{{category}}** category for a Databricks vs {{competitor}} battlecard.
+
+## Execution Mode
+This prompt processes **ALL key differentiators for one category** in a single call.
+You will receive {{num_diffs}} key differentiators for the {{category}} category.
+Generate L200 (executive summary) and L300 (technical detail) for EACH differentiator.
+
+## Category: {{category}}
+
+## Key Differentiators to Process
+{{key_diffs_json}}
+
+## Audience
+This battlecard is for **C-suite executives** (CIO, CTO, CDO, VP Data/AI) and **data/ML/AI practitioners**.
+- C-suite cares about: strategic direction, TCO, vendor risk, governance, time-to-value, AI readiness.
+- Practitioners care about: performance, developer experience, tooling, open standards, reliability.
+
+## Directives
+{{directives}}
+
+## Additional Context
+{{context}}
+
+## L200 vs L300 Writing Style — CRITICAL
+
+**L200 (Executive Summary)** — For C-suite and quick scanning:
+- Outcome-focused: Lead with benefit or limitation
+- 1-2 bullets, max 15 words each
+- No technical jargon
+- Include proof points (benchmarks, percentages)
+
+**L300 (Technical Detail)** — For practitioners who want depth:
+- 2-5 bullets with technical specifics
+- Architecture details, version numbers, benchmarks
+- Comparison points with specific features
+- Can include product names (Delta Lake, Photon, etc.)
+
+### L200 Examples (GOOD):
+**Semantic Understanding**:
+- Genie leverages Unity Catalog semantics for accurate, context-aware answers without extensive configuration.
+
+**Cost Model**:
+- Scale analytics to every employee without seat licensing.
+- Pay only for compute consumed.
+
+### L300 Examples (GOOD):
+**Semantic Understanding**:
+- Unity Catalog provides table/column descriptions, tags, and business glossary terms that Genie uses for disambiguation.
+- AI-generated suggestions for common questions based on schema analysis.
+- Natural language to SQL with 95%+ accuracy on trained domains.
+- Supports follow-up questions with conversation context retention.
+
+**Cost Model**:
+- Serverless SQL warehouses auto-scale from 0 with sub-second startup.
+- Per-query pricing with no minimum commits or idle charges.
+- Predictive autoscaling reduces over-provisioning by 40-60%.
+
+## Output Format
+Return a JSON array with one object per key differentiator. Each object must have:
+
+```json
+{
+  "id": "<same id from input>",
+  "databricks_headline": "<3-8 word headline for Databricks position>",
+  "databricks_l200": ["<bullet 1: 10-15 words, outcome-focused>", "<bullet 2 (optional)>"],
+  "databricks_l300": ["<detail 1>", "<detail 2>", "...up to 5 technical bullets"],
+  "databricks_reasoning": "<why this rating — 1-2 sentences>",
+  "competitor_headline": "<3-8 word headline for competitor position>",
+  "competitor_l200": ["<bullet 1: 10-15 words, outcome-focused>", "<bullet 2 (optional)>"],
+  "competitor_l300": ["<detail 1>", "<detail 2>", "...up to 5 technical bullets"],
+  "competitor_reasoning": "<why this rating — 1-2 sentences>",
+  "sources": ["<source 1>", "<source 2>"]
+}
+```
+
+## Rules
+1. Process ALL {{num_diffs}} key differentiators provided in the input.
+2. **L200 = outcome-focused** (1-2 bullets), **L300 = technical depth** (2-5 bullets).
+3. L300 CAN include product names and technical details.
+4. Headlines should be punchy and memorable (3-8 words).
+5. Be fair — if the competitor genuinely excels, reflect that honestly.
+6. Cite sources where possible.
+
+Return ONLY the JSON array. No markdown fences, no explanation text.
+"""
+
+    _PASS2_INLINE_FALLBACKS = {
+        1: _PASS2_V1_INLINE,
+        3: _PASS2_V3_INLINE,
+        4: _PASS2_V4_INLINE,
+    }
 
     _DIRECTIVE_INLINE = (
         "Read the following slides content about competing against {{competitor}}.\n\n"
@@ -1403,7 +1365,7 @@ Return ONLY the JSON object. No markdown fences, no explanation text.
         elif "file" in cfg:
             tpl_text = _read_file_safe(cfg["file"])
         if not tpl_text:
-            tpl_text = _PASS2_V1_INLINE if ver_num == 1 else None
+            tpl_text = _PASS2_INLINE_FALLBACKS.get(ver_num)
 
         variables = sorted(set(re.findall(r'\{\{(\w+)\}\}', tpl_text))) if tpl_text else []
 

@@ -61,6 +61,7 @@ _CITATION_ITEM_SCHEMA = {
         "source_index", "source_quote", "verdict",
         "confidence", "verdict_rationale",
     ],
+    "additionalProperties": False,
 }
 
 _CITATIONS_SCHEMA = {
@@ -75,6 +76,7 @@ _CITATIONS_SCHEMA = {
         "databricks_details", "databricks_reasoning",
         "competitor_details", "competitor_reasoning",
     ],
+    "additionalProperties": False,
 }
 
 _SOURCE_ITEM_SCHEMA = {
@@ -87,6 +89,7 @@ _SOURCE_ITEM_SCHEMA = {
         "accessed_at": {"type": "string"},
     },
     "required": ["index", "title", "url", "type", "accessed_at"],
+    "additionalProperties": False,
 }
 
 L200_PASS1_JSON_SCHEMA = {
@@ -118,10 +121,12 @@ L200_PASS1_JSON_SCHEMA = {
                         "directive_alignment",
                         "databricks_rating", "competitor_rating",
                     ],
+                    "additionalProperties": False,
                 },
             },
         },
         "required": ["slides"],
+        "additionalProperties": False,
     },
     "strict": True,
 }
@@ -155,6 +160,7 @@ L200_PASS2_JSON_SCHEMA = {
                     "databricks_details", "databricks_reasoning",
                     "competitor_details", "competitor_reasoning",
                 ],
+                "additionalProperties": False,
             },
             "sources": {
                 "type": "array",
@@ -170,6 +176,7 @@ L200_PASS2_JSON_SCHEMA = {
             "competitor_headline", "competitor_details", "competitor_reasoning",
             "citations", "sources", "research_sources",
         ],
+        "additionalProperties": False,
     },
     "strict": True,
 }
@@ -210,6 +217,7 @@ L200_PASS3_JSON_SCHEMA = {
             "competitor_headline", "competitor_details", "competitor_reasoning",
             "citations", "sources", "research_sources",
         ],
+        "additionalProperties": False,
     },
     "strict": True,
 }
@@ -243,7 +251,11 @@ def call_model(
     temperature: float = 0.2,
     max_tokens: int = 16384,
 ) -> str:
-    """Call the model via Databricks Model Serving with optional structured output."""
+    """Call the model via Databricks Model Serving with optional structured output.
+
+    Returns the raw response content as a string. If the SDK returns a parsed
+    object (list/dict), it's re-serialized to JSON string for consistent handling.
+    """
     kwargs = {
         "model": model_name,
         "messages": [{"role": "user", "content": rendered_prompt}],
@@ -258,7 +270,70 @@ def call_model(
         logger.info("  Using structured output (json_schema: %s)", json_schema["name"])
 
     response = client.chat.completions.create(**kwargs)
-    return response.choices[0].message.content
+    content = response.choices[0].message.content
+
+    # Handle case where SDK returns already-parsed JSON (list or dict)
+    # instead of a raw string - convert back to string for consistent handling
+    if isinstance(content, (list, dict)):
+        logger.debug("Model response was already parsed, re-serializing to JSON string")
+        return json.dumps(content)
+
+    return content
+
+
+def call_model_with_debug(
+    client: OpenAI,
+    model_name: str,
+    rendered_prompt: str,
+    json_schema: Optional[Dict] = None,
+    temperature: float = 0.2,
+    max_tokens: int = 16384,
+) -> Dict[str, Any]:
+    """Call the model and return detailed debug info including request/response.
+
+    Returns a dict with:
+      - content: The processed response content (string)
+      - api_request: The kwargs sent to the API
+      - api_response_raw: The raw response object as dict
+      - response_was_parsed: Whether SDK returned pre-parsed JSON
+    """
+    kwargs = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": rendered_prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if json_schema:
+        kwargs["response_format"] = {
+            "type": "json_schema",
+            "json_schema": json_schema,
+        }
+        logger.info("  Using structured output (json_schema: %s)", json_schema["name"])
+
+    response = client.chat.completions.create(**kwargs)
+
+    # Capture raw response as dict for debugging
+    try:
+        api_response_raw = response.model_dump() if hasattr(response, 'model_dump') else str(response)
+    except Exception:
+        api_response_raw = str(response)
+
+    content = response.choices[0].message.content
+    response_was_parsed = False
+
+    # Handle case where SDK returns already-parsed JSON (list or dict)
+    if isinstance(content, (list, dict)):
+        logger.debug("Model response was already parsed, re-serializing to JSON string")
+        response_was_parsed = True
+        content = json.dumps(content)
+
+    return {
+        "content": content,
+        "api_request": {k: v for k, v in kwargs.items() if k != "messages"},  # Exclude large prompt
+        "api_request_full": kwargs,  # Full request including messages
+        "api_response_raw": api_response_raw,
+        "response_was_parsed": response_was_parsed,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +685,59 @@ class WorkflowRunner:
             ).scalar()
         return art_id
 
+    def _save_pass2_debug_log(self, debug_log: dict):
+        """Save a Pass 2 debug log entry to the database (upsert by session_id + skeleton_index)."""
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(
+                    text("""
+                        INSERT INTO pass2_debug_logs (
+                            session_id, skeleton_index, key_differentiator, category,
+                            rendered_prompt, api_request_json, api_response_raw,
+                            structured_output, response_type, was_list_fixed,
+                            lakebase_saved, lakebase_error, error_message, processing_time_ms
+                        ) VALUES (
+                            CAST(:session_id AS uuid), :skeleton_index, :key_differentiator, :category,
+                            :rendered_prompt, :api_request_json, :api_response_raw,
+                            :structured_output, :response_type, :was_list_fixed,
+                            :lakebase_saved, :lakebase_error, :error_message, :processing_time_ms
+                        )
+                        ON CONFLICT (session_id, skeleton_index)
+                        DO UPDATE SET
+                            key_differentiator = EXCLUDED.key_differentiator,
+                            category = EXCLUDED.category,
+                            rendered_prompt = EXCLUDED.rendered_prompt,
+                            api_request_json = EXCLUDED.api_request_json,
+                            api_response_raw = EXCLUDED.api_response_raw,
+                            structured_output = EXCLUDED.structured_output,
+                            response_type = EXCLUDED.response_type,
+                            was_list_fixed = EXCLUDED.was_list_fixed,
+                            lakebase_saved = EXCLUDED.lakebase_saved,
+                            lakebase_error = EXCLUDED.lakebase_error,
+                            error_message = EXCLUDED.error_message,
+                            processing_time_ms = EXCLUDED.processing_time_ms,
+                            created_at = NOW()
+                    """),
+                    debug_log,
+                )
+        except Exception as e:
+            logger.error("Failed to save Pass 2 debug log for skeleton %d: %s", debug_log.get("skeleton_index"), e)
+
+    def _update_pass2_debug_log_lakebase(self, skeleton_index: int, saved: bool, error: str = None):
+        """Update the lakebase_saved status for a Pass 2 debug log entry."""
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(
+                    text("""
+                        UPDATE pass2_debug_logs
+                        SET lakebase_saved = :saved, lakebase_error = :error
+                        WHERE session_id = CAST(:session_id AS uuid) AND skeleton_index = :skeleton_index
+                    """),
+                    {"session_id": self.session_id, "skeleton_index": skeleton_index, "saved": saved, "error": error},
+                )
+        except Exception as e:
+            logger.error("Failed to update Pass 2 debug log lakebase status for skeleton %d: %s", skeleton_index, e)
+
     def _advance_step(self, completed_step):
         """Mark the next step as ready."""
         next_step = completed_step + 1
@@ -660,6 +788,26 @@ class WorkflowRunner:
         # Fallback: treat all categories as core
         all_cats = self._get_categories()
         return {"core_product_categories": all_cats, "cross_platform_capabilities": [], "skipped": []}
+
+    def _get_categories_with_ids(self):
+        """Get selected categories with their catalog_ids from the database.
+
+        Returns a list of dicts: [{"catalog_id": 4, "category_name": "Data Engineering..."}, ...]
+        Only returns categories with inclusion_type = 'core_product_category'.
+        """
+        with self.engine.begin() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT pcc.catalog_id, pcc.category_name
+                    FROM session_category_selections scs
+                    JOIN product_category_catalog pcc ON scs.catalog_id = pcc.catalog_id
+                    WHERE scs.session_id = CAST(:sid AS uuid)
+                      AND scs.inclusion_type = 'core_product_category'
+                    ORDER BY scs.display_order
+                """),
+                {"sid": self.session_id},
+            ).mappings().all()
+            return [{"catalog_id": r["catalog_id"], "category_name": r["category_name"]} for r in rows]
 
     def _count_tokens(self, text_content: str) -> int:
         """Return estimated token count using tiktoken (cl100k_base) or char-based fallback."""
@@ -841,10 +989,35 @@ class WorkflowRunner:
     # Pass 1: Generate Key Differentiators (Skeletons)
     # ------------------------------------------------------------------
 
-    def _process_single_category(self, category, all_core_cats, cross_cats,
+    def _process_single_category(self, category_info, all_core_cats, cross_cats,
                                   template_text, directive, context, feedback=None):
-        """Generate Pass 1 skeletons for ONE core product category. Returns list[dict]."""
-        other_cats = [c for c in all_core_cats if c != category]
+        """Generate Pass 1 skeletons for ONE core product category. Returns list[dict].
+
+        Args:
+            category_info: Either a dict with {"catalog_id": int, "category_name": str}
+                          or a plain string (for backward compatibility).
+            all_core_cats: List of all core category infos (same format as category_info).
+            cross_cats: List of cross-platform category names (strings).
+            template_text: The prompt template.
+            directive: The directive text.
+            context: The context XML.
+            feedback: Optional feedback for regeneration.
+        """
+        # Handle both dict and string input for backward compatibility
+        if isinstance(category_info, dict):
+            catalog_id = category_info["catalog_id"]
+            category = category_info["category_name"]
+        else:
+            catalog_id = None
+            category = category_info
+
+        # Extract category names for template rendering
+        if all_core_cats and isinstance(all_core_cats[0], dict):
+            all_cat_names = [c["category_name"] for c in all_core_cats]
+        else:
+            all_cat_names = all_core_cats
+
+        other_cats = [c for c in all_cat_names if c != category]
         other_text = "\n".join(f"- {c}" for c in other_cats) if other_cats else "_(none)_"
         cross_text = "\n".join(f"- {c}" for c in cross_cats) if cross_cats else "_(none)_"
 
@@ -870,7 +1043,20 @@ class WorkflowRunner:
             rendered_prompt=rendered,
             json_schema=L200_PASS1_JSON_SCHEMA,
         )
-        return json.loads(raw).get("slides", [])
+        skeletons = json.loads(raw).get("slides", [])
+
+        # CRITICAL: Force the category name and ID from input - don't rely on LLM output
+        # Use catalog_id as the authoritative identifier
+        for sk in skeletons:
+            sk["category"] = category  # Use the exact category name we passed in
+            if catalog_id is not None:
+                sk["catalog_id"] = catalog_id  # Store the catalog_id for later use
+            # Fix the ID to use the correct category
+            old_id = sk.get("id", "")
+            key_diff_part = old_id.split("_", 1)[-1] if "_" in old_id else sk.get("key_differentiator", "unknown").replace(" ", "_")
+            sk["id"] = f"{category.replace(' ', '_')}_{key_diff_part}"
+
+        return skeletons
 
     def _stub_pass1_category(self, category):
         """Create N stub skeletons for a category that failed (fallback on error)."""
@@ -890,6 +1076,110 @@ class WorkflowRunner:
                 "competitor_rating": "partial",
             })
         return stubs
+
+    def _match_category(self, generated_cat: str, expected_categories: list) -> str | None:
+        """
+        Match a generated category name to an expected category.
+        Handles cases where LLM shortens category names.
+
+        Returns the matched expected category name, or None if no match.
+        """
+        gen_norm = generated_cat.lower().strip()
+
+        # First try exact match
+        for exp_cat in expected_categories:
+            if gen_norm == exp_cat.lower().strip():
+                return exp_cat
+
+        # Try prefix match: "Data Engineering" matches "Data Engineering (ETL, ...)"
+        for exp_cat in expected_categories:
+            exp_norm = exp_cat.lower().strip()
+            # Generated is a prefix of expected (LLM shortened the name)
+            if exp_norm.startswith(gen_norm):
+                return exp_cat
+            # Or the first significant part matches (before parenthesis or dash)
+            exp_base = exp_norm.split('(')[0].split(' - ')[0].strip()
+            if gen_norm == exp_base:
+                return exp_cat
+
+        # Try substring match for compound names
+        for exp_cat in expected_categories:
+            exp_norm = exp_cat.lower().strip()
+            # Generated contains key words from expected
+            gen_words = set(gen_norm.replace('&', 'and').split())
+            exp_words = set(exp_norm.replace('&', 'and').split())
+            # If generated words are mostly in expected (80%+ overlap)
+            if gen_words and len(gen_words & exp_words) / len(gen_words) >= 0.8:
+                return exp_cat
+
+        return None
+
+    def _validate_and_filter_skeletons(self, skeletons: list, expected_categories: list, diffs_per_category: int) -> tuple:
+        """
+        Validate LLM output matches expected categories. Filter out invalid entries.
+        Uses fuzzy matching to handle LLM shortening category names.
+
+        Returns:
+            (filtered_skeletons, validation_warnings)
+        """
+        warnings = []
+
+        # Check what categories the LLM actually generated
+        generated_categories = set(sk.get("category", "") for sk in skeletons)
+
+        # Build mapping from generated -> expected category
+        category_mapping = {}
+        unmapped_generated = []
+        for gen_cat in generated_categories:
+            matched = self._match_category(gen_cat, expected_categories)
+            if matched:
+                category_mapping[gen_cat] = matched
+                logger.debug("Category match: '%s' -> '%s'", gen_cat, matched)
+            else:
+                unmapped_generated.append(gen_cat)
+
+        # Find expected categories that weren't matched
+        matched_expected = set(category_mapping.values())
+        missing_expected = [cat for cat in expected_categories if cat not in matched_expected]
+
+        if unmapped_generated:
+            warnings.append(f"LLM generated unexpected categories (filtered out): {unmapped_generated}")
+            logger.warning("Pass 1 validation: unexpected categories: %s", unmapped_generated)
+
+        if missing_expected:
+            warnings.append(f"LLM missed expected categories: {missing_expected}")
+            logger.warning("Pass 1 validation: missing categories: %s", missing_expected)
+
+        # Filter and normalize skeletons
+        filtered = []
+        for sk in skeletons:
+            sk_cat = sk.get("category", "")
+            if sk_cat in category_mapping:
+                # Normalize category name to the full expected name
+                sk["category"] = category_mapping[sk_cat]
+                filtered.append(sk)
+            else:
+                logger.debug("Filtering out skeleton with unexpected category '%s': %s",
+                            sk_cat, sk.get("key_differentiator"))
+
+        # Validate count per category
+        cat_counts = {}
+        for sk in filtered:
+            cat = sk.get("category", "")
+            cat_counts[cat] = cat_counts.get(cat, 0) + 1
+
+        for cat, count in cat_counts.items():
+            if count != diffs_per_category:
+                warnings.append(f"Category '{cat}' has {count} diffs (expected {diffs_per_category})")
+
+        total_expected = len(expected_categories) * diffs_per_category
+        if len(filtered) != total_expected:
+            warnings.append(f"Total diff count mismatch: got {len(filtered)}, expected {total_expected}")
+
+        logger.info("Pass 1 validation: %d/%d skeletons kept, %d categories matched, warnings: %s",
+                    len(filtered), len(skeletons), len(cat_counts), warnings if warnings else "none")
+
+        return filtered, warnings
 
     def run_pass1(self, feedback=None, context_sources=None):
         """Run Pass 1 to generate key differentiator skeletons using the LLM."""
@@ -961,16 +1251,27 @@ class WorkflowRunner:
                 completed = 0
                 workers_label = f"{self.max_workers} parallel workers"
 
+                # Fetch categories with their catalog_ids from the database
+                # This is the authoritative source of truth for category names and IDs
+                core_cats_with_ids = self._get_categories_with_ids()
+                if not core_cats_with_ids:
+                    # Fallback to string-based categories if DB lookup fails
+                    logger.warning("No categories with IDs found in DB, falling back to string-based categories")
+                    core_cats_with_ids = [{"catalog_id": None, "category_name": c} for c in core_cats]
+
+                num_cats = len(core_cats_with_ids)
+                core_cat_names = [c["category_name"] for c in core_cats_with_ids]
+
                 # Record a representative prompt for the first category
-                first_cat = core_cats[0]
-                other_text = "\n".join(f"- {c}" for c in core_cats[1:])
+                first_cat_name = core_cats_with_ids[0]["category_name"]
+                other_text = "\n".join(f"- {c['category_name']}" for c in core_cats_with_ids[1:])
                 cross_text_repr = "\n".join(f"- {c}" for c in cross_cats) if cross_cats else "_(none)_"
                 representative_prompt = render_template(
                     template_text,
                     competitor=self.competitor,
                     product_area=self.product_area,
                     comparison=f"Databricks vs {self.competitor}",
-                    target_category=first_cat,
+                    target_category=first_cat_name,
                     other_core_categories=other_text,
                     cross_platform_capabilities=cross_text_repr,
                     diffs_per_category=str(self.diffs_per_category),
@@ -980,74 +1281,87 @@ class WorkflowRunner:
                 self._record_turn(4, "system_prompt", "system", "pass1_prompt", representative_prompt, model_name=self.model_name)
 
                 self._update_step(4, "in_progress",
-                                  progress_message=f"[4/6] Generating diffs — 0/{len(core_cats)} categories done ({workers_label}, model: {self.model_name})...",
-                                  progress_current=3, progress_total=3 + len(core_cats))
+                                  progress_message=f"[4/6] Generating diffs — 0/{num_cats} categories done ({workers_label}, model: {self.model_name})...",
+                                  progress_current=3, progress_total=3 + num_cats)
 
-                # Submit one task per core category
+                # Submit one task per core category, using catalog_id as the key
                 futures = {}
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                    for cat in core_cats:
+                    for cat_info in core_cats_with_ids:
                         future = executor.submit(
                             self._process_single_category,
-                            cat, core_cats, cross_cats,
+                            cat_info, core_cats_with_ids, cross_cats,
                             template_text, directive, context, feedback,
                         )
-                        futures[future] = cat
+                        # Use catalog_id as key (or category_name as fallback)
+                        key = cat_info["catalog_id"] if cat_info["catalog_id"] is not None else cat_info["category_name"]
+                        futures[future] = (key, cat_info)
 
                     # Collect results, saving incremental artifacts as each completes
-                    results_by_cat = {}
+                    # Key by catalog_id for consistent ordering
+                    results_by_id = {}
                     for future in as_completed(futures):
-                        cat = futures[future]
+                        key, cat_info = futures[future]
+                        cat_name = cat_info["category_name"]
                         try:
                             cat_skeletons = future.result()
-                            results_by_cat[cat] = cat_skeletons
+                            results_by_id[key] = cat_skeletons
                         except Exception as e:
-                            logger.error("Pass 1 failed for category '%s': %s", cat, e)
-                            results_by_cat[cat] = self._stub_pass1_category(cat)
-                            errors.append({"category": cat, "error": str(e)})
+                            logger.error("Pass 1 failed for category '%s' (id=%s): %s", cat_name, key, e)
+                            results_by_id[key] = self._stub_pass1_category(cat_name)
+                            errors.append({"category": cat_name, "catalog_id": cat_info.get("catalog_id"), "error": str(e)})
 
                         completed += 1
                         error_suffix = f" ({len(errors)} errors)" if errors else ""
 
                         # Accumulate results in original order for incremental save
                         accumulated = []
-                        for c in core_cats:
-                            if c in results_by_cat:
-                                accumulated.extend(results_by_cat[c])
+                        for ci in core_cats_with_ids:
+                            ci_key = ci["catalog_id"] if ci["catalog_id"] is not None else ci["category_name"]
+                            if ci_key in results_by_id:
+                                accumulated.extend(results_by_id[ci_key])
 
                         self._update_step(4, "in_progress",
                                           progress_current=3 + completed,
-                                          progress_total=3 + len(core_cats),
-                                          progress_message=f"[4/6] Generating diffs — {completed}/{len(core_cats)} categories done{error_suffix}: {cat}")
+                                          progress_total=3 + num_cats,
+                                          progress_message=f"[4/6] Generating diffs — {completed}/{num_cats} categories done{error_suffix}: {cat_name}")
 
                         # Incremental save: partial artifact so the frontend can poll and display
                         partial_content = json.dumps(accumulated, indent=2)
+                        completed_cat_names = [ci["category_name"] for ci in core_cats_with_ids
+                                               if (ci["catalog_id"] if ci["catalog_id"] is not None else ci["category_name"]) in results_by_id]
                         self._save_artifact(
                             4, "pass1_skeletons", "key_differentiators.json",
                             partial_content,
                             metadata={
                                 "count": len(accumulated),
-                                "partial": completed < len(core_cats),
+                                "partial": completed < num_cats,
                                 "completed_categories": completed,
-                                "total_categories": len(core_cats),
-                                "categories": [c for c in core_cats if c in results_by_cat],
+                                "total_categories": num_cats,
+                                "categories": completed_cat_names,
                                 "model": self.model_name,
                                 "prompt_version_id": pass1_version_id,
                             },
                         )
 
                 # Reassemble all skeletons in original category order
-                all_skeletons = []
-                for c in core_cats:
-                    all_skeletons.extend(results_by_cat.get(c, []))
+                all_skeletons_raw = []
+                for ci in core_cats_with_ids:
+                    ci_key = ci["catalog_id"] if ci["catalog_id"] is not None else ci["category_name"]
+                    all_skeletons_raw.extend(results_by_id.get(ci_key, []))
 
                 logger.info("Pass 1 (parallel) returned %d skeletons across %d categories (expected %d)",
-                            len(all_skeletons), len(core_cats), total_diffs)
+                            len(all_skeletons_raw), num_cats, total_diffs)
+
+                # Validate and filter skeletons to match expected categories
+                all_skeletons, validation_warnings = self._validate_and_filter_skeletons(
+                    all_skeletons_raw, core_cat_names, self.diffs_per_category
+                )
 
                 # Stage 5: Save final artifact
                 self._update_step(4, "in_progress",
                                   progress_message=f"[5/6] Saving {len(all_skeletons)} key differentiators...",
-                                  progress_current=3 + len(core_cats), progress_total=3 + len(core_cats) + 1)
+                                  progress_current=3 + num_cats, progress_total=3 + num_cats + 1)
 
                 skeletons_content = json.dumps(all_skeletons, indent=2)
                 art_id = self._save_artifact(
@@ -1056,14 +1370,16 @@ class WorkflowRunner:
                     metadata={
                         "count": len(all_skeletons),
                         "partial": False,
-                        "completed_categories": len(core_cats),
-                        "total_categories": len(core_cats),
-                        "categories": core_cats,
+                        "completed_categories": num_cats,
+                        "total_categories": num_cats,
+                        "categories": core_cat_names,
                         "model": self.model_name,
                         "prompt_version_id": pass1_version_id,
                         "parallel": True,
                         "max_workers": self.max_workers,
                         "errors": errors,
+                        "validation_warnings": validation_warnings,
+                        "raw_count": len(all_skeletons_raw),
                     },
                 )
 
@@ -1073,24 +1389,30 @@ class WorkflowRunner:
                 # Stage 6: Save to Lakebase tables
                 self._update_step(4, "in_progress",
                                   progress_message=f"[6/6] Writing {len(all_skeletons)} key differentiators to database...",
-                                  progress_current=3 + len(core_cats) + 1, progress_total=3 + len(core_cats) + 2)
+                                  progress_current=3 + num_cats + 1, progress_total=3 + num_cats + 2)
 
                 try:
                     self._save_skeletons_to_lakebase(all_skeletons)
                 except Exception as e:
                     logger.exception("Failed to save skeletons to Lakebase (non-fatal)")
 
+                # Build final message with any warnings
                 error_suffix = f" ({len(errors)} had errors — used fallback stubs)" if errors else ""
+                warning_suffix = ""
+                if validation_warnings:
+                    warning_suffix = f" ⚠️ Validation: {'; '.join(validation_warnings)}"
+
                 self._update_step(4, "waiting_human",
-                                  progress_message=f"Generated {len(all_skeletons)} key differentiators across {len(core_cats)} categories (parallel).{error_suffix} Review and approve or provide feedback.",
+                                  progress_message=f"Generated {len(all_skeletons)} key differentiators across {num_cats} categories (parallel).{error_suffix}{warning_suffix} Review and approve or provide feedback.",
                                   progress_current=6, progress_total=6,
-                                  error_details={"errors": errors} if errors else None)
+                                  error_details={"errors": errors, "validation_warnings": validation_warnings} if (errors or validation_warnings) else None)
                 return
 
             # ---------- SINGLE-CALL PATH (V1/V2 or non-parallel) ----------
             # Build template variables based on version
             if ver >= 3 and core_cats:
-                # V3+: separate core and cross-platform category lists
+                # V3+: use only core product categories (cross-platform weaved in)
+                # The template uses {{product_categories}} so we pass that variable name
                 core_text = "\n".join(f"- {c}" for c in core_cats)
                 cross_text = "\n".join(f"- {c}" for c in cross_cats) if cross_cats else "_(none selected)_"
                 rendered = render_template(
@@ -1098,7 +1420,9 @@ class WorkflowRunner:
                     competitor=self.competitor,
                     product_area=self.product_area,
                     comparison=f"Databricks vs {self.competitor}",
-                    core_product_categories=core_text,
+                    # Pass both old and new variable names for compatibility
+                    product_categories=core_text,  # V3 template uses this
+                    core_product_categories=core_text,  # Future templates may use this
                     cross_platform_capabilities=cross_text,
                     core_category_count=str(len(core_cats)),
                     diffs_per_category=str(self.diffs_per_category),
@@ -1146,11 +1470,17 @@ class WorkflowRunner:
                               progress_current=4, progress_total=6)
 
             parsed = json.loads(raw)
-            skeletons = parsed.get("slides", [])
+            skeletons_raw = parsed.get("slides", [])
 
-            logger.info("Pass 1 returned %d skeletons (expected %d)", len(skeletons), total_diffs)
+            logger.info("Pass 1 returned %d skeletons (expected %d)", len(skeletons_raw), total_diffs)
 
-            # Save artifact
+            # Validate and filter skeletons to match expected categories
+            expected_cats = core_cats if (ver >= 3 and core_cats) else categories
+            skeletons, validation_warnings = self._validate_and_filter_skeletons(
+                skeletons_raw, expected_cats, self.diffs_per_category
+            )
+
+            # Save artifact (filtered skeletons)
             skeletons_content = json.dumps(skeletons, indent=2)
             art_id = self._save_artifact(
                 4, "pass1_skeletons", "key_differentiators.json",
@@ -1158,9 +1488,11 @@ class WorkflowRunner:
                 metadata={
                     "count": len(skeletons),
                     "partial": False,
-                    "categories": categories,
+                    "categories": expected_cats,
                     "model": self.model_name,
                     "prompt_version_id": pass1_version_id,
+                    "validation_warnings": validation_warnings,
+                    "raw_count": len(skeletons_raw),
                 },
             )
 
@@ -1179,8 +1511,13 @@ class WorkflowRunner:
                 logger.exception("Failed to save skeletons to Lakebase (non-fatal)")
                 # Continue — artifact was saved, Lakebase write is bonus
 
+            # Build final message with validation warnings if any
+            warning_suffix = ""
+            if validation_warnings:
+                warning_suffix = f" ⚠️ Validation issues: {'; '.join(validation_warnings)}"
+
             self._update_step(4, "waiting_human",
-                              progress_message=f"Generated {len(skeletons)} key differentiators across {len(categories)} categories. Review and approve or provide feedback.",
+                              progress_message=f"Generated {len(skeletons)} key differentiators across {len(expected_cats)} categories.{warning_suffix} Review and approve or provide feedback.",
                               progress_current=6, progress_total=6)
 
         except json.JSONDecodeError as e:
@@ -1290,11 +1627,18 @@ class WorkflowRunner:
 
             def _process_single_diff(idx: int, sk: dict) -> dict:
                 """Generate claims for a single skeleton diff."""
+                import time as _time
+                start_time = _time.time()
+
+                kd_name = sk.get("key_differentiator", "")
+                category = sk.get("category", "")
+                logger.info("Pass 2 processing skeleton %d: %s", idx, kd_name)
+
                 rendered = render_template(
                     template_text,
                     competitor=self.competitor,
-                    category=sk.get("category", ""),
-                    key_differentiator=sk.get("key_differentiator", ""),
+                    category=category,
+                    key_differentiator=kd_name,
                     description=sk.get("description", ""),
                     databricks_rating=sk.get("databricks_rating", ""),
                     competitor_rating=sk.get("competitor_rating", ""),
@@ -1303,13 +1647,81 @@ class WorkflowRunner:
                     context=context,
                 )
 
-                raw = call_model(
-                    client=self.client,
-                    model_name=self.model_name,
-                    rendered_prompt=rendered,
-                    json_schema=L200_PASS2_JSON_SCHEMA,
-                )
-                return json.loads(raw)
+                # Log a snippet of the rendered prompt to verify key_differentiator is included
+                logger.info("Pass 2 skeleton %d prompt snippet: ...%s...", idx, rendered[200:400])
+
+                # Initialize debug log data
+                debug_log = {
+                    "session_id": self.session_id,
+                    "skeleton_index": idx,
+                    "key_differentiator": kd_name[:500] if kd_name else None,
+                    "category": category[:255] if category else None,
+                    "rendered_prompt": rendered,
+                    "api_request_json": None,
+                    "api_response_raw": None,
+                    "structured_output": None,
+                    "response_type": "unknown",
+                    "was_list_fixed": False,
+                    "lakebase_saved": False,
+                    "lakebase_error": None,
+                    "error_message": None,
+                    "processing_time_ms": None,
+                }
+
+                try:
+                    # Use debug version to capture request/response
+                    debug_result = call_model_with_debug(
+                        client=self.client,
+                        model_name=self.model_name,
+                        rendered_prompt=rendered,
+                        json_schema=L200_PASS2_JSON_SCHEMA,
+                    )
+
+                    raw = debug_result["content"]
+                    debug_log["api_request_json"] = json.dumps(debug_result["api_request"], indent=2)
+                    debug_log["api_response_raw"] = json.dumps(debug_result["api_response_raw"], indent=2) if isinstance(debug_result["api_response_raw"], dict) else str(debug_result["api_response_raw"])
+
+                    result = json.loads(raw)
+
+                    # Determine response type and handle list case (potentially nested)
+                    original_type = type(result).__name__
+                    extraction_depth = 0
+                    while isinstance(result, list) and extraction_depth < 5:
+                        extraction_depth += 1
+                        logger.warning("Pass 2 skeleton %d: model returned list (depth %d), extracting first element", idx, extraction_depth)
+                        if result and len(result) > 0:
+                            result = result[0]
+                        else:
+                            raise ValueError(f"Model returned empty list at depth {extraction_depth}")
+
+                    if extraction_depth > 0:
+                        debug_log["response_type"] = "list"
+                        debug_log["was_list_fixed"] = isinstance(result, dict)
+                        if not isinstance(result, dict):
+                            raise ValueError(f"After extracting {extraction_depth} levels, result is {type(result).__name__}, not dict")
+                    elif isinstance(result, dict):
+                        debug_log["response_type"] = "dict"
+                    else:
+                        debug_log["response_type"] = "unknown"
+                        raise ValueError(f"Model returned {type(result).__name__}, expected dict")
+
+                    debug_log["structured_output"] = json.dumps(result, indent=2)
+                    logger.info("Pass 2 skeleton %d result headline: %s", idx, result.get("databricks_headline", "N/A")[:50])
+
+                    # Calculate processing time
+                    debug_log["processing_time_ms"] = int((_time.time() - start_time) * 1000)
+
+                    # Save debug log to database
+                    self._save_pass2_debug_log(debug_log)
+
+                    return result
+
+                except Exception as e:
+                    debug_log["response_type"] = "error"
+                    debug_log["error_message"] = str(e)[:2000]
+                    debug_log["processing_time_ms"] = int((_time.time() - start_time) * 1000)
+                    self._save_pass2_debug_log(debug_log)
+                    raise
 
             # Stage 3: Generate claims
             workers_label = f"{self.max_workers} parallel workers" if self.max_workers > 1 else "sequential"
@@ -1348,7 +1760,8 @@ class WorkflowRunner:
                                           progress_message=f"[3/5] Generating claims — {completed}/{total} done{error_suffix}: {kd_name}")
 
                         # Incremental save: partial artifact so the frontend can poll and display
-                        accumulated_claims = [results_by_idx[i] for i in range(total) if i in results_by_idx]
+                        # IMPORTANT: Maintain index alignment with skeletons - use None for incomplete items
+                        accumulated_claims = [results_by_idx.get(i) for i in range(total)]
                         partial_content = json.dumps(accumulated_claims, indent=2)
                         self._save_artifact(
                             5, "pass2_claims", "claims.json",
@@ -1518,13 +1931,14 @@ class WorkflowRunner:
                 ).scalar()
 
             total_claims = 0
-            for sk, claim in zip(skeletons, claims):
+            for idx, (sk, claim) in enumerate(zip(skeletons, claims)):
                 kd_name = sk.get("key_differentiator", "")
                 kd_id = conn.execute(
                     text("SELECT key_diff_id FROM key_differentiators WHERE key_diff_name = :name LIMIT 1"),
                     {"name": kd_name},
                 ).scalar()
                 if not kd_id:
+                    self._update_pass2_debug_log_lakebase(idx, False, f"key_diff_id not found for '{kd_name}'")
                     continue
 
                 def _rating_to_symbol(rating):
@@ -1545,85 +1959,97 @@ class WorkflowRunner:
                         return "negative"
                     return "neutral"
 
-                # Databricks claim
-                db_rating = _rating_to_db(sk.get("databricks_rating", ""))
-                db_details_raw = claim.get("databricks_details", [])
-                if isinstance(db_details_raw, str):
-                    db_details_raw = [db_details_raw] if db_details_raw else []
-                db_desc_flat = " ".join(db_details_raw)
+                # Track Lakebase save for debug log
+                lakebase_error = None
+                try:
+                    # Databricks claim
+                    db_rating = _rating_to_db(sk.get("databricks_rating", ""))
+                    db_details_raw = claim.get("databricks_details", [])
+                    if isinstance(db_details_raw, str):
+                        db_details_raw = [db_details_raw] if db_details_raw else []
+                    db_desc_flat = " ".join(db_details_raw)
 
-                db_claim_id = conn.execute(
-                    text(
-                        "INSERT INTO claims (generation_id, key_diff_id, company_id, rating, rating_symbol, headline, description, change_type) "
-                        "VALUES (:gen, :kd, :co, :rating, :symbol, :head, :desc, 'new') RETURNING claim_id"
-                    ),
-                    {
-                        "gen": gen_id,
-                        "kd": kd_id,
-                        "co": db_id,
-                        "rating": db_rating,
-                        "symbol": _rating_to_symbol(sk.get("databricks_rating", "")),
-                        "head": claim.get("databricks_headline", ""),
-                        "desc": db_desc_flat,
-                    },
-                ).scalar()
-                total_claims += 1
-
-                # Insert detail items for Databricks claim
-                db_detail_item_ids = []
-                for order, item_text in enumerate(db_details_raw):
-                    did = conn.execute(
+                    db_claim_id = conn.execute(
                         text(
-                            "INSERT INTO claim_detail_items (claim_id, item_order, item_text) "
-                            "VALUES (:cid, :ord, :txt) RETURNING detail_item_id"
+                            "INSERT INTO claims (generation_id, key_diff_id, company_id, rating, rating_symbol, headline, description, change_type) "
+                            "VALUES (:gen, :kd, :co, :rating, :symbol, :head, :desc, 'new') RETURNING claim_id"
                         ),
-                        {"cid": db_claim_id, "ord": order, "txt": item_text},
+                        {
+                            "gen": gen_id,
+                            "kd": kd_id,
+                            "co": db_id,
+                            "rating": db_rating,
+                            "symbol": _rating_to_symbol(sk.get("databricks_rating", "")),
+                            "head": claim.get("databricks_headline", ""),
+                            "desc": db_desc_flat,
+                        },
                     ).scalar()
-                    db_detail_item_ids.append(did)
+                    total_claims += 1
 
-                # Competitor claim
-                comp_rating = _rating_to_db(sk.get("competitor_rating", ""))
-                comp_details_raw = claim.get("competitor_details", [])
-                if isinstance(comp_details_raw, str):
-                    comp_details_raw = [comp_details_raw] if comp_details_raw else []
-                comp_desc_flat = " ".join(comp_details_raw)
+                    # Insert detail items for Databricks claim
+                    db_detail_item_ids = []
+                    for order, item_text in enumerate(db_details_raw):
+                        did = conn.execute(
+                            text(
+                                "INSERT INTO claim_detail_items (claim_id, item_order, item_text) "
+                                "VALUES (:cid, :ord, :txt) RETURNING detail_item_id"
+                            ),
+                            {"cid": db_claim_id, "ord": order, "txt": item_text},
+                        ).scalar()
+                        db_detail_item_ids.append(did)
 
-                comp_claim_id = conn.execute(
-                    text(
-                        "INSERT INTO claims (generation_id, key_diff_id, company_id, rating, rating_symbol, headline, description, change_type) "
-                        "VALUES (:gen, :kd, :co, :rating, :symbol, :head, :desc, 'new') RETURNING claim_id"
-                    ),
-                    {
-                        "gen": gen_id,
-                        "kd": kd_id,
-                        "co": comp_id,
-                        "rating": comp_rating,
-                        "symbol": _rating_to_symbol(sk.get("competitor_rating", "")),
-                        "head": claim.get("competitor_headline", ""),
-                        "desc": comp_desc_flat,
-                    },
-                ).scalar()
-                total_claims += 1
+                    # Competitor claim
+                    comp_rating = _rating_to_db(sk.get("competitor_rating", ""))
+                    comp_details_raw = claim.get("competitor_details", [])
+                    if isinstance(comp_details_raw, str):
+                        comp_details_raw = [comp_details_raw] if comp_details_raw else []
+                    comp_desc_flat = " ".join(comp_details_raw)
 
-                # Insert detail items for competitor claim
-                comp_detail_item_ids = []
-                for order, item_text in enumerate(comp_details_raw):
-                    did = conn.execute(
+                    comp_claim_id = conn.execute(
                         text(
-                            "INSERT INTO claim_detail_items (claim_id, item_order, item_text) "
-                            "VALUES (:cid, :ord, :txt) RETURNING detail_item_id"
+                            "INSERT INTO claims (generation_id, key_diff_id, company_id, rating, rating_symbol, headline, description, change_type) "
+                            "VALUES (:gen, :kd, :co, :rating, :symbol, :head, :desc, 'new') RETURNING claim_id"
                         ),
-                        {"cid": comp_claim_id, "ord": order, "txt": item_text},
+                        {
+                            "gen": gen_id,
+                            "kd": kd_id,
+                            "co": comp_id,
+                            "rating": comp_rating,
+                            "symbol": _rating_to_symbol(sk.get("competitor_rating", "")),
+                            "head": claim.get("competitor_headline", ""),
+                            "desc": comp_desc_flat,
+                        },
                     ).scalar()
-                    comp_detail_item_ids.append(did)
+                    total_claims += 1
 
-                # Save evidence + fact checks from citations
-                self._save_evidence_and_fact_checks(
-                    conn, gen_id, db_claim_id, claim, "databricks", db_detail_item_ids
-                )
-                self._save_evidence_and_fact_checks(
-                    conn, gen_id, comp_claim_id, claim, "competitor", comp_detail_item_ids
-                )
+                    # Insert detail items for competitor claim
+                    comp_detail_item_ids = []
+                    for order, item_text in enumerate(comp_details_raw):
+                        did = conn.execute(
+                            text(
+                                "INSERT INTO claim_detail_items (claim_id, item_order, item_text) "
+                                "VALUES (:cid, :ord, :txt) RETURNING detail_item_id"
+                            ),
+                            {"cid": comp_claim_id, "ord": order, "txt": item_text},
+                        ).scalar()
+                        comp_detail_item_ids.append(did)
+
+                    # Save evidence + fact checks from citations
+                    self._save_evidence_and_fact_checks(
+                        conn, gen_id, db_claim_id, claim, "databricks", db_detail_item_ids
+                    )
+                    self._save_evidence_and_fact_checks(
+                        conn, gen_id, comp_claim_id, claim, "competitor", comp_detail_item_ids
+                    )
+
+                    # Mark as successfully saved to Lakebase
+                    self._update_pass2_debug_log_lakebase(idx, True, None)
+
+                except Exception as e:
+                    lakebase_error = str(e)[:500]
+                    logger.error("Lakebase save failed for skeleton %d: %s", idx, lakebase_error)
+                    self._update_pass2_debug_log_lakebase(idx, False, lakebase_error)
+                    raise
 
             conn.execute(
                 text("UPDATE battlecard_generations SET total_claims = :tc WHERE generation_id = :gid"),

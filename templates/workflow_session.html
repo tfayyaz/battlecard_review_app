@@ -519,10 +519,17 @@
         .btn-primary:hover { background: #1e4444; }
         .btn-sm { padding: 5px 12px; font-size: 12px; }
         .btn-danger {
+            background: #DC2626;
+            border-color: #DC2626;
+            color: #fff;
+        }
+        .btn-danger:hover { background: #B91C1C; border-color: #B91C1C; }
+        .btn-danger-outline {
             border-color: #FCA5A5;
             color: #DC2626;
+            background: transparent;
         }
-        .btn-danger:hover { background: #FEF2F2; }
+        .btn-danger-outline:hover { background: #FEF2F2; }
         .btn-success {
             background: var(--success);
             color: #fff;
@@ -1120,6 +1127,166 @@
             padding: 16px;
             border-radius: 8px;
             border: 1px solid var(--border);
+        }
+
+        /* Pass 2 Debug Logs Viewer */
+        .debug-logs-panel {
+            margin: 16px 0;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: #fff;
+        }
+        .debug-logs-header {
+            padding: 12px 16px;
+            background: #F9FAFB;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            border-radius: 8px 8px 0 0;
+        }
+        .debug-logs-header:hover { background: #F3F4F6; }
+        .debug-logs-title {
+            font-weight: 600;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .debug-logs-title .icon { font-size: 14px; }
+        .debug-logs-count {
+            font-size: 11px;
+            background: #E5E7EB;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-weight: 500;
+        }
+        .debug-logs-toggle { font-size: 12px; color: var(--text-secondary); }
+        .debug-logs-body {
+            display: none;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .debug-logs-body.open { display: block; }
+        .debug-log-item {
+            border-bottom: 1px solid var(--border);
+            padding: 12px 16px;
+        }
+        .debug-log-item:last-child { border-bottom: none; }
+        .debug-log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            cursor: pointer;
+        }
+        .debug-log-header:hover { background: #F9FAFB; margin: -12px -16px; padding: 12px 16px; }
+        .debug-log-info {
+            flex: 1;
+        }
+        .debug-log-title {
+            font-weight: 600;
+            font-size: 13px;
+            margin-bottom: 4px;
+        }
+        .debug-log-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .debug-log-badges {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .debug-badge {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .debug-badge.dict { background: #D1FAE5; color: #065F46; }
+        .debug-badge.list { background: #FEF3C7; color: #92400E; }
+        .debug-badge.error { background: #FEE2E2; color: #991B1B; }
+        .debug-badge.fixed { background: #DBEAFE; color: #1E40AF; }
+        .debug-badge.saved { background: #D1FAE5; color: #065F46; }
+        .debug-badge.not-saved { background: #FEE2E2; color: #991B1B; }
+        .debug-log-detail {
+            display: none;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+        }
+        .debug-log-detail.open { display: block; }
+        .debug-section {
+            margin-bottom: 16px;
+        }
+        .debug-section-title {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .debug-section-title button {
+            font-size: 10px;
+            padding: 2px 8px;
+            border: 1px solid var(--border);
+            background: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .debug-section-title button:hover { background: #F3F4F6; }
+        .debug-json-container {
+            background: #1E1E1E;
+            border-radius: 6px;
+            overflow: hidden;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .debug-json-container pre {
+            margin: 0;
+            padding: 12px;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 11px;
+            line-height: 1.5;
+            color: #D4D4D4;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .debug-json-container.expanded { max-height: none; }
+        .debug-prompt-container {
+            background: #F9FAFB;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .debug-prompt-container pre {
+            margin: 0;
+            padding: 12px;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 11px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .debug-prompt-container.expanded { max-height: none; }
+        .debug-error-msg {
+            background: #FEF2F2;
+            border: 1px solid #FECACA;
+            border-radius: 6px;
+            padding: 12px;
+            color: #991B1B;
+            font-size: 12px;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
         }
 
         /* Template view: highlighted variable placeholders */
@@ -1743,6 +1910,9 @@
                                 {% if step.progress_total %}{{ (step.progress_current / step.progress_total * 100) | int }}%{% endif %}
                             </div>
                         </div>
+                        <div class="btn-group" id="progress-btns-{{ step.step_number }}">
+                            <button class="btn btn-danger" onclick="stopStep({{ step.step_number }})" title="Stop this step and allow restart">Stop</button>
+                        </div>
                         {% endif %}
 
                         {% if step.status == 'failed' and step.error_message %}
@@ -2096,6 +2266,29 @@
                                         </label>
                                     </div>
                                 </div>
+
+                                <!-- Pass 2 Debug Logs Panel -->
+                                <div class="debug-logs-panel" id="pass2-debug-panel">
+                                    <div class="debug-logs-header" onclick="toggleDebugLogsPanel()">
+                                        <div class="debug-logs-title">
+                                            <span class="icon">&#128270;</span>
+                                            <span>Pass 2 Debug Logs</span>
+                                            <span class="debug-logs-count" id="debug-logs-count">loading...</span>
+                                        </div>
+                                        <span class="debug-logs-toggle" id="debug-logs-toggle">&#9660;</span>
+                                    </div>
+                                    <div class="debug-logs-body" id="debug-logs-body">
+                                        <div id="debug-logs-content" style="padding: 16px; color: var(--text-secondary);">
+                                            Loading debug logs...
+                                        </div>
+                                    </div>
+                                </div>
+                                <script>
+                                document.addEventListener('DOMContentLoaded', function() {
+                                    loadPass2DebugLogs();
+                                });
+                                </script>
+
                                 <div style="overflow-x: auto; margin: 10px 0;">
                                     <table class="claims-table">
                                         <thead>
@@ -2708,16 +2901,20 @@
                     anyInProgress = true;
                     let progressEl = document.getElementById('progress-' + n);
                     if (!progressEl) {
-                        // Create progress bar with percentage
+                        // Create progress bar with percentage and stop button
                         const body = document.getElementById('step-body-' + n);
                         if (body) {
                             const existingBtns = body.querySelector('.btn-group');
                             const html = '<div class="progress-container" id="progress-' + n + '">' +
                                 '<div class="progress-bar-bg"><div class="progress-bar-fill" id="progress-fill-' + n + '" style="width:0%"></div></div>' +
                                 '<div class="progress-text" id="progress-text-' + n + '">Working...</div>' +
-                                '<div class="progress-pct" id="progress-pct-' + n + '"></div></div>';
+                                '<div class="progress-pct" id="progress-pct-' + n + '"></div></div>' +
+                                '<div class="btn-group" id="progress-btns-' + n + '">' +
+                                '<button class="btn btn-danger" onclick="stopStep(' + n + ')" title="Stop this step and allow restart">Stop</button>' +
+                                '</div>';
                             if (existingBtns) {
                                 existingBtns.insertAdjacentHTML('beforebegin', html);
+                                existingBtns.style.display = 'none'; // Hide original buttons during progress
                             } else {
                                 body.insertAdjacentHTML('afterbegin', html);
                             }
@@ -2967,6 +3164,31 @@
                 }
             } else {
                 alert(data.error || 'Action failed');
+                if (btn) btn.disabled = false;
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function stopStep(stepNum) {
+        if (!confirm('Stop step ' + stepNum + '? You can restart it after stopping.')) {
+            return;
+        }
+        const btn = document.querySelector('#progress-btns-' + stepNum + ' .btn-danger');
+        if (btn) btn.disabled = true;
+        try {
+            const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/stop', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: '{}',
+            });
+            const data = await resp.json();
+            if (data.success) {
+                window.location.reload();
+            } else {
+                alert(data.error || 'Failed to stop step');
                 if (btn) btn.disabled = false;
             }
         } catch (err) {
@@ -3233,6 +3455,204 @@
         applyToggle('wf_ratingEvalVisible', 'rating-eval-toggle', 'hide-rating-eval');
         applyToggle('wf_keydiffEvalVisible', 'keydiff-eval-toggle', 'hide-keydiff-eval');
     })();
+
+    // --- Pass 2 Debug Logs Viewer ---
+    var _debugLogs = [];
+
+    function toggleDebugLogsPanel() {
+        var body = document.getElementById('debug-logs-body');
+        var toggle = document.getElementById('debug-logs-toggle');
+        if (body.classList.contains('open')) {
+            body.classList.remove('open');
+            toggle.innerHTML = '&#9660;';
+        } else {
+            body.classList.add('open');
+            toggle.innerHTML = '&#9650;';
+        }
+    }
+
+    function toggleDebugLogItem(idx) {
+        var detail = document.getElementById('debug-log-detail-' + idx);
+        if (detail.classList.contains('open')) {
+            detail.classList.remove('open');
+        } else {
+            detail.classList.add('open');
+        }
+    }
+
+    function toggleDebugSection(idx, section) {
+        var container = document.getElementById('debug-' + section + '-' + idx);
+        if (container.classList.contains('expanded')) {
+            container.classList.remove('expanded');
+        } else {
+            container.classList.add('expanded');
+        }
+    }
+
+    function formatJsonForDisplay(jsonStr) {
+        if (!jsonStr) return '<span style="color:#6B7280;">null</span>';
+        try {
+            var obj = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+            return syntaxHighlightJson(JSON.stringify(obj, null, 2));
+        } catch (e) {
+            return escapeHtml(jsonStr);
+        }
+    }
+
+    function syntaxHighlightJson(json) {
+        json = escapeHtml(json);
+        return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function(match) {
+            var cls = 'color:#CE9178;'; // string
+            if (/^"/.test(match)) {
+                if (/:$/.test(match)) {
+                    cls = 'color:#9CDCFE;'; // key
+                }
+            } else if (/true|false/.test(match)) {
+                cls = 'color:#569CD6;'; // boolean
+            } else if (/null/.test(match)) {
+                cls = 'color:#569CD6;'; // null
+            } else {
+                cls = 'color:#B5CEA8;'; // number
+            }
+            return '<span style="' + cls + '">' + match + '</span>';
+        });
+    }
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function loadPass2DebugLogs() {
+        fetch('/api/workflow/' + SESSION_ID + '/pass2-debug-logs')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                _debugLogs = data.logs || [];
+                var countEl = document.getElementById('debug-logs-count');
+                var contentEl = document.getElementById('debug-logs-content');
+
+                if (_debugLogs.length === 0) {
+                    countEl.textContent = '0 logs';
+                    contentEl.innerHTML = '<div style="text-align:center;color:var(--text-secondary);padding:20px;">No debug logs available for this session.</div>';
+                    return;
+                }
+
+                var dictCount = _debugLogs.filter(function(l) { return l.response_type === 'dict'; }).length;
+                var listCount = _debugLogs.filter(function(l) { return l.response_type === 'list'; }).length;
+                var errorCount = _debugLogs.filter(function(l) { return l.response_type === 'error'; }).length;
+                var savedCount = _debugLogs.filter(function(l) { return l.lakebase_saved; }).length;
+
+                countEl.innerHTML = _debugLogs.length + ' logs &middot; ' +
+                    '<span style="color:#065F46;">' + dictCount + ' dict</span>' +
+                    (listCount > 0 ? ' &middot; <span style="color:#92400E;">' + listCount + ' list</span>' : '') +
+                    (errorCount > 0 ? ' &middot; <span style="color:#991B1B;">' + errorCount + ' errors</span>' : '') +
+                    ' &middot; <span style="color:#065F46;">' + savedCount + '/' + _debugLogs.length + ' saved</span>';
+
+                var html = '';
+                _debugLogs.forEach(function(log, idx) {
+                    var respTypeBadge = '';
+                    if (log.response_type === 'dict') {
+                        respTypeBadge = '<span class="debug-badge dict">Dict</span>';
+                    } else if (log.response_type === 'list') {
+                        respTypeBadge = '<span class="debug-badge list">List</span>';
+                        if (log.was_list_fixed) {
+                            respTypeBadge += '<span class="debug-badge fixed">Auto-Fixed</span>';
+                        }
+                    } else if (log.response_type === 'error') {
+                        respTypeBadge = '<span class="debug-badge error">Error</span>';
+                    }
+
+                    var savedBadge = log.lakebase_saved
+                        ? '<span class="debug-badge saved">Saved</span>'
+                        : '<span class="debug-badge not-saved">Not Saved</span>';
+
+                    html += '<div class="debug-log-item">' +
+                        '<div class="debug-log-header" onclick="toggleDebugLogItem(' + idx + ')">' +
+                            '<div class="debug-log-info">' +
+                                '<div class="debug-log-title">#' + log.skeleton_index + ': ' + escapeHtml(log.key_differentiator || 'Unknown') + '</div>' +
+                                '<div class="debug-log-meta">' +
+                                    '<span>Category: ' + escapeHtml(log.category || 'N/A') + '</span>' +
+                                    '<span>Time: ' + (log.processing_time_ms || 0) + 'ms</span>' +
+                                '</div>' +
+                            '</div>' +
+                            '<div class="debug-log-badges">' +
+                                respTypeBadge +
+                                savedBadge +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="debug-log-detail" id="debug-log-detail-' + idx + '">';
+
+                    // Error message section
+                    if (log.error_message) {
+                        html += '<div class="debug-section">' +
+                            '<div class="debug-section-title">Error Message</div>' +
+                            '<div class="debug-error-msg">' + escapeHtml(log.error_message) + '</div>' +
+                        '</div>';
+                    }
+
+                    // Lakebase error section
+                    if (log.lakebase_error) {
+                        html += '<div class="debug-section">' +
+                            '<div class="debug-section-title">Lakebase Save Error</div>' +
+                            '<div class="debug-error-msg">' + escapeHtml(log.lakebase_error) + '</div>' +
+                        '</div>';
+                    }
+
+                    // Rendered Prompt section
+                    html += '<div class="debug-section">' +
+                        '<div class="debug-section-title">' +
+                            '<span>Rendered Prompt</span>' +
+                            '<button onclick="event.stopPropagation(); toggleDebugSection(' + idx + ', \'prompt\')">Expand/Collapse</button>' +
+                        '</div>' +
+                        '<div class="debug-prompt-container" id="debug-prompt-' + idx + '">' +
+                            '<pre>' + escapeHtml(log.rendered_prompt || 'N/A') + '</pre>' +
+                        '</div>' +
+                    '</div>';
+
+                    // API Request section
+                    html += '<div class="debug-section">' +
+                        '<div class="debug-section-title">' +
+                            '<span>API Request (without prompt)</span>' +
+                            '<button onclick="event.stopPropagation(); toggleDebugSection(' + idx + ', \'request\')">Expand/Collapse</button>' +
+                        '</div>' +
+                        '<div class="debug-json-container" id="debug-request-' + idx + '">' +
+                            '<pre>' + formatJsonForDisplay(log.api_request_json) + '</pre>' +
+                        '</div>' +
+                    '</div>';
+
+                    // API Response Raw section
+                    html += '<div class="debug-section">' +
+                        '<div class="debug-section-title">' +
+                            '<span>API Response (Raw)</span>' +
+                            '<button onclick="event.stopPropagation(); toggleDebugSection(' + idx + ', \'response\')">Expand/Collapse</button>' +
+                        '</div>' +
+                        '<div class="debug-json-container" id="debug-response-' + idx + '">' +
+                            '<pre>' + formatJsonForDisplay(log.api_response_raw) + '</pre>' +
+                        '</div>' +
+                    '</div>';
+
+                    // Structured Output section
+                    html += '<div class="debug-section">' +
+                        '<div class="debug-section-title">' +
+                            '<span>Structured Output (Parsed)</span>' +
+                            '<button onclick="event.stopPropagation(); toggleDebugSection(' + idx + ', \'output\')">Expand/Collapse</button>' +
+                        '</div>' +
+                        '<div class="debug-json-container" id="debug-output-' + idx + '">' +
+                            '<pre>' + formatJsonForDisplay(log.structured_output) + '</pre>' +
+                        '</div>' +
+                    '</div>';
+
+                    html += '</div></div>'; // Close debug-log-detail and debug-log-item
+                });
+
+                contentEl.innerHTML = html;
+            })
+            .catch(function(err) {
+                console.error('Failed to load debug logs:', err);
+                document.getElementById('debug-logs-count').textContent = 'error';
+                document.getElementById('debug-logs-content').innerHTML = '<div style="color:#991B1B;padding:20px;">Failed to load debug logs: ' + escapeHtml(err.message || 'Unknown error') + '</div>';
+            });
+    }
 
     // Collect per-item feedback into the overall feedback text
     function collectItemFeedback(stepNum) {
@@ -3796,11 +4216,12 @@
         _currentSkeletons = skeletons || _currentSkeletons || [];
         _currentClaims = claims || _currentClaims || [];
 
-        // Update stats
+        // Update stats (count non-null claims since array may have nulls for incomplete items)
         var statsEl = document.getElementById('bc-stats-diffs');
         if (statsEl) statsEl.innerHTML = '<strong>' + _currentSkeletons.length + '</strong> differentiators';
         var claimsStatsEl = document.getElementById('bc-stats-claims');
-        if (claimsStatsEl) claimsStatsEl.innerHTML = '<strong>' + _currentClaims.length + '</strong> claims filled';
+        var filledClaimsCount = _currentClaims.filter(function(c) { return c !== null; }).length;
+        if (claimsStatsEl) claimsStatsEl.innerHTML = '<strong>' + filledClaimsCount + '</strong> claims filled';
 
         if (!_currentSkeletons.length) {
             if (placeholder) placeholder.style.display = 'block';
@@ -3942,10 +4363,12 @@
                 }
             }
 
-            // Update claims if changed
+            // Update claims if changed (claims array may contain nulls for incomplete items)
             if (data.pass2_claims && Array.isArray(data.pass2_claims) && data.pass2_claims.length > 0) {
-                if (data.pass2_claims.length !== _lastClaimsCount) {
-                    _lastClaimsCount = data.pass2_claims.length;
+                // Count non-null claims to detect changes
+                var nonNullCount = data.pass2_claims.filter(function(c) { return c !== null; }).length;
+                if (nonNullCount !== _lastClaimsCount) {
+                    _lastClaimsCount = nonNullCount;
                     _currentClaims = data.pass2_claims;
                     needsRender = true;
                 }

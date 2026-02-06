@@ -355,12 +355,17 @@ Return ONLY the JSON object. No markdown fences, no explanation text.
 """,
     },
     3: {
-        "label": "V3 — Per-Category L200 (8 parallel calls)",
+        "label": "V3 — Technical Detail with Fact-Check",
+        "description": "Single key diff with inline citations, verdicts, and source quotes. High rigor.",
+        "file": DEFAULT_PASS2_PROMPT,  # l200_pass2_detail_v3_factcheck.md
+    },
+    5: {
+        "label": "V5 — Per-Category L200 (8 parallel calls)",
         "description": "Processes ALL key diffs for one category in a single call. L200-only (1-2 concise bullets). 8 calls instead of 80.",
         "template": "inline",  # Will be loaded from DB or inline fallback
     },
-    4: {
-        "label": "V4 — Per-Category L200+L300 (8 parallel calls)",
+    6: {
+        "label": "V6 — Per-Category L200+L300 (8 parallel calls)",
         "description": "Processes ALL key diffs for one category in a single call. L200 (1-2 bullets) + L300 (2-5 detailed bullets). 8 calls instead of 80.",
         "template": "inline",  # Will be loaded from DB or inline fallback
     },
@@ -757,6 +762,27 @@ CREATE TABLE IF NOT EXISTS prompt_templates (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_templates_name ON prompt_templates(template_name);
+
+CREATE TABLE IF NOT EXISTS pass2_debug_logs (
+    log_id SERIAL PRIMARY KEY,
+    session_id UUID NOT NULL REFERENCES workflow_sessions(session_id) ON DELETE CASCADE,
+    skeleton_index INT NOT NULL,
+    key_differentiator VARCHAR(500),
+    category VARCHAR(255),
+    rendered_prompt TEXT,
+    api_request_json TEXT,
+    api_response_raw TEXT,
+    structured_output TEXT,
+    response_type VARCHAR(20) CHECK (response_type IN ('dict', 'list', 'error', 'unknown')),
+    was_list_fixed BOOLEAN DEFAULT FALSE,
+    lakebase_saved BOOLEAN DEFAULT FALSE,
+    lakebase_error TEXT,
+    error_message TEXT,
+    processing_time_ms INT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(session_id, skeleton_index)
+);
+CREATE INDEX IF NOT EXISTS idx_pass2_debug_session ON pass2_debug_logs(session_id);
 """
 
 
@@ -826,6 +852,27 @@ def init_db():
         # Error storage for workflow steps
         "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS last_error TEXT",
         "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS error_count INT DEFAULT 0",
+        # Pass 2 debug logs table for debugging LLM responses
+        """CREATE TABLE IF NOT EXISTS pass2_debug_logs (
+            log_id SERIAL PRIMARY KEY,
+            session_id UUID NOT NULL REFERENCES workflow_sessions(session_id) ON DELETE CASCADE,
+            skeleton_index INT NOT NULL,
+            key_differentiator VARCHAR(500),
+            category VARCHAR(255),
+            rendered_prompt TEXT,
+            api_request_json TEXT,
+            api_response_raw TEXT,
+            structured_output TEXT,
+            response_type VARCHAR(20) CHECK (response_type IN ('dict', 'list', 'error', 'unknown')),
+            was_list_fixed BOOLEAN DEFAULT FALSE,
+            lakebase_saved BOOLEAN DEFAULT FALSE,
+            lakebase_error TEXT,
+            error_message TEXT,
+            processing_time_ms INT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(session_id, skeleton_index)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_pass2_debug_session ON pass2_debug_logs(session_id)",
     ]
     for migration in migrations:
         try:
@@ -1147,8 +1194,8 @@ Return a JSON object with these fields:
 Return ONLY the JSON object. No markdown fences, no explanation text.
 """
 
-    # V3 — Per-Category L200 Only (8 parallel calls instead of 80)
-    _PASS2_V3_INLINE = """\
+    # V5 — Per-Category L200 Only (8 parallel calls instead of 80)
+    _PASS2_V5_INLINE = """\
 You generate L200 details for ALL key differentiators in the **{{category}}** category for a Databricks vs {{competitor}} battlecard.
 
 ## Execution Mode
@@ -1227,8 +1274,8 @@ Return a JSON array with one object per key differentiator. Each object must hav
 Return ONLY the JSON array. No markdown fences, no explanation text.
 """
 
-    # V4 — Per-Category L200 + L300 (8 parallel calls instead of 80)
-    _PASS2_V4_INLINE = """\
+    # V6 — Per-Category L200 + L300 (8 parallel calls instead of 80)
+    _PASS2_V6_INLINE = """\
 You generate L200 and L300 details for ALL key differentiators in the **{{category}}** category for a Databricks vs {{competitor}} battlecard.
 
 ## Execution Mode
@@ -1317,8 +1364,8 @@ Return ONLY the JSON array. No markdown fences, no explanation text.
 
     _PASS2_INLINE_FALLBACKS = {
         1: _PASS2_V1_INLINE,
-        3: _PASS2_V3_INLINE,
-        4: _PASS2_V4_INLINE,
+        5: _PASS2_V5_INLINE,
+        6: _PASS2_V6_INLINE,
     }
 
     _DIRECTIVE_INLINE = (
@@ -1360,11 +1407,13 @@ Return ONLY the JSON array. No markdown fences, no explanation text.
     # Pass 2 templates
     for ver_num, cfg in PASS2_PROMPT_TEMPLATES.items():
         tpl_text = None
-        if "template" in cfg:
+        if "template" in cfg and cfg["template"] != "inline":
+            # Real template text provided in config
             tpl_text = cfg["template"]
         elif "file" in cfg:
             tpl_text = _read_file_safe(cfg["file"])
-        if not tpl_text:
+        # Always try inline fallback if no valid text yet
+        if not tpl_text or tpl_text == "inline":
             tpl_text = _PASS2_INLINE_FALLBACKS.get(ver_num)
 
         variables = sorted(set(re.findall(r'\{\{(\w+)\}\}', tpl_text))) if tpl_text else []
@@ -1401,11 +1450,12 @@ Return ONLY the JSON array. No markdown fences, no explanation text.
         count = conn.execute(text("SELECT COUNT(*) FROM prompt_templates")).scalar()
 
         if count and int(count) > 0:
-            # DB already has rows — repair any placeholders
+            # DB already has rows — repair any placeholders or incomplete templates
             for seed in seeds:
                 if seed["template_text"].startswith("[Placeholder"):
                     continue
                 try:
+                    # Repair rows with placeholder text OR 'inline' stub OR short invalid content
                     conn.execute(
                         text(
                             "UPDATE prompt_templates "
@@ -1414,7 +1464,7 @@ Return ONLY the JSON array. No markdown fences, no explanation text.
                             "    is_active = :is_active, "
                             "    updated_at = CURRENT_TIMESTAMP "
                             "WHERE template_name = :template_name "
-                            "  AND template_text LIKE '[Placeholder%'"
+                            "  AND (template_text LIKE '[Placeholder%' OR template_text = 'inline' OR LENGTH(template_text) < 100)"
                         ),
                         {
                             "template_text": seed["template_text"],
@@ -2923,11 +2973,15 @@ def workflow_session(session_id):
             {"sid": session_id},
         ).mappings().all()
 
+        # Get only the LATEST artifact per (step_number, artifact_type) to avoid duplicates
+        # from incremental saves during parallel processing
         artifacts = conn.execute(
             text(
-                "SELECT artifact_id, step_number, artifact_type, artifact_name, "
+                "SELECT DISTINCT ON (step_number, artifact_type) "
+                "artifact_id, step_number, artifact_type, artifact_name, "
                 "artifact_content, artifact_metadata, created_at "
-                "FROM workflow_artifacts WHERE session_id::text = :sid ORDER BY step_number, created_at"
+                "FROM workflow_artifacts WHERE session_id::text = :sid "
+                "ORDER BY step_number, artifact_type, created_at DESC"
             ),
             {"sid": session_id},
         ).mappings().all()
@@ -3476,6 +3530,74 @@ def workflow_partial_artifacts(session_id):
                     result[meta_key] = {}
 
     return jsonify(result)
+
+
+@app.route('/api/workflow/<session_id>/pass2-debug-logs')
+def workflow_pass2_debug_logs(session_id):
+    """Return Pass 2 debug logs for a workflow session.
+
+    Returns detailed debug information for each skeleton processed in Pass 2, including:
+    - Rendered prompt sent to the model
+    - API request JSON (excluding the large prompt)
+    - Raw API response
+    - Structured output after parsing
+    - Response type (dict/list/error) and whether a list was auto-fixed
+    - Lakebase save status
+    - Processing time
+    """
+    with ENGINE.begin() as conn:
+        logs = conn.execute(
+            text("""
+                SELECT
+                    log_id, skeleton_index, key_differentiator, category,
+                    rendered_prompt, api_request_json, api_response_raw,
+                    structured_output, response_type, was_list_fixed,
+                    lakebase_saved, lakebase_error, error_message,
+                    processing_time_ms, created_at
+                FROM pass2_debug_logs
+                WHERE session_id::text = :sid
+                ORDER BY skeleton_index
+            """),
+            {"sid": session_id},
+        ).mappings().all()
+
+    result = []
+    for log in logs:
+        d = dict(log)
+        d["created_at"] = str(d.get("created_at", ""))
+        result.append(d)
+
+    return jsonify({
+        "session_id": session_id,
+        "count": len(result),
+        "logs": result,
+    })
+
+
+@app.route('/api/workflow/<session_id>/pass2-debug-logs/<int:skeleton_index>')
+def workflow_pass2_debug_log_single(session_id, skeleton_index):
+    """Return a single Pass 2 debug log entry by skeleton index."""
+    with ENGINE.begin() as conn:
+        log = conn.execute(
+            text("""
+                SELECT
+                    log_id, skeleton_index, key_differentiator, category,
+                    rendered_prompt, api_request_json, api_response_raw,
+                    structured_output, response_type, was_list_fixed,
+                    lakebase_saved, lakebase_error, error_message,
+                    processing_time_ms, created_at
+                FROM pass2_debug_logs
+                WHERE session_id::text = :sid AND skeleton_index = :idx
+            """),
+            {"sid": session_id, "idx": skeleton_index},
+        ).mappings().first()
+
+    if not log:
+        return jsonify({"error": "Debug log not found"}), 404
+
+    d = dict(log)
+    d["created_at"] = str(d.get("created_at", ""))
+    return jsonify(d)
 
 
 @app.route('/api/workflow/<session_id>/step/<int:step_number>/artifacts')
@@ -4473,6 +4595,56 @@ def workflow_step_reset_stuck(session_id, step_number):
     return jsonify({
         "success": True,
         "message": f"Step {step_number} reset from stuck state. Click 'Run' to retry."
+    })
+
+
+@app.route('/api/workflow/<session_id>/step/<int:step_number>/stop', methods=['POST'])
+def workflow_step_stop(session_id, step_number):
+    """Force stop an in-progress step.
+
+    This resets the step to 'ready' status so it can be restarted.
+    Note: This doesn't actually kill the running thread (Python limitation),
+    but it prevents the worker from saving results and allows a restart.
+    """
+    if step_number < 1 or step_number > 7:
+        return jsonify({"success": False, "error": "Invalid step number"}), 400
+
+    with ENGINE.begin() as conn:
+        row = conn.execute(
+            text("SELECT status FROM workflow_steps WHERE session_id::text = :sid AND step_number = :step"),
+            {"sid": session_id, "step": step_number},
+        ).mappings().first()
+
+        if not row:
+            return jsonify({"success": False, "error": "Step not found"}), 404
+
+        if row["status"] not in ("in_progress", "failed"):
+            return jsonify({"success": False, "error": f"Step is {row['status']}, can only stop in_progress or failed steps"}), 400
+
+        # Reset the step to 'ready' so it can be re-triggered
+        conn.execute(
+            text(
+                "UPDATE workflow_steps SET status = 'ready', "
+                "started_at = NULL, completed_at = NULL, "
+                "progress_current = 0, progress_total = 0, "
+                "progress_message = 'Stopped by user. Ready to restart.', "
+                "error_message = NULL, error_details = NULL, "
+                "heartbeat_at = NULL, worker_id = NULL, "
+                "last_error = NULL, error_count = 0 "
+                "WHERE session_id::text = :sid AND step_number = :step"
+            ),
+            {"sid": session_id, "step": step_number},
+        )
+
+        # Update session current_step to the previous step
+        conn.execute(
+            text("UPDATE workflow_sessions SET current_step = :prev, updated_at = NOW() WHERE session_id::text = :sid"),
+            {"sid": session_id, "prev": step_number - 1},
+        )
+
+    return jsonify({
+        "success": True,
+        "message": f"Step {step_number} stopped. Click the generate button to restart."
     })
 
 

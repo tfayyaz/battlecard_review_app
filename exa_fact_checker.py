@@ -13,6 +13,7 @@ from datetime import datetime
 from exa_py import Exa
 from openai import OpenAI
 from sqlalchemy import text
+from workflow_runner import call_model
 
 logger = logging.getLogger(__name__)
 
@@ -262,13 +263,20 @@ Evaluate the claim against the search results and return a JSON object with:
 Return ONLY the JSON object, no other text."""
 
         try:
-            response = self.llm_client.chat.completions.create(
-                model=self.MODEL_NAME,
-                messages=[{"role": "user", "content": prompt}],
+            content = call_model(
+                client=self.llm_client,
+                model_name=self.MODEL_NAME,
+                rendered_prompt=prompt,
                 max_tokens=512,
                 temperature=0.1,
+                trace_context={
+                    "session_id": self.session_id,
+                    "step_number": 6,
+                    "operation": "fact_check_judge",
+                    "phase": "workflow",
+                },
             )
-            content = response.choices[0].message.content.strip()
+            content = content.strip()
             # Strip markdown code fence if present
             if content.startswith("```"):
                 content = content.split("\n", 1)[1] if "\n" in content else content[3:]

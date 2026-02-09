@@ -352,6 +352,7 @@
                         {% endfor %}
                     </select>
                     <div class="hint" id="prompt-version-hint" style="margin-top:4px; font-style: italic;"></div>
+                    <div class="hint" id="pass2-schema-binding-hint" style="margin-top:4px;"></div>
                     <div class="execution-preview" id="executionPreview">
                         <div class="execution-preview-title">Execution Plan Preview</div>
                         <div class="execution-row">
@@ -416,6 +417,14 @@
         btn.disabled = true;
         errEl.style.display = 'none';
 
+        const bindingOk = await (window.verifyPass2Binding ? window.verifyPass2Binding() : Promise.resolve(true));
+        if (!bindingOk) {
+            errEl.textContent = 'Selected Pass 2 prompt/schema mapping is not valid for Lakebase writes.';
+            errEl.style.display = 'block';
+            btn.disabled = false;
+            return;
+        }
+
         const payload = {
             competitor_name: document.getElementById('competitor_name').value,
             product_area: document.getElementById('product_area').value,
@@ -467,9 +476,45 @@
         const p2Descriptions = {{ pass2_prompt_templates | tojson }};
         const p2Sel = document.getElementById('pass2_prompt_template_version');
         const p2Hint = document.getElementById('prompt-version-hint');
+        const p2SchemaHint = document.getElementById('pass2-schema-binding-hint');
+
+        async function verifyPass2Binding() {
+            if (!p2Sel || !p2SchemaHint) return true;
+            const ver = parseInt(p2Sel.value, 10);
+            if (!ver) return false;
+            p2SchemaHint.style.color = '#6B7280';
+            p2SchemaHint.textContent = 'Verifying prompt/schema mapping...';
+            try {
+                const resp = await fetch('/api/prompts/pass2/verify', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ pass2_prompt_template_version: ver }),
+                });
+                const data = await resp.json();
+                const verification = data.verification || {};
+                if (!resp.ok || !data.success) {
+                    const firstError = (verification.errors && verification.errors.length) ? verification.errors[0] : (data.error || 'Verification failed');
+                    p2SchemaHint.style.color = '#B91C1C';
+                    p2SchemaHint.textContent = 'Schema verification failed: ' + firstError;
+                    return false;
+                }
+                const schemaName = verification.schema_name || 'unknown_schema';
+                const schemaShape = verification.schema_shape || 'unknown';
+                p2SchemaHint.style.color = '#065F46';
+                p2SchemaHint.textContent = 'Schema verified: ' + schemaName + ' (' + schemaShape + ')';
+                return true;
+            } catch (err) {
+                p2SchemaHint.style.color = '#B91C1C';
+                p2SchemaHint.textContent = 'Schema verification error: ' + err.message;
+                return false;
+            }
+        }
+        window.verifyPass2Binding = verifyPass2Binding;
+
         function updateP2Hint() {
             const cfg = p2Descriptions[p2Sel.value];
             p2Hint.textContent = cfg ? cfg.description : '';
+            verifyPass2Binding();
         }
         if (p2Sel && p2Hint) {
             p2Sel.addEventListener('change', updateP2Hint);

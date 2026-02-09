@@ -2479,6 +2479,18 @@
                         <!-- Step 5: Generate Key Diff Claims -->
                         {% elif step.step_number == 5 %}
                             {% if step.status == 'ready' %}
+                            <div class="step-template-config">
+                                <label for="step5-pass2-template">Step 5 Prompt Template</label>
+                                <div class="step-template-config-row">
+                                    <select id="step5-pass2-template" onchange="syncStep5TemplateSelection(this.value); verifyStep5TemplateConfig();">
+                                        {% for ver, cfg in pass2_prompt_templates.items()|sort(reverse=true) %}
+                                        <option value="{{ ver }}" {% if session.pass2_prompt_template_version == ver %}selected{% endif %}>V{{ ver }} - {{ cfg.label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <button class="btn" onclick="saveStep5TemplateConfig()" id="btn-step5-save-template">Save</button>
+                                </div>
+                                <div class="step-template-hint" id="step5-template-hint"></div>
+                            </div>
                             <div class="context-sources-panel" id="context-sources-panel-5">
                                 <div class="context-sources-header" onclick="toggleContextSources(5)">
                                     <span>Context Sources <span class="context-sources-count" id="ctx-count-5">loading...</span></span>
@@ -2492,6 +2504,18 @@
                                 <button class="btn" onclick="viewPrompt(5)">View Prompt</button>
                             </div>
                             {% elif step.status == 'waiting_human' %}
+                            <div class="step-template-config">
+                                <label for="step5-pass2-template-regen">Step 5 Prompt Template</label>
+                                <div class="step-template-config-row">
+                                    <select id="step5-pass2-template-regen" onchange="syncStep5TemplateSelection(this.value); verifyStep5TemplateConfig();">
+                                        {% for ver, cfg in pass2_prompt_templates.items()|sort(reverse=true) %}
+                                        <option value="{{ ver }}" {% if session.pass2_prompt_template_version == ver %}selected{% endif %}>V{{ ver }} - {{ cfg.label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <button class="btn" onclick="saveStep5TemplateConfig()" id="btn-step5-save-template-regen">Save</button>
+                                </div>
+                                <div class="step-template-hint" id="step5-template-hint-regen"></div>
+                            </div>
                             <div id="claims-preview">
                                 {% set skel_arts_waiting = artifacts_by_step.get(4, [])|selectattr('artifact_type', 'eq', 'pass1_skeletons')|list %}
                                 {% for a in artifacts_by_step.get(5, []) if a.artifact_type in ('pass2_claims', 'pass3_regenerated') %}
@@ -2963,6 +2987,7 @@
     <script>
     const SESSION_ID = "{{ session.session_id }}";
     const STEP4_TEMPLATE_OPTIONS = {{ pass1_prompt_templates | tojson }};
+    const STEP5_TEMPLATE_OPTIONS = {{ pass2_prompt_templates | tojson }};
     const STEP3_PREVIOUS_SELECTIONS = {{ (previous_session_selections or {}) | tojson }};
     const STEP3_HAS_BASELINE = {{ 'true' if previous_selection_source and previous_selection_source.selection_count > 0 else 'false' }};
     let pollingInterval = null;
@@ -2971,6 +2996,7 @@
     // Cache of loaded sources (shared across all panels for this session)
     var _contextSourcesCache = null;
     var _step4TemplateVersion = {{ session.pass1_prompt_template_version | int }};
+    var _step5TemplateVersion = {{ session.pass2_prompt_template_version | int }};
 
     function setStep4TemplateHint(message, stateClass) {
         ['step4-template-hint', 'step4-template-hint-regen'].forEach(function(id) {
@@ -3003,6 +3029,99 @@
 
     function getSelectedStep4TemplateVersion() {
         return parseInt(_step4TemplateVersion, 10);
+    }
+
+    function setStep5TemplateHint(message, stateClass) {
+        ['step5-template-hint', 'step5-template-hint-regen'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.classList.remove('saved', 'error');
+            if (stateClass) el.classList.add(stateClass);
+            el.textContent = message || '';
+        });
+    }
+
+    function refreshStep5TemplateHint(extraMessage) {
+        var cfg = STEP5_TEMPLATE_OPTIONS[String(_step5TemplateVersion)] || STEP5_TEMPLATE_OPTIONS[_step5TemplateVersion];
+        var label = cfg ? (cfg.label || ('V' + _step5TemplateVersion)) : ('V' + _step5TemplateVersion);
+        var desc = cfg ? (cfg.description || '') : '';
+        var msg = 'Current: ' + label + (desc ? ' — ' + desc : '');
+        if (extraMessage) msg += ' · ' + extraMessage;
+        setStep5TemplateHint(msg);
+    }
+
+    function syncStep5TemplateSelection(value) {
+        var parsed = parseInt(value, 10);
+        if (!isNaN(parsed)) _step5TemplateVersion = parsed;
+        ['step5-pass2-template', 'step5-pass2-template-regen'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el && String(el.value) !== String(_step5TemplateVersion)) {
+                el.value = String(_step5TemplateVersion);
+            }
+        });
+        refreshStep5TemplateHint();
+    }
+
+    function getSelectedStep5TemplateVersion() {
+        return parseInt(_step5TemplateVersion, 10);
+    }
+
+    function _formatStep5Verification(verification) {
+        if (!verification || typeof verification !== 'object') return '';
+        var schemaName = verification.schema_name || 'unknown_schema';
+        var shape = verification.schema_shape || 'unknown';
+        var source = verification.binding_source || 'unknown';
+        return 'Schema: ' + schemaName + ' (' + shape + ', ' + source + ')';
+    }
+
+    async function verifyStep5TemplateConfig() {
+        var ver = getSelectedStep5TemplateVersion();
+        if (!ver) return;
+        try {
+            var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/5/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ pass2_prompt_template_version: ver, apply: false }),
+            });
+            var data = await resp.json();
+            if (!resp.ok || !data.success) {
+                var verification = data.verification || {};
+                var msg = (data.error || 'Template verification failed');
+                if (verification.errors && verification.errors.length) msg += ': ' + verification.errors[0];
+                setStep5TemplateHint(msg, 'error');
+                return;
+            }
+            var details = _formatStep5Verification(data.verification);
+            refreshStep5TemplateHint(details);
+        } catch (err) {
+            setStep5TemplateHint('Template verification failed: ' + err.message, 'error');
+        }
+    }
+
+    async function saveStep5TemplateConfig() {
+        var ver = getSelectedStep5TemplateVersion();
+        if (!ver) return;
+        try {
+            var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/5/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ pass2_prompt_template_version: ver, apply: true }),
+            });
+            var data = await resp.json();
+            if (!resp.ok || !data.success) {
+                var verification = data.verification || {};
+                var msg = (data.error || 'Failed to save template selection');
+                if (verification.errors && verification.errors.length) msg += ': ' + verification.errors[0];
+                setStep5TemplateHint(msg, 'error');
+                return;
+            }
+            _step5TemplateVersion = parseInt(data.pass2_prompt_template_version, 10);
+            syncStep5TemplateSelection(_step5TemplateVersion);
+            var details = _formatStep5Verification(data.verification);
+            setStep5TemplateHint('Saved template V' + _step5TemplateVersion + (details ? ' · ' + details : ''), 'saved');
+        } catch (err) {
+            setStep5TemplateHint('Failed to save template selection: ' + err.message, 'error');
+        }
     }
 
     async function saveStep4TemplateConfig() {
@@ -3506,6 +3625,9 @@
             if (stepNum === 4 && action === 'generate') {
                 bodyObj.pass1_prompt_template_version = getSelectedStep4TemplateVersion();
             }
+            if (stepNum === 5 && action === 'generate') {
+                bodyObj.pass2_prompt_template_version = getSelectedStep5TemplateVersion();
+            }
             const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/' + action, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -3788,6 +3910,9 @@
             if (stepNum === 4) {
                 bodyObj.pass1_prompt_template_version = getSelectedStep4TemplateVersion();
             }
+            if (stepNum === 5) {
+                bodyObj.pass2_prompt_template_version = getSelectedStep5TemplateVersion();
+            }
             const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/regenerate', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -3808,6 +3933,9 @@
     checkAndStartPolling();
     syncStep4TemplateSelection(_step4TemplateVersion);
     refreshStep4TemplateHint();
+    syncStep5TemplateSelection(_step5TemplateVersion);
+    refreshStep5TemplateHint();
+    verifyStep5TemplateConfig();
 
     // --- Diff card expand/collapse ---
     function toggleDiffCard(id) {
@@ -4157,8 +4285,14 @@
         try {
             var bodyObj = {feedback: combined};
             // Include context sources from the regen panel
-            var cs = getContextSources(stepNum + '-regen');
+            var cs = await getContextSourcesAsync(stepNum + '-regen');
             if (cs) bodyObj.context_sources = cs;
+            if (stepNum === 4) {
+                bodyObj.pass1_prompt_template_version = getSelectedStep4TemplateVersion();
+            }
+            if (stepNum === 5) {
+                bodyObj.pass2_prompt_template_version = getSelectedStep5TemplateVersion();
+            }
             var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/regenerate', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -4186,6 +4320,9 @@
             if (cs) bodyObj.context_sources = cs;
             if (stepNum === 4) {
                 bodyObj.pass1_prompt_template_version = getSelectedStep4TemplateVersion();
+            }
+            if (stepNum === 5) {
+                bodyObj.pass2_prompt_template_version = getSelectedStep5TemplateVersion();
             }
             var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/prompt', {
                 method: 'POST',
@@ -4367,6 +4504,9 @@
             if (cs) bodyObj.context_sources = cs;
             if (stepNum === 4) {
                 bodyObj.pass1_prompt_template_version = getSelectedStep4TemplateVersion();
+            }
+            if (stepNum === 5) {
+                bodyObj.pass2_prompt_template_version = getSelectedStep5TemplateVersion();
             }
             var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/regenerate', {
                 method: 'POST',

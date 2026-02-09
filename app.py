@@ -1855,25 +1855,18 @@ Return ONLY a JSON object:
     }
 
     def _pass2_schema_config(version_num: int):
-        if version_num == 10:
-            return {
-                "response_format": "json_schema",
-                "schema_name": "l200_diff_detail_v10",
-                "strict": True,
-            }
-        if version_num not in (5, 6, 7, 8, 9):
-            return {
-                "response_format": "json_schema",
-                "schema_name": "l200_diff_detail",
-                "strict": True,
-            }
-        return None
+        from workflow_runner import get_pass2_request_spec
+        return get_pass2_request_spec(version_num).get("schema")
 
     def _pass2_request_config(version_num: int):
+        from workflow_runner import get_pass2_request_spec
+        spec = get_pass2_request_spec(version_num)
+        cfg = spec.get("request_config") or {}
         return {
-            "structured_output": version_num not in (5, 6, 7, 8, 9),
-            "supports_category_batch": version_num in (5, 6, 7, 8, 9, 10),
-            "supports_single_call": version_num in (8,),
+            "structured_output": bool(spec.get("use_structured_output", False)),
+            "response_format_type": spec.get("response_format_type"),
+            "supports_category_batch": bool(cfg.get("supports_category_batch", version_num in (5, 6, 7, 8, 9, 10))),
+            "supports_single_call": bool(cfg.get("supports_single_call", version_num in (8,))),
         }
 
     _DIRECTIVE_INLINE = (
@@ -1984,7 +1977,7 @@ Return ONLY a JSON object:
                             "template_text LIKE '[Placeholder%' "
                             "OR template_text = 'inline' "
                             "OR LENGTH(template_text) < 100 "
-                            "OR template_name IN ('pass2_v5', 'pass2_v6', 'pass2_v7', 'pass2_v8', 'pass2_v9', 'pass2_v10')"
+                            "OR template_name IN ('pass2_v1', 'pass2_v2', 'pass2_v3', 'pass2_v5', 'pass2_v6', 'pass2_v7', 'pass2_v8', 'pass2_v9', 'pass2_v10')"
                             ")"
                         ),
                         {
@@ -3838,6 +3831,187 @@ def _resolve_step5_execution(pass2_ver: int, mode: str, workers: int, core_count
     return _per_diff(parallel=True, explicit=False)
 
 
+def _verify_pass2_schema_for_lakebase(response_schema_json, request_cfg):
+    """Validate that a Pass 2 response schema can be normalized into Lakebase tables."""
+    errors = []
+    warnings = []
+    schema_name = None
+
+    if not isinstance(response_schema_json, dict):
+        errors.append("response_schema_json must be a JSON object with `name` and `schema`.")
+        return {
+            "compatible": False,
+            "schema_name": schema_name,
+            "shape": "unknown",
+            "errors": errors,
+            "warnings": warnings,
+            "normalized_tables": ["claims", "claim_detail_items", "claim_detail_verbose_items", "evidence", "fact_checks"],
+        }
+
+    schema_name = response_schema_json.get("name")
+    schema_root = response_schema_json.get("schema")
+    if not isinstance(schema_root, dict):
+        errors.append("response_schema_json.schema is missing or invalid.")
+        return {
+            "compatible": False,
+            "schema_name": schema_name,
+            "shape": "unknown",
+            "errors": errors,
+            "warnings": warnings,
+            "normalized_tables": ["claims", "claim_detail_items", "claim_detail_verbose_items", "evidence", "fact_checks"],
+        }
+
+    props = schema_root.get("properties") if isinstance(schema_root.get("properties"), dict) else {}
+    shape = "unknown"
+
+    claims_prop = props.get("claims")
+    if isinstance(claims_prop, dict) and claims_prop.get("type") == "array":
+        shape = "batched_claims"
+        claim_items = claims_prop.get("items") if isinstance(claims_prop.get("items"), dict) else {}
+        claim_props = claim_items.get("properties") if isinstance(claim_items.get("properties"), dict) else {}
+        claim_required = set(claim_items.get("required") or [])
+
+        if "id" not in claim_props and "id" not in claim_required:
+            errors.append("Batched schema must include claim item `id` for deterministic key_diff mapping.")
+
+        has_nested_sides = "databricks" in claim_props and "competitor" in claim_props
+        has_flat_sides = "databricks_headline" in claim_props and "competitor_headline" in claim_props
+        if not has_nested_sides and not has_flat_sides:
+            errors.append(
+                "Batched schema must include either nested `databricks`/`competitor` objects "
+                "or flat `databricks_headline`/`competitor_headline` fields."
+            )
+    else:
+        shape = "single_claim"
+        has_flat_sides = "databricks_headline" in props and "competitor_headline" in props
+        if not has_flat_sides:
+            errors.append("Single-claim schema must include `databricks_headline` and `competitor_headline`.")
+
+    supports_category_batch = bool((request_cfg or {}).get("supports_category_batch"))
+    if supports_category_batch and shape != "batched_claims":
+        errors.append("request_config_json.supports_category_batch=true requires a batched `claims[]` schema.")
+
+    if "sources" not in props and shape != "batched_claims":
+        warnings.append("Single-claim schema does not expose top-level `sources`; evidence coverage may degrade.")
+
+    return {
+        "compatible": len(errors) == 0,
+        "schema_name": schema_name,
+        "shape": shape,
+        "errors": errors,
+        "warnings": warnings,
+        "normalized_tables": ["claims", "claim_detail_items", "claim_detail_verbose_items", "evidence", "fact_checks"],
+    }
+
+
+def _verify_pass2_prompt_binding(pass2_ver: int):
+    """Resolve and validate Pass 2 template -> request/json_schema binding from DB."""
+    from workflow_runner import get_pass2_request_spec
+
+    result = {
+        "pass2_prompt_template_version": int(pass2_ver),
+        "template_name": None,
+        "binding_source": "unknown",
+        "use_structured_output": False,
+        "response_format_type": "none",
+        "request_config": {},
+        "request_preview": {"response_format": None},
+        "response_schema_json": None,
+        "schema_name": None,
+        "schema_shape": "unknown",
+        "lakebase_compatible": False,
+        "errors": [],
+        "warnings": [],
+    }
+
+    with ENGINE.begin() as conn:
+        tpl = conn.execute(
+            text(
+                "SELECT template_id, template_name, variables, response_schema_json, request_config_json, is_active "
+                "FROM prompt_templates "
+                "WHERE template_type = 'pass2' AND display_order = :ver "
+                "LIMIT 1"
+            ),
+            {"ver": int(pass2_ver)},
+        ).mappings().first()
+
+    if not tpl:
+        result["errors"].append(f"Pass 2 template V{pass2_ver} not found in prompt_templates.")
+        return result
+
+    result["template_name"] = tpl.get("template_name")
+    if not bool(tpl.get("is_active")):
+        result["errors"].append(f"Template `{result['template_name']}` is inactive.")
+
+    raw_db_request_cfg = tpl.get("request_config_json")
+    if isinstance(raw_db_request_cfg, str):
+        try:
+            raw_db_request_cfg = json.loads(raw_db_request_cfg)
+        except (json.JSONDecodeError, TypeError):
+            raw_db_request_cfg = None
+    if not isinstance(raw_db_request_cfg, dict):
+        result["errors"].append(
+            "prompt_templates.request_config_json must be a JSON object for strict prompt->schema mapping."
+        )
+        raw_db_request_cfg = {}
+
+    raw_db_schema = tpl.get("response_schema_json")
+    if isinstance(raw_db_schema, str):
+        try:
+            raw_db_schema = json.loads(raw_db_schema)
+        except (json.JSONDecodeError, TypeError):
+            raw_db_schema = None
+    if not isinstance(raw_db_schema, dict):
+        result["errors"].append(
+            "prompt_templates.response_schema_json must be a JSON object for strict prompt->schema mapping."
+        )
+    elif not (raw_db_schema.get("name") and isinstance(raw_db_schema.get("schema"), dict)):
+        result["errors"].append(
+            "prompt_templates.response_schema_json must be a full json_schema object with `name` and nested `schema`."
+        )
+
+    req_spec = get_pass2_request_spec(int(pass2_ver), engine=ENGINE)
+    result["binding_source"] = req_spec.get("binding_source", "unknown")
+    if result["binding_source"] != "db":
+        result["errors"].append(
+            f"Template must resolve schema binding from DB, got `{result['binding_source']}`."
+        )
+
+    result["use_structured_output"] = bool(raw_db_request_cfg.get("structured_output", False))
+    result["response_format_type"] = str(raw_db_request_cfg.get("response_format_type") or "none").strip().lower()
+    result["request_config"] = raw_db_request_cfg
+    result["request_preview"] = req_spec.get("request_preview") or {"response_format": None}
+    result["response_schema_json"] = raw_db_schema if isinstance(raw_db_schema, dict) else None
+
+    if not bool(result["request_config"].get("structured_output")):
+        result["errors"].append(
+            "Template request config disables structured output. Strict prompt->json_schema binding is required."
+        )
+    if str(result["request_config"].get("response_format_type") or "").strip().lower() != "json_schema":
+        result["errors"].append("request_config_json.response_format_type must be `json_schema`.")
+    if not isinstance(result["response_schema_json"], dict):
+        result["errors"].append("No resolved response_schema_json is bound to this template.")
+
+    variables = tpl.get("variables")
+    if isinstance(variables, str):
+        try:
+            variables = json.loads(variables)
+        except (json.JSONDecodeError, TypeError):
+            variables = []
+    if not isinstance(variables, list):
+        variables = []
+    if bool(result["request_config"].get("supports_category_batch")) and "key_diffs_json" not in variables:
+        result["errors"].append("Batched template must include `{{key_diffs_json}}` variable.")
+
+    schema_check = _verify_pass2_schema_for_lakebase(result["response_schema_json"], result["request_config"])
+    result["schema_name"] = schema_check["schema_name"]
+    result["schema_shape"] = schema_check["shape"]
+    result["lakebase_compatible"] = bool(schema_check["compatible"])
+    result["errors"].extend(schema_check["errors"])
+    result["warnings"].extend(schema_check["warnings"])
+    return result
+
+
 @app.route('/workflow/new')
 def workflow_new():
     # Fetch existing competitors so the user can create a new version
@@ -4509,6 +4683,25 @@ WORKFLOW_STEPS = [
 ]
 
 
+@app.route('/api/prompts/pass2/verify', methods=['POST'])
+def api_verify_pass2_prompt_binding():
+    """Verify Pass 2 prompt->json_schema binding and Lakebase compatibility."""
+    data = request.json or {}
+    try:
+        pass2_ver = int(data.get("pass2_prompt_template_version"))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "Invalid pass2_prompt_template_version"}), 400
+
+    verification = _verify_pass2_prompt_binding(pass2_ver)
+    valid = len(verification.get("errors") or []) == 0 and bool(verification.get("lakebase_compatible"))
+    status = 200 if valid else 400
+    return jsonify({
+        "success": valid,
+        "verified": valid,
+        "verification": verification,
+    }), status
+
+
 @app.route('/api/workflow/create', methods=['POST'])
 def create_workflow():
     data = request.json or {}
@@ -4541,6 +4734,16 @@ def create_workflow():
         step4_execution_mode = "auto"
     if step5_execution_mode not in STEP5_EXECUTION_OPTIONS:
         step5_execution_mode = "auto"
+
+    verification = _verify_pass2_prompt_binding(pass2_prompt_template_version)
+    if verification.get("errors") or not verification.get("lakebase_compatible"):
+        msg = "Selected Pass 2 prompt template is not schema-verified for Lakebase writes."
+        if verification.get("errors"):
+            msg = verification["errors"][0]
+        return jsonify({
+            "error": msg,
+            "verification": verification,
+        }), 400
 
     with ENGINE.begin() as conn:
         # If no explicit previous_generation_id was provided but the competitor
@@ -5072,15 +5275,21 @@ def workflow_step1_generate(session_id):
             _update_step_status(sid, 1, "in_progress", progress_message=f"Generating directive with {model_name}...")
             logger.info("Calling LLM for directive generation (%d chars prompt)", len(full_prompt))
 
-            from workflow_runner import get_openai_client
+            from workflow_runner import get_openai_client, call_model
             client = get_openai_client()
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": full_prompt}],
+            directive_content = call_model(
+                client=client,
+                model_name=model_name,
+                rendered_prompt=full_prompt,
                 temperature=DEFAULT_LLM_TEMPERATURE,
                 max_tokens=4096,
+                trace_context={
+                    "session_id": sid,
+                    "step_number": 1,
+                    "operation": "directive_generate",
+                    "phase": "workflow",
+                },
             )
-            directive_content = response.choices[0].message.content
             logger.info("LLM generated directive (%d chars)", len(directive_content))
 
             # 5. Save the generated directive
@@ -5758,11 +5967,78 @@ def workflow_step4_update_config(session_id):
     return jsonify({"success": True, "pass1_prompt_template_version": pass1_ver})
 
 
+@app.route('/api/workflow/<session_id>/step/5/config', methods=['POST'])
+def workflow_step5_update_config(session_id):
+    """Update Step 5 runtime configuration and verify prompt->json_schema binding."""
+    data = request.json or {}
+    if "pass2_prompt_template_version" not in data:
+        return jsonify({"success": False, "error": "pass2_prompt_template_version is required"}), 400
+    try:
+        pass2_ver = int(data.get("pass2_prompt_template_version"))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "Invalid pass2_prompt_template_version"}), 400
+
+    apply_change = bool(data.get("apply", True))
+    verification = _verify_pass2_prompt_binding(pass2_ver)
+    valid = len(verification.get("errors") or []) == 0 and bool(verification.get("lakebase_compatible"))
+    if not valid:
+        return jsonify({
+            "success": False,
+            "error": "Selected Pass 2 template failed schema verification.",
+            "verification": verification,
+        }), 400
+
+    with ENGINE.begin() as conn:
+        session_exists = conn.execute(
+            text("SELECT 1 FROM workflow_sessions WHERE session_id::text = :sid"),
+            {"sid": session_id},
+        ).scalar()
+        if not session_exists:
+            return jsonify({"success": False, "error": "Session not found"}), 404
+
+        if apply_change:
+            conn.execute(
+                text(
+                    "UPDATE workflow_sessions SET pass2_prompt_template_version = :ver, updated_at = NOW() "
+                    "WHERE session_id::text = :sid"
+                ),
+                {"ver": pass2_ver, "sid": session_id},
+            )
+
+    return jsonify({
+        "success": True,
+        "pass2_prompt_template_version": pass2_ver,
+        "verification": verification,
+    })
+
+
 @app.route('/api/workflow/<session_id>/step/5/generate', methods=['POST'])
 def workflow_step5_generate(session_id):
     """Trigger Pass 2 - Generate Claims."""
     data = request.json or {}
     context_sources = data.get('context_sources')
+    pass2_template_version = data.get("pass2_prompt_template_version")
+    if pass2_template_version is not None:
+        try:
+            pass2_template_version = int(pass2_template_version)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "Invalid pass2_prompt_template_version"}), 400
+        verification = _verify_pass2_prompt_binding(pass2_template_version)
+        valid = len(verification.get("errors") or []) == 0 and bool(verification.get("lakebase_compatible"))
+        if not valid:
+            return jsonify({
+                "success": False,
+                "error": "Selected Pass 2 template failed schema verification.",
+                "verification": verification,
+            }), 400
+        with ENGINE.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE workflow_sessions SET pass2_prompt_template_version = :ver, updated_at = NOW() "
+                    "WHERE session_id::text = :sid"
+                ),
+                {"ver": pass2_template_version, "sid": session_id},
+            )
     _update_step_status(session_id, 5, "in_progress", progress_message="Starting Pass 2 generation...")
 
     def _run():
@@ -5785,6 +6061,28 @@ def workflow_step5_regenerate(session_id):
     data = request.json or {}
     feedback_text = data.get('feedback', '')
     context_sources = data.get('context_sources')
+    pass2_template_version = data.get("pass2_prompt_template_version")
+    if pass2_template_version is not None:
+        try:
+            pass2_template_version = int(pass2_template_version)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "Invalid pass2_prompt_template_version"}), 400
+        verification = _verify_pass2_prompt_binding(pass2_template_version)
+        valid = len(verification.get("errors") or []) == 0 and bool(verification.get("lakebase_compatible"))
+        if not valid:
+            return jsonify({
+                "success": False,
+                "error": "Selected Pass 2 template failed schema verification.",
+                "verification": verification,
+            }), 400
+        with ENGINE.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE workflow_sessions SET pass2_prompt_template_version = :ver, updated_at = NOW() "
+                    "WHERE session_id::text = :sid"
+                ),
+                {"ver": pass2_template_version, "sid": session_id},
+            )
 
     # Optionally prepend battlecard review feedback
     if data.get('include_review_feedback'):
@@ -6165,10 +6463,15 @@ def workflow_step_prompt_preview(session_id, step_number):
             context_sources = None
     context_flags = resolve_context_source_flags(context_sources)
     pass1_override = payload.get("pass1_prompt_template_version") if isinstance(payload, dict) else None
+    pass2_override = payload.get("pass2_prompt_template_version") if isinstance(payload, dict) else None
     try:
         pass1_override = int(pass1_override) if pass1_override is not None else None
     except (TypeError, ValueError):
         pass1_override = None
+    try:
+        pass2_override = int(pass2_override) if pass2_override is not None else None
+    except (TypeError, ValueError):
+        pass2_override = None
 
     # Load session config
     with ENGINE.begin() as conn:
@@ -6399,7 +6702,9 @@ def workflow_step_prompt_preview(session_id, step_number):
 
     elif step_number == 5:
         # Step 5: Pass 2 prompt (show for the first skeleton as example)
-        p2_ver = session["pass2_prompt_template_version"]
+        selected_p2_ver = session["pass2_prompt_template_version"]
+        effective_p2_ver = pass2_override if pass2_override is not None else selected_p2_ver
+        p2_ver = effective_p2_ver
         try:
             template_text = load_pass2_template(p2_ver, engine=ENGINE)
         except FileNotFoundError:
@@ -6478,8 +6783,10 @@ def workflow_step_prompt_preview(session_id, step_number):
             "variables": variables,
             "prompt": rendered,
             "prompt_version": p2_ver,
-            "request_preview": get_pass2_request_spec(p2_ver).get("request_preview"),
-            "response_schema_json": get_pass2_request_spec(p2_ver).get("schema"),
+            "selected_prompt_version": selected_p2_ver,
+            "effective_prompt_version": effective_p2_ver,
+            "request_preview": get_pass2_request_spec(p2_ver, engine=ENGINE).get("request_preview"),
+            "response_schema_json": get_pass2_request_spec(p2_ver, engine=ENGINE).get("schema"),
             "note": (
                 f"Preview uses runtime execution mode `{step5_exec['runtime_mode']}`. "
                 f"Inline fact-check seeding is {'enabled' if session.get('step5_inline_fact_check') else 'disabled'}."
@@ -7205,7 +7512,7 @@ def api_test_prompt(template_id):
             except (TypeError, ValueError):
                 pass2_ver = None
         if pass2_ver is not None:
-            req_spec = get_pass2_request_spec(pass2_ver)
+            req_spec = get_pass2_request_spec(pass2_ver, engine=ENGINE)
             if response_schema_json is None:
                 response_schema_json = req_spec.get("schema")
             request_preview = req_spec.get("request_preview")

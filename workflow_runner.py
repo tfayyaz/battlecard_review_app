@@ -9,7 +9,9 @@ import hashlib
 import json
 import logging
 import os
+import random
 import threading
+import time
 import traceback
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -36,6 +38,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
 DEFAULT_MODEL_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "16384"))
 DEFAULT_MODEL_TIMEOUT_SECONDS = float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "180"))
+DEFAULT_MODEL_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "6"))
+DEFAULT_MODEL_RETRY_BASE_SECONDS = float(os.getenv("LLM_RETRY_BASE_SECONDS", "0.75"))
+DEFAULT_MODEL_RETRY_MAX_SECONDS = float(os.getenv("LLM_RETRY_MAX_SECONDS", "12.0"))
 
 _MLFLOW_AUTOLOG_LOCK = threading.Lock()
 _MLFLOW_AUTOLOG_INITIALIZED = False
@@ -378,6 +383,54 @@ L200_PASS2_V10_JSON_SCHEMA = {
     "strict": True,
 }
 
+_BATCH_LEGACY_CLAIM_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "key_differentiator": {"type": "string"},
+        "databricks_headline": {"type": "string"},
+        "databricks_l200": {"type": "array", "items": {"type": "string"}},
+        "databricks_l300": {"type": "array", "items": {"type": "string"}},
+        "databricks_details": {"type": "array", "items": {"type": "string"}},
+        "databricks_reasoning": {"type": "string"},
+        "competitor_headline": {"type": "string"},
+        "competitor_l200": {"type": "array", "items": {"type": "string"}},
+        "competitor_l300": {"type": "array", "items": {"type": "string"}},
+        "competitor_details": {"type": "array", "items": {"type": "string"}},
+        "competitor_reasoning": {"type": "string"},
+        "citations": _CITATIONS_SCHEMA,
+        "sources": {"type": "array", "items": _SOURCE_ITEM_SCHEMA},
+        "research_sources": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "id",
+        "databricks_headline",
+        "databricks_l200",
+        "databricks_reasoning",
+        "competitor_headline",
+        "competitor_l200",
+        "competitor_reasoning",
+        "sources",
+    ],
+    "additionalProperties": False,
+}
+
+L200_PASS2_BATCH_JSON_SCHEMA = {
+    "name": "l200_diff_detail_batch",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "claims": {
+                "type": "array",
+                "items": _BATCH_LEGACY_CLAIM_ITEM_SCHEMA,
+            }
+        },
+        "required": ["claims"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
 L200_PASS3_JSON_SCHEMA = {
     "name": "l200_slide_update",
     "schema": {
@@ -440,6 +493,85 @@ def get_openai_client() -> OpenAI:
     return w.serving_endpoints.get_open_ai_client()
 
 
+def _extract_status_code(exc: Exception) -> Optional[int]:
+    """Best-effort extraction of HTTP status code from SDK exceptions."""
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status_code = getattr(response, "status_code", None)
+        if isinstance(status_code, int):
+            return status_code
+    return None
+
+
+def _is_retryable_model_error(exc: Exception) -> bool:
+    """Return True for transient model-serving failures worth retrying."""
+    status_code = _extract_status_code(exc)
+    if status_code in (429, 500, 502, 503, 504):
+        return True
+
+    name = exc.__class__.__name__.lower()
+    message = str(exc).lower()
+    transient_markers = (
+        "ratelimit",
+        "rate limit",
+        "too many requests",
+        "timeout",
+        "timed out",
+        "temporarily unavailable",
+        "connection reset",
+        "service unavailable",
+    )
+    if any(marker in name for marker in ("ratelimit", "timeout", "connection")):
+        return True
+    if any(marker in message for marker in transient_markers):
+        return True
+    return False
+
+
+def _call_databricks_model_with_backoff(
+    fn,
+    *,
+    model_name: str,
+    operation_name: str,
+    max_retries: int = DEFAULT_MODEL_MAX_RETRIES,
+    base_delay_seconds: float = DEFAULT_MODEL_RETRY_BASE_SECONDS,
+    max_delay_seconds: float = DEFAULT_MODEL_RETRY_MAX_SECONDS,
+):
+    """Call Databricks model endpoint with exponential backoff + jitter on 429/transient failures."""
+    attempts = max(1, int(max_retries))
+    base_delay = max(0.05, float(base_delay_seconds))
+    max_delay = max(base_delay, float(max_delay_seconds))
+
+    last_exc = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            retryable = _is_retryable_model_error(exc)
+            if not retryable or attempt >= attempts:
+                raise
+
+            backoff_cap = min(max_delay, base_delay * (2 ** (attempt - 1)))
+            sleep_seconds = random.uniform(0, backoff_cap)
+            status_code = _extract_status_code(exc)
+            logger.warning(
+                "Model call retry for %s (%s): attempt %d/%d failed%s; backing off %.2fs",
+                operation_name,
+                model_name,
+                attempt,
+                attempts,
+                f" with status {status_code}" if status_code else "",
+                sleep_seconds,
+            )
+            time.sleep(sleep_seconds)
+    if last_exc is not None:
+        raise last_exc
+
+
 def call_model(
     client: OpenAI,
     model_name: str,
@@ -470,7 +602,11 @@ def call_model(
         logger.info("  Using structured output (json_schema: %s)", json_schema["name"])
 
     with _mlflow_step_run(model_name, rendered_prompt, trace_context=trace_context):
-        response = client.chat.completions.create(**kwargs)
+        response = _call_databricks_model_with_backoff(
+            lambda: client.chat.completions.create(**kwargs),
+            model_name=model_name,
+            operation_name="chat.completions.create",
+        )
     content = response.choices[0].message.content
 
     # Handle case where SDK returns already-parsed JSON (list or dict)
@@ -515,7 +651,11 @@ def call_model_with_debug(
         logger.info("  Using structured output (json_schema: %s)", json_schema["name"])
 
     with _mlflow_step_run(model_name, rendered_prompt, trace_context=trace_context):
-        response = client.chat.completions.create(**kwargs)
+        response = _call_databricks_model_with_backoff(
+            lambda: client.chat.completions.create(**kwargs),
+            model_name=model_name,
+            operation_name="chat.completions.create(debug)",
+        )
 
     # Capture raw response as dict for debugging
     try:
@@ -900,31 +1040,129 @@ def get_pass1_request_spec(version: int, engine=None) -> Dict[str, Any]:
         return default
 
 
-def get_pass2_request_spec(version: int) -> Dict[str, Any]:
+def get_pass2_request_spec(version: int, engine=None) -> Dict[str, Any]:
     """Return request behavior and JSON schema for a Pass 2 template version."""
+    return get_pass2_request_spec_with_engine(version, engine=engine)
+
+
+def _resolve_pass2_schema_alias(schema_name: str) -> Optional[Dict[str, Any]]:
+    name = str(schema_name or "").strip()
+    if not name:
+        return None
+    lookup = {
+        L200_PASS2_JSON_SCHEMA["name"]: L200_PASS2_JSON_SCHEMA,
+        L200_PASS2_V10_JSON_SCHEMA["name"]: L200_PASS2_V10_JSON_SCHEMA,
+        L200_PASS2_BATCH_JSON_SCHEMA["name"]: L200_PASS2_BATCH_JSON_SCHEMA,
+    }
+    return lookup.get(name)
+
+
+def _default_pass2_request_spec(version: int) -> Dict[str, Any]:
     ver = int(version or 0)
     if ver == 10:
         schema = L200_PASS2_V10_JSON_SCHEMA
-        return {
-            "use_structured_output": True,
-            "response_format_type": "json_schema",
-            "schema": schema,
-            "request_preview": {"response_format": {"type": "json_schema", "json_schema": schema}},
-        }
-    if ver in (5, 6, 7, 8, 9):
-        return {
-            "use_structured_output": False,
-            "response_format_type": "none",
-            "schema": None,
-            "request_preview": {"response_format": None},
-        }
-    schema = L200_PASS2_JSON_SCHEMA
+    elif ver in (5, 6, 7, 8, 9):
+        schema = L200_PASS2_BATCH_JSON_SCHEMA
+    else:
+        schema = L200_PASS2_JSON_SCHEMA
     return {
         "use_structured_output": True,
         "response_format_type": "json_schema",
         "schema": schema,
         "request_preview": {"response_format": {"type": "json_schema", "json_schema": schema}},
+        "request_config": {
+            "structured_output": True,
+            "response_format_type": "json_schema",
+            "supports_category_batch": ver in (5, 6, 7, 8, 9, 10),
+            "supports_single_call": ver in (8,),
+        },
+        "binding_source": "builtin",
     }
+
+
+def get_pass2_request_spec_with_engine(version: int, engine=None) -> Dict[str, Any]:
+    """Return request behavior and JSON schema for a Pass 2 template version.
+
+    DB mapping (prompt_templates.request_config_json/response_schema_json) is authoritative
+    when available; builtin defaults are used as fallback.
+    """
+    ver = int(version or 0)
+    default = _default_pass2_request_spec(ver)
+    if engine is None:
+        return default
+
+    try:
+        with engine.begin() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT template_name, response_schema_json, request_config_json "
+                    "FROM prompt_templates "
+                    "WHERE template_type = 'pass2' AND display_order = :ver "
+                    "LIMIT 1"
+                ),
+                {"ver": ver},
+            ).mappings().first()
+        if not row:
+            return default
+
+        request_cfg = row.get("request_config_json") or {}
+        if isinstance(request_cfg, str):
+            try:
+                request_cfg = json.loads(request_cfg)
+            except Exception:
+                request_cfg = {}
+
+        stored_schema = row.get("response_schema_json")
+        if isinstance(stored_schema, str):
+            try:
+                stored_schema = json.loads(stored_schema)
+            except Exception:
+                stored_schema = None
+
+        schema = None
+        if isinstance(stored_schema, dict):
+            # Full json_schema payload persisted directly.
+            if isinstance(stored_schema.get("schema"), dict) and stored_schema.get("name"):
+                schema = stored_schema
+            else:
+                # Legacy config shape: {"schema_name": "...", "strict": true}
+                schema_name = stored_schema.get("schema_name")
+                if schema_name:
+                    schema = _resolve_pass2_schema_alias(schema_name)
+
+        structured = bool(request_cfg.get("structured_output", schema is not None))
+        response_format_type = str(
+            request_cfg.get("response_format_type") or ("json_schema" if structured else "none")
+        ).strip().lower()
+        if structured and response_format_type != "json_schema":
+            response_format_type = "json_schema"
+
+        # If structured output is expected but DB schema is missing, use builtin fallback
+        # and mark the source accordingly. UI verification can enforce stricter behavior.
+        binding_source = "db"
+        if structured and not schema:
+            schema = default.get("schema")
+            binding_source = "db_with_builtin_schema_fallback"
+        if not structured:
+            schema = None
+
+        request_preview = (
+            {"response_format": {"type": "json_schema", "json_schema": schema}}
+            if structured and schema
+            else {"response_format": None}
+        )
+        return {
+            "use_structured_output": structured,
+            "response_format_type": response_format_type,
+            "schema": schema,
+            "request_preview": request_preview,
+            "request_config": request_cfg,
+            "binding_source": binding_source,
+            "template_name": row.get("template_name"),
+        }
+    except Exception as e:
+        logger.warning("Failed to load Pass 2 request spec from DB (v%s): %s", ver, e)
+        return default
 
 
 # ---------------------------------------------------------------------------
@@ -2331,7 +2569,7 @@ class WorkflowRunner:
                               progress_current=1, progress_total=5)
             template_text = load_pass2_template(ver, engine=self.engine)
             logger.info("Using Pass 2 prompt template version %d (%d chars)", ver, len(template_text))
-            pass2_request_spec = get_pass2_request_spec(ver)
+            pass2_request_spec = get_pass2_request_spec_with_engine(ver, engine=self.engine)
             pass2_json_schema = pass2_request_spec.get("schema")
 
             # Store the prompt version
@@ -2396,8 +2634,40 @@ class WorkflowRunner:
                         )
                 return normalized
 
-            def _normalize_batched_result(parsed_result, skeleton):
+            def _normalize_batched_result(parsed_result, skeleton, *, strict_match: bool = False):
                 """Map batched output objects into the standard Pass 2 shape."""
+                # Some model SDK paths return wrapper blocks like:
+                # {"type":"text","text":"{...json...}"}.
+                # Unwrap these before candidate matching.
+                for _ in range(3):
+                    if isinstance(parsed_result, dict):
+                        wrapper_type = str(parsed_result.get("type", "")).strip().lower()
+                        wrapper_text = parsed_result.get("text")
+                        if isinstance(wrapper_text, str) and (
+                            wrapper_type in ("text", "output_text")
+                            or set(parsed_result.keys()).issubset({"type", "text"})
+                        ):
+                            try:
+                                parsed_result = parse_model_json(wrapper_text)
+                                continue
+                            except Exception:
+                                break
+                    if (
+                        isinstance(parsed_result, list)
+                        and len(parsed_result) == 1
+                        and isinstance(parsed_result[0], dict)
+                    ):
+                        first = parsed_result[0]
+                        wrapper_type = str(first.get("type", "")).strip().lower()
+                        wrapper_text = first.get("text")
+                        if isinstance(wrapper_text, str) and wrapper_type in ("text", "output_text"):
+                            try:
+                                parsed_result = parse_model_json(wrapper_text)
+                                continue
+                            except Exception:
+                                break
+                    break
+
                 target_id = skeleton.get("id", "")
                 target_name = skeleton.get("key_differentiator", "").strip().lower()
 
@@ -2422,19 +2692,30 @@ class WorkflowRunner:
 
                 chosen = None
                 if target_id:
-                    for c in candidates:
-                        if c.get("id") == target_id:
-                            chosen = c
-                            break
+                    id_matches = [c for c in candidates if c.get("id") == target_id]
+                    if len(id_matches) == 1:
+                        chosen = id_matches[0]
+                    elif len(id_matches) > 1 and strict_match:
+                        raise ValueError(f"Batched response had duplicate id matches for {target_id}")
                 if chosen is None and target_name:
-                    for c in candidates:
-                        if str(c.get("key_differentiator", "")).strip().lower() == target_name:
-                            chosen = c
-                            break
-                if chosen is None and candidates:
+                    name_matches = [
+                        c
+                        for c in candidates
+                        if str(c.get("key_differentiator", "")).strip().lower() == target_name
+                    ]
+                    if len(name_matches) == 1:
+                        chosen = name_matches[0]
+                    elif len(name_matches) > 1 and strict_match:
+                        raise ValueError(
+                            f"Batched response had ambiguous key_differentiator matches for '{target_name}'"
+                        )
+                if chosen is None and candidates and not strict_match:
                     chosen = candidates[0]
                 if chosen is None:
-                    raise ValueError("Batched response did not contain a usable object")
+                    raise ValueError(
+                        f"Batched response did not contain a usable object for id='{target_id}' "
+                        f"name='{target_name}' (candidates={len(candidates)})"
+                    )
 
                 def _to_text_list(value):
                     if value is None:
@@ -2781,7 +3062,7 @@ class WorkflowRunner:
                         debug_log["response_type"] = type(result).__name__ if type(result).__name__ in ("dict", "list") else "unknown"
                         debug_log["was_list_fixed"] = False
                         debug_log["structured_output"] = json.dumps(result, indent=2)
-                        result = _normalize_batched_result(result, sk)
+                        result = _normalize_batched_result(result, sk, strict_match=True)
                     else:
                         # Determine response type and handle list case (potentially nested)
                         extraction_depth = 0
@@ -2885,7 +3166,7 @@ class WorkflowRunner:
 
                         for idx in idx_list:
                             sk = skeletons[idx]
-                            batch_results[idx] = _normalize_batched_result(parsed, sk)
+                            batch_results[idx] = _normalize_batched_result(parsed, sk, strict_match=True)
                             self._save_pass2_debug_log(
                                 {
                                     "session_id": self.session_id,
@@ -3074,7 +3355,7 @@ class WorkflowRunner:
                     elapsed_ms = int((_time.time() - start_time) * 1000)
                     out = {}
                     for idx, sk in enumerate(skeletons):
-                        out[idx] = _normalize_batched_result(parsed, sk)
+                        out[idx] = _normalize_batched_result(parsed, sk, strict_match=True)
                         self._save_pass2_debug_log(
                             {
                                 "session_id": self.session_id,
@@ -3796,7 +4077,7 @@ class WorkflowRunner:
                               progress_current=1, progress_total=4)
             template_text = load_pass2_template(ver, engine=self.engine)
             directives_for_template = "" if ver in (5, 6, 7, 8, 9, 10) else directive
-            pass2_request_spec = get_pass2_request_spec(ver)
+            pass2_request_spec = get_pass2_request_spec_with_engine(ver, engine=self.engine)
             pass2_json_schema = pass2_request_spec.get("schema")
 
             def _normalize_sources(sources):
@@ -3827,7 +4108,39 @@ class WorkflowRunner:
                         )
                 return normalized
 
-            def _normalize_v5_v6_result(parsed_result, skeleton):
+            def _normalize_v5_v6_result(parsed_result, skeleton, *, strict_match: bool = False):
+                # Some model SDK paths return wrapper blocks like:
+                # {"type":"text","text":"{...json...}"}.
+                # Unwrap these before candidate matching.
+                for _ in range(3):
+                    if isinstance(parsed_result, dict):
+                        wrapper_type = str(parsed_result.get("type", "")).strip().lower()
+                        wrapper_text = parsed_result.get("text")
+                        if isinstance(wrapper_text, str) and (
+                            wrapper_type in ("text", "output_text")
+                            or set(parsed_result.keys()).issubset({"type", "text"})
+                        ):
+                            try:
+                                parsed_result = parse_model_json(wrapper_text)
+                                continue
+                            except Exception:
+                                break
+                    if (
+                        isinstance(parsed_result, list)
+                        and len(parsed_result) == 1
+                        and isinstance(parsed_result[0], dict)
+                    ):
+                        first = parsed_result[0]
+                        wrapper_type = str(first.get("type", "")).strip().lower()
+                        wrapper_text = first.get("text")
+                        if isinstance(wrapper_text, str) and wrapper_type in ("text", "output_text"):
+                            try:
+                                parsed_result = parse_model_json(wrapper_text)
+                                continue
+                            except Exception:
+                                break
+                    break
+
                 target_id = skeleton.get("id", "")
                 target_name = skeleton.get("key_differentiator", "").strip().lower()
 
@@ -3852,19 +4165,30 @@ class WorkflowRunner:
 
                 chosen = None
                 if target_id:
-                    for c in candidates:
-                        if c.get("id") == target_id:
-                            chosen = c
-                            break
+                    id_matches = [c for c in candidates if c.get("id") == target_id]
+                    if len(id_matches) == 1:
+                        chosen = id_matches[0]
+                    elif len(id_matches) > 1 and strict_match:
+                        raise ValueError(f"Batched regeneration response had duplicate id matches for {target_id}")
                 if chosen is None and target_name:
-                    for c in candidates:
-                        if str(c.get("key_differentiator", "")).strip().lower() == target_name:
-                            chosen = c
-                            break
-                if chosen is None and candidates:
+                    name_matches = [
+                        c
+                        for c in candidates
+                        if str(c.get("key_differentiator", "")).strip().lower() == target_name
+                    ]
+                    if len(name_matches) == 1:
+                        chosen = name_matches[0]
+                    elif len(name_matches) > 1 and strict_match:
+                        raise ValueError(
+                            f"Batched regeneration response had ambiguous key_differentiator matches for '{target_name}'"
+                        )
+                if chosen is None and candidates and not strict_match:
                     chosen = candidates[0]
                 if chosen is None:
-                    raise ValueError("Batched regeneration response did not contain a usable object")
+                    raise ValueError(
+                        f"Batched regeneration response did not contain a usable object for id='{target_id}' "
+                        f"name='{target_name}' (candidates={len(candidates)})"
+                    )
 
                 def _to_text_list(value):
                     if value is None:
@@ -4057,7 +4381,7 @@ class WorkflowRunner:
                         json_schema=pass2_json_schema if pass2_request_spec.get("use_structured_output") else None,
                     )
                     parsed = parse_model_json(raw)
-                    return {idx: _normalize_v5_v6_result(parsed, skeletons[idx]) for idx in idx_list}
+                    return {idx: _normalize_v5_v6_result(parsed, skeletons[idx], strict_match=True) for idx in idx_list}
 
                 completed_groups = 0
                 if runtime_mode == "category_parallel" and workers_to_use > 1 and total_groups > 1:
@@ -4159,7 +4483,7 @@ class WorkflowRunner:
                     )
                     parsed = parse_model_json(raw)
                     for idx, sk in enumerate(skeletons):
-                        updated_claims[idx] = _normalize_v5_v6_result(parsed, sk)
+                        updated_claims[idx] = _normalize_v5_v6_result(parsed, sk, strict_match=True)
                     self._update_step(
                         5,
                         "in_progress",
@@ -4212,7 +4536,11 @@ class WorkflowRunner:
                             rendered_prompt=rendered,
                             json_schema=pass2_json_schema if pass2_request_spec.get("use_structured_output") else None,
                         )
-                        updated_claims[idx] = _normalize_v5_v6_result(parse_model_json(raw), sk)
+                        updated_claims[idx] = _normalize_v5_v6_result(
+                            parse_model_json(raw),
+                            sk,
+                            strict_match=ver in (5, 6, 7, 8, 9, 10),
+                        )
                     except Exception as e:
                         error_str = str(e)
                         logger.error("Pass 3 regen failed for %d (%s): %s", idx, kd_name, error_str)

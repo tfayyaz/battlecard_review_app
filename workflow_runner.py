@@ -1053,10 +1053,10 @@ class WorkflowRunner:
                     text(
                         "SELECT kd.key_diff_id "
                         "FROM key_differentiators kd "
-                        "JOIN product_categories pc ON kd.category_id = pc.category_id "
+                        "JOIN product_category_catalog pcc ON kd.category_id = pcc.catalog_id "
                         "WHERE kd.generation_id = :gid "
                         "AND kd.key_diff_name = :name "
-                        "AND pc.category_name = :category "
+                        "AND pcc.category_name = :category "
                         "ORDER BY kd.display_order, kd.key_diff_id DESC "
                         "LIMIT 1"
                     ),
@@ -1069,10 +1069,10 @@ class WorkflowRunner:
                         text(
                             "SELECT kd.key_diff_id "
                             "FROM key_differentiators kd "
-                            "JOIN product_categories pc ON kd.category_id = pc.category_id "
+                            "JOIN product_category_catalog pcc ON kd.category_id = pcc.catalog_id "
                             "WHERE kd.generation_id IS NULL "
                             "AND kd.key_diff_name = :name "
-                            "AND pc.category_name = :category "
+                            "AND pcc.category_name = :category "
                             "AND kd.created_at >= :session_ts - INTERVAL '2 hours' "
                             "AND kd.created_at <= NOW() "
                             "ORDER BY kd.key_diff_id DESC "
@@ -2031,20 +2031,47 @@ class WorkflowRunner:
                     {"gid": gen_id},
                 )
 
+            selected_rows = conn.execute(
+                text(
+                    "SELECT pcc.catalog_id, pcc.category_name "
+                    "FROM session_category_selections scs "
+                    "JOIN product_category_catalog pcc ON scs.catalog_id = pcc.catalog_id "
+                    "WHERE scs.session_id = CAST(:sid AS uuid)"
+                ),
+                {"sid": self.session_id},
+            ).mappings().all()
+            selected_by_name = {r["category_name"]: int(r["catalog_id"]) for r in selected_rows}
+
+            catalog_rows = conn.execute(
+                text("SELECT catalog_id, category_name FROM product_category_catalog")
+            ).mappings().all()
+            catalog_by_name = {r["category_name"]: int(r["catalog_id"]) for r in catalog_rows}
+            catalog_names = list(catalog_by_name.keys())
+
+            unresolved_categories = []
             for sk in skeletons:
-                category_name = sk.get("category", "")
-                cat_id = conn.execute(
-                    text("SELECT category_id FROM product_categories WHERE category_name = :name"),
-                    {"name": category_name},
-                ).scalar()
-                if not cat_id:
-                    cat_id = conn.execute(
-                        text(
-                            "INSERT INTO product_categories (category_name, category_description, display_order) "
-                            "VALUES (:name, :desc, :order) RETURNING category_id"
-                        ),
-                        {"name": category_name, "desc": "", "order": 0},
-                    ).scalar()
+                category_name = (sk.get("category") or "").strip()
+
+                cat_id = sk.get("catalog_id")
+                if cat_id is not None:
+                    try:
+                        cat_id = int(cat_id)
+                    except (TypeError, ValueError):
+                        cat_id = None
+
+                if cat_id is None and category_name:
+                    cat_id = selected_by_name.get(category_name) or catalog_by_name.get(category_name)
+
+                if cat_id is None and category_name:
+                    matched = self._match_category(category_name, catalog_names)
+                    if matched:
+                        category_name = matched
+                        sk["category"] = matched
+                        cat_id = selected_by_name.get(matched) or catalog_by_name.get(matched)
+
+                if cat_id is None:
+                    unresolved_categories.append(category_name or "<blank>")
+                    continue
 
                 key_diff_id = conn.execute(
                     text(
@@ -2052,15 +2079,23 @@ class WorkflowRunner:
                         "VALUES (:cat, :name, :desc, :order, :gen_id) RETURNING key_diff_id"
                     ),
                     {
-                        "cat": cat_id,
+                        "cat": int(cat_id),
                         "name": sk.get("key_differentiator", ""),
                         "desc": sk.get("description", ""),
                         "order": sk.get("rank", 0),
                         "gen_id": int(gen_id),
                     },
                 ).scalar()
+                sk["catalog_id"] = int(cat_id)
                 sk["key_diff_id"] = key_diff_id
                 sk["generation_id"] = int(gen_id)
+
+            if unresolved_categories:
+                logger.warning(
+                    "Skipped %d skeletons with unresolved categories: %s",
+                    len(unresolved_categories),
+                    sorted(set(unresolved_categories)),
+                )
 
         return skeletons
 
@@ -2912,9 +2947,9 @@ class WorkflowRunner:
                         text(
                             "SELECT 1 "
                             "FROM key_differentiators kd "
-                            "JOIN product_categories pc ON kd.category_id = pc.category_id "
+                            "JOIN product_category_catalog pcc ON kd.category_id = pcc.catalog_id "
                             "WHERE kd.key_diff_id = :kid "
-                            "AND pc.category_name = :category "
+                            "AND pcc.category_name = :category "
                             "AND (kd.generation_id = :gid OR kd.generation_id IS NULL) "
                             "LIMIT 1"
                         ),
@@ -2928,10 +2963,10 @@ class WorkflowRunner:
                         text(
                             "SELECT kd.key_diff_id "
                             "FROM key_differentiators kd "
-                            "JOIN product_categories pc ON kd.category_id = pc.category_id "
+                            "JOIN product_category_catalog pcc ON kd.category_id = pcc.catalog_id "
                             "WHERE kd.generation_id = :gid "
                             "AND kd.key_diff_name = :name "
-                            "AND pc.category_name = :category "
+                            "AND pcc.category_name = :category "
                             "ORDER BY kd.key_diff_id DESC LIMIT 1"
                         ),
                         {"gid": int(gen_id), "name": kd_name, "category": category_name},
@@ -2943,10 +2978,10 @@ class WorkflowRunner:
                         text(
                             "SELECT kd.key_diff_id "
                             "FROM key_differentiators kd "
-                            "JOIN product_categories pc ON kd.category_id = pc.category_id "
+                            "JOIN product_category_catalog pcc ON kd.category_id = pcc.catalog_id "
                             "WHERE kd.generation_id IS NULL "
                             "AND kd.key_diff_name = :name "
-                            "AND pc.category_name = :category "
+                            "AND pcc.category_name = :category "
                             "AND kd.created_at >= :session_ts - INTERVAL '2 hours' "
                             "AND kd.created_at <= NOW() "
                             "ORDER BY kd.key_diff_id DESC LIMIT 1"

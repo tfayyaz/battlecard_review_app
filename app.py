@@ -476,16 +476,19 @@ CREATE TABLE IF NOT EXISTS companies (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS product_categories (
-    category_id SERIAL PRIMARY KEY,
-    category_name VARCHAR(255) NOT NULL,
+CREATE TABLE IF NOT EXISTS product_category_catalog (
+    catalog_id SERIAL PRIMARY KEY,
+    category_name VARCHAR(255) NOT NULL UNIQUE,
     category_description TEXT,
-    display_order INT DEFAULT 0
+    is_core_product_category BOOLEAN NOT NULL DEFAULT FALSE,
+    is_cross_platform_capability BOOLEAN NOT NULL DEFAULT FALSE,
+    display_order INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS key_differentiators (
     key_diff_id SERIAL PRIMARY KEY,
-    category_id INT REFERENCES product_categories(category_id),
+    category_id INT REFERENCES product_category_catalog(catalog_id),
     generation_id INT,
     key_diff_name VARCHAR(255) NOT NULL,
     key_diff_description TEXT,
@@ -660,7 +663,7 @@ CREATE TABLE IF NOT EXISTS regeneration_requests (
     )),
     generation_id INT REFERENCES battlecard_generations(generation_id),
     claim_id INT REFERENCES claims(claim_id),
-    category_id INT REFERENCES product_categories(category_id),
+    category_id INT REFERENCES product_category_catalog(catalog_id),
     company_id INT REFERENCES companies(company_id),
     reason VARCHAR(100) NOT NULL CHECK (reason IN (
         'scheduled_refresh',
@@ -778,16 +781,6 @@ CREATE TABLE IF NOT EXISTS agent_turns (
     token_count INT,
     model_name VARCHAR(255),
     artifact_id INT REFERENCES workflow_artifacts(artifact_id),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS product_category_catalog (
-    catalog_id SERIAL PRIMARY KEY,
-    category_name VARCHAR(255) NOT NULL UNIQUE,
-    category_description TEXT,
-    is_core_product_category BOOLEAN NOT NULL DEFAULT FALSE,
-    is_cross_platform_capability BOOLEAN NOT NULL DEFAULT FALSE,
-    display_order INT DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -984,6 +977,35 @@ def init_db():
         "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS detail_item_id INT REFERENCES claim_detail_items(detail_item_id)",
         "ALTER TABLE human_reviews ADD COLUMN IF NOT EXISTS detail_item_id INT REFERENCES claim_detail_items(detail_item_id)",
         "ALTER TABLE key_differentiators ADD COLUMN IF NOT EXISTS generation_id INT REFERENCES battlecard_generations(generation_id)",
+        # Migrate category references from legacy product_categories -> product_category_catalog
+        "ALTER TABLE key_differentiators DROP CONSTRAINT IF EXISTS key_differentiators_category_id_fkey",
+        "ALTER TABLE regeneration_requests DROP CONSTRAINT IF EXISTS regeneration_requests_category_id_fkey",
+        """DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'product_categories'
+            ) THEN
+                UPDATE key_differentiators kd
+                SET category_id = pcc.catalog_id
+                FROM product_categories pc
+                JOIN product_category_catalog pcc
+                  ON lower(trim(pc.category_name)) = lower(trim(pcc.category_name))
+                WHERE kd.category_id = pc.category_id;
+
+                UPDATE regeneration_requests rr
+                SET category_id = pcc.catalog_id
+                FROM product_categories pc
+                JOIN product_category_catalog pcc
+                  ON lower(trim(pc.category_name)) = lower(trim(pcc.category_name))
+                WHERE rr.category_id = pc.category_id;
+            END IF;
+        END $$""",
+        "UPDATE key_differentiators SET category_id = NULL WHERE category_id IS NOT NULL AND category_id NOT IN (SELECT catalog_id FROM product_category_catalog)",
+        "UPDATE regeneration_requests SET category_id = NULL WHERE category_id IS NOT NULL AND category_id NOT IN (SELECT catalog_id FROM product_category_catalog)",
+        "ALTER TABLE key_differentiators ADD CONSTRAINT key_differentiators_category_id_fkey FOREIGN KEY (category_id) REFERENCES product_category_catalog(catalog_id)",
+        "ALTER TABLE regeneration_requests ADD CONSTRAINT regeneration_requests_category_id_fkey FOREIGN KEY (category_id) REFERENCES product_category_catalog(catalog_id)",
+        "DROP TABLE IF EXISTS product_categories",
         "CREATE INDEX IF NOT EXISTS idx_key_diffs_generation ON key_differentiators(generation_id)",
         "ALTER TABLE evidence DROP CONSTRAINT IF EXISTS evidence_traces_to_field_check",
         "ALTER TABLE evidence ADD CONSTRAINT evidence_traces_to_field_check CHECK (traces_to_field IN ('headline', 'description', 'detail_item'))",
@@ -1911,14 +1933,16 @@ def seed_data():
 
         dw_cat = conn.execute(
             text(
-                "INSERT INTO product_categories (category_name, category_description, display_order) "
-                "VALUES ('Data Warehousing', 'Warehouse performance and cost', 1) RETURNING category_id"
+                "SELECT catalog_id FROM product_category_catalog "
+                "WHERE category_name = 'Data Warehousing & Lakehouse (including Open Table Formats)' "
+                "LIMIT 1"
             )
         ).scalar()
         di_cat = conn.execute(
             text(
-                "INSERT INTO product_categories (category_name, category_description, display_order) "
-                "VALUES ('Data Ingestion', 'Ingestion and CDC', 2) RETURNING category_id"
+                "SELECT catalog_id FROM product_category_catalog "
+                "WHERE category_name = 'Data Ingestion & Integration' "
+                "LIMIT 1"
             )
         ).scalar()
 
@@ -2591,12 +2615,12 @@ def load_battlecard_slides(battlecard_id):
         diffs = conn.execute(
             text(
                 "SELECT kd.key_diff_id, kd.key_diff_name, kd.key_diff_description, kd.display_order, "
-                "pc.category_name "
+                "pcc.category_name "
                 "FROM key_differentiators kd "
-                "JOIN product_categories pc ON kd.category_id = pc.category_id "
+                "JOIN product_category_catalog pcc ON kd.category_id = pcc.catalog_id "
                 "WHERE kd.is_active = TRUE "
                 "AND kd.key_diff_id IN (SELECT DISTINCT cl.key_diff_id FROM claims cl WHERE cl.generation_id = :gid) "
-                "ORDER BY pc.display_order, kd.display_order"
+                "ORDER BY pcc.display_order, kd.display_order"
             ),
             {"gid": gen_id},
         ).mappings().all()
@@ -6728,16 +6752,16 @@ def _load_generation_eval_items(generation_id: int) -> list[dict]:
     with ENGINE.begin() as conn:
         rows = conn.execute(
             text(
-                "SELECT cl.claim_id, co.company_type, kd.key_diff_name, pc.category_name, cl.rating, cl.headline, "
+                "SELECT cl.claim_id, co.company_type, kd.key_diff_name, pcc.category_name, cl.rating, cl.headline, "
                 "COALESCE(string_agg(di.item_text, ' ' ORDER BY di.item_order), cl.description) AS details_text "
                 "FROM claims cl "
                 "JOIN companies co ON cl.company_id = co.company_id "
                 "JOIN key_differentiators kd ON cl.key_diff_id = kd.key_diff_id "
-                "JOIN product_categories pc ON kd.category_id = pc.category_id "
+                "JOIN product_category_catalog pcc ON kd.category_id = pcc.catalog_id "
                 "LEFT JOIN claim_detail_items di ON di.claim_id = cl.claim_id "
                 "WHERE cl.generation_id = :gid "
-                "GROUP BY cl.claim_id, co.company_type, kd.key_diff_name, kd.display_order, pc.category_name, cl.rating, cl.headline, cl.description "
-                "ORDER BY pc.category_name, kd.display_order, co.company_type"
+                "GROUP BY cl.claim_id, co.company_type, kd.key_diff_name, kd.display_order, pcc.category_name, cl.rating, cl.headline, cl.description "
+                "ORDER BY pcc.category_name, kd.display_order, co.company_type"
             ),
             {"gid": generation_id},
         ).mappings().all()

@@ -6,7 +6,6 @@ Default behavior is dry-run. Use --execute to apply deletions.
 
 This script intentionally does NOT delete:
   - product_category_catalog
-  - product_categories
   - product_mappings
   - prompt templates/versions
 """

@@ -140,7 +140,7 @@ def _mlflow_step_run(
 # ---------------------------------------------------------------------------
 # Default paths (same as app.py — used for context formatting)
 # ---------------------------------------------------------------------------
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 DEFAULT_PASS1_PROMPT = os.path.join(
     _PROJECT_ROOT, "generate-battlecards", "2_prompts", "l200_pass1_planning_v1.md",
@@ -158,6 +158,7 @@ _CITATION_ITEM_SCHEMA = {
     "properties": {
         "citation_id": {"type": "string"},
         "detail_item_index": {"type": "integer"},
+        "verbose_item_index": {"type": "integer"},
         "start_index": {"type": "integer"},
         "end_index": {"type": "integer"},
         "source_index": {"type": "integer"},
@@ -165,6 +166,7 @@ _CITATION_ITEM_SCHEMA = {
         "verdict": {"type": "string"},
         "confidence": {"type": "number"},
         "verdict_rationale": {"type": "string"},
+        "claim_subfield": {"type": "string"},
     },
     "required": [
         "citation_id", "detail_item_index", "start_index", "end_index",
@@ -286,6 +288,91 @@ L200_PASS2_JSON_SCHEMA = {
             "competitor_headline", "competitor_details", "competitor_reasoning",
             "citations", "sources", "research_sources",
         ],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+_V10_BULLET_CITATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "citation_id": {"type": "string"},
+        "start_index": {"type": "integer"},
+        "end_index": {"type": "integer"},
+        "source_index": {"type": "integer"},
+        "source_quote": {"type": "string"},
+        "verdict": {"type": "string"},
+        "confidence": {"type": "number"},
+        "verdict_rationale": {"type": "string"},
+    },
+    "required": ["citation_id", "start_index", "end_index", "source_index", "source_quote"],
+    "additionalProperties": False,
+}
+
+_V10_L300_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "citations": {"type": "array", "items": _V10_BULLET_CITATION_SCHEMA},
+    },
+    "required": ["text", "citations"],
+    "additionalProperties": False,
+}
+
+_V10_L200_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "citations": {"type": "array", "items": _V10_BULLET_CITATION_SCHEMA},
+        "l300": {"type": "array", "items": _V10_L300_ITEM_SCHEMA},
+    },
+    "required": ["text", "citations", "l300"],
+    "additionalProperties": False,
+}
+
+_V10_TEXT_WITH_CITATIONS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "citations": {"type": "array", "items": _V10_BULLET_CITATION_SCHEMA},
+    },
+    "required": ["text", "citations"],
+    "additionalProperties": False,
+}
+
+_V10_SIDE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "headline": _V10_TEXT_WITH_CITATIONS_SCHEMA,
+        "l200": {"type": "array", "items": _V10_L200_ITEM_SCHEMA},
+        "reasoning": _V10_TEXT_WITH_CITATIONS_SCHEMA,
+    },
+    "required": ["headline", "l200", "reasoning"],
+    "additionalProperties": False,
+}
+
+L200_PASS2_V10_JSON_SCHEMA = {
+    "name": "l200_diff_detail_v10",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "claims": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "databricks": _V10_SIDE_SCHEMA,
+                        "competitor": _V10_SIDE_SCHEMA,
+                        "sources": {"type": "array", "items": _SOURCE_ITEM_SCHEMA},
+                        "research_sources": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["id", "databricks", "competitor", "sources", "research_sources"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["claims"],
         "additionalProperties": False,
     },
     "strict": True,
@@ -540,6 +627,7 @@ def build_fallback_citations(databricks_details, competitor_details, db_reasonin
                     "verdict": "unverified",
                     "confidence": 40,
                     "verdict_rationale": "Auto-linked from model-provided source list.",
+                    "claim_subfield": "l200",
                 }
             )
         return out
@@ -560,13 +648,18 @@ def build_fallback_citations(databricks_details, competitor_details, db_reasonin
                 "verdict": "unverified",
                 "confidence": 40,
                 "verdict_rationale": "Auto-linked from model-provided source list.",
+                "claim_subfield": "reasoning",
             }
         ]
 
     return {
+        "databricks_headline": [],
         "databricks_details": _mk_details("db_details", databricks_details),
+        "databricks_detail_verbose": [],
         "databricks_reasoning": _mk_reasoning("db", db_reasoning),
+        "competitor_headline": [],
         "competitor_details": _mk_details("comp_details", competitor_details),
+        "competitor_detail_verbose": [],
         "competitor_reasoning": _mk_reasoning("comp", comp_reasoning),
     }
 
@@ -741,6 +834,33 @@ def resolve_context_source_flags(context_sources=None) -> dict:
         "old_battlecard": bool(context_sources.get("old_battlecard", True)),
         "review_feedback": bool(context_sources.get("review_feedback", False)),
         "fact_checks": bool(context_sources.get("fact_checks", False)),
+    }
+
+
+def get_pass2_request_spec(version: int) -> Dict[str, Any]:
+    """Return request behavior and JSON schema for a Pass 2 template version."""
+    ver = int(version or 0)
+    if ver == 10:
+        schema = L200_PASS2_V10_JSON_SCHEMA
+        return {
+            "use_structured_output": True,
+            "response_format_type": "json_schema",
+            "schema": schema,
+            "request_preview": {"response_format": {"type": "json_schema", "json_schema": schema}},
+        }
+    if ver in (5, 6, 7, 8, 9):
+        return {
+            "use_structured_output": False,
+            "response_format_type": "none",
+            "schema": None,
+            "request_preview": {"response_format": None},
+        }
+    schema = L200_PASS2_JSON_SCHEMA
+    return {
+        "use_structured_output": True,
+        "response_format_type": "json_schema",
+        "schema": schema,
+        "request_preview": {"response_format": {"type": "json_schema", "json_schema": schema}},
     }
 
 
@@ -1153,7 +1273,7 @@ class WorkflowRunner:
         return len(text_content) // 4  # rough char-based estimate
 
     def _pass2_supports_category_batch(self, version: int) -> bool:
-        return int(version or 0) in (5, 6, 7, 8, 9)
+        return int(version or 0) in (5, 6, 7, 8, 9, 10)
 
     def _pass2_supports_single_call(self, version: int) -> bool:
         return int(version or 0) in (8,)
@@ -1232,7 +1352,7 @@ class WorkflowRunner:
             return _per_diff(False, f"Prompt V{pass2_version} does not support category batching")
 
         # auto
-        if pass2_version in (5, 6, 7, 8, 9):
+        if pass2_version in (5, 6, 7, 8, 9, 10):
             return _category(True)
         return _per_diff(True)
 
@@ -2145,6 +2265,8 @@ class WorkflowRunner:
                               progress_current=1, progress_total=5)
             template_text = load_pass2_template(ver, engine=self.engine)
             logger.info("Using Pass 2 prompt template version %d (%d chars)", ver, len(template_text))
+            pass2_request_spec = get_pass2_request_spec(ver)
+            pass2_json_schema = pass2_request_spec.get("schema")
 
             # Store the prompt version
             prompt_label = f"l200_pass2_detail_v{ver}"
@@ -2162,7 +2284,7 @@ class WorkflowRunner:
 
             # Per-batch prompts already receive directive content
             # through the context XML; avoid injecting directives twice.
-            directives_for_template = "" if ver in (5, 6, 7, 8, 9) else directive
+            directives_for_template = "" if ver in (5, 6, 7, 8, 9, 10) else directive
 
             # Build category payloads for templates that expect key_diffs_json.
             category_payloads = {}
@@ -2214,7 +2336,19 @@ class WorkflowRunner:
                 target_name = skeleton.get("key_differentiator", "").strip().lower()
 
                 if isinstance(parsed_result, dict):
-                    candidates = [parsed_result]
+                    claims_list = parsed_result.get("claims")
+                    if isinstance(claims_list, str):
+                        try:
+                            claims_list = json.loads(claims_list)
+                        except Exception:
+                            try:
+                                claims_list = parse_model_json(claims_list)
+                            except Exception:
+                                claims_list = None
+                    if isinstance(claims_list, list):
+                        candidates = [c for c in claims_list if isinstance(c, dict)]
+                    else:
+                        candidates = [parsed_result]
                 elif isinstance(parsed_result, list):
                     candidates = [c for c in parsed_result if isinstance(c, dict)]
                 else:
@@ -2236,12 +2370,194 @@ class WorkflowRunner:
                 if chosen is None:
                     raise ValueError("Batched response did not contain a usable object")
 
-                db_details = chosen.get("databricks_l200", chosen.get("databricks_details", []))
-                comp_details = chosen.get("competitor_l200", chosen.get("competitor_details", []))
-                if isinstance(db_details, str):
-                    db_details = [db_details] if db_details else []
-                if isinstance(comp_details, str):
-                    comp_details = [comp_details] if comp_details else []
+                def _to_text_list(value):
+                    if value is None:
+                        return []
+                    if isinstance(value, str):
+                        return [value] if value else []
+                    if isinstance(value, list):
+                        out = []
+                        for item in value:
+                            if isinstance(item, str):
+                                if item:
+                                    out.append(item)
+                            elif isinstance(item, dict):
+                                txt = str(item.get("text", "") or "").strip()
+                                if txt:
+                                    out.append(txt)
+                        return out
+                    return [str(value)]
+
+                def _normalize_inline_citations(raw_citations, *, detail_item_index=None, verbose_item_index=None, claim_subfield="l200"):
+                    out = []
+                    if not isinstance(raw_citations, list):
+                        return out
+                    for i, cite in enumerate(raw_citations):
+                        if not isinstance(cite, dict):
+                            continue
+                        cid = str(cite.get("citation_id") or f"cite_{claim_subfield}_{detail_item_index or 0}_{verbose_item_index or 0}_{i}")
+                        try:
+                            conf = float(cite.get("confidence", 0.0) or 0.0)
+                        except Exception:
+                            conf = 0.0
+                        entry = {
+                            "citation_id": cid,
+                            "detail_item_index": int(detail_item_index) if detail_item_index is not None else 0,
+                            "start_index": int(cite.get("start_index", 0) or 0),
+                            "end_index": int(cite.get("end_index", 0) or 0),
+                            "source_index": int(cite.get("source_index", 1) or 1),
+                            "source_quote": str(cite.get("source_quote", "") or ""),
+                            "verdict": str(cite.get("verdict", "pending") or "pending"),
+                            "confidence": conf,
+                            "verdict_rationale": str(cite.get("verdict_rationale", "") or ""),
+                            "claim_subfield": claim_subfield,
+                        }
+                        if verbose_item_index is not None:
+                            entry["verbose_item_index"] = int(verbose_item_index)
+                        out.append(entry)
+                    return out
+
+                def _extract_side(chosen_obj, side_key, top_prefix):
+                    side = chosen_obj.get(side_key, {}) if isinstance(chosen_obj.get(side_key), dict) else {}
+                    l200_items = []
+                    l300_map = []
+                    citations_map = {
+                        f"{top_prefix}_headline": [],
+                        f"{top_prefix}_details": [],
+                        f"{top_prefix}_detail_verbose": [],
+                        f"{top_prefix}_reasoning": [],
+                    }
+
+                    headline_raw = side.get("headline", chosen_obj.get(f"{top_prefix}_headline", ""))
+                    if isinstance(headline_raw, dict):
+                        headline_text = str(headline_raw.get("text", "") or "")
+                        citations_map[f"{top_prefix}_headline"] = _normalize_inline_citations(
+                            headline_raw.get("citations", []),
+                            claim_subfield="headline",
+                        )
+                    else:
+                        headline_text = str(headline_raw or "")
+
+                    reasoning_raw = side.get("reasoning", chosen_obj.get(f"{top_prefix}_reasoning", ""))
+                    if isinstance(reasoning_raw, dict):
+                        reasoning_text = str(reasoning_raw.get("text", "") or "")
+                        citations_map[f"{top_prefix}_reasoning"] = _normalize_inline_citations(
+                            reasoning_raw.get("citations", []),
+                            claim_subfield="reasoning",
+                        )
+                    else:
+                        reasoning_text = str(reasoning_raw or "")
+
+                    side_l200 = side.get("l200")
+                    if isinstance(side_l200, list) and side_l200 and isinstance(side_l200[0], dict):
+                        for detail_idx, l200_item in enumerate(side_l200):
+                            bullet_text = str(l200_item.get("text", "") or "").strip()
+                            if bullet_text:
+                                l200_items.append(bullet_text)
+                            else:
+                                l200_items.append(f"{side_key.title()} bullet {detail_idx + 1}")
+                            citations_map[f"{top_prefix}_details"].extend(
+                                _normalize_inline_citations(
+                                    l200_item.get("citations", []),
+                                    detail_item_index=detail_idx,
+                                    claim_subfield="l200",
+                                )
+                            )
+                            l300_items = []
+                            raw_l300 = l200_item.get("l300", [])
+                            if isinstance(raw_l300, list):
+                                for verbose_idx, verbose_item in enumerate(raw_l300):
+                                    if isinstance(verbose_item, dict):
+                                        verbose_text = str(verbose_item.get("text", "") or "").strip()
+                                        verbose_cites = verbose_item.get("citations", [])
+                                    else:
+                                        verbose_text = str(verbose_item or "").strip()
+                                        verbose_cites = []
+                                    if not verbose_text:
+                                        continue
+                                    l300_items.append(verbose_text)
+                                    citations_map[f"{top_prefix}_detail_verbose"].extend(
+                                        _normalize_inline_citations(
+                                            verbose_cites,
+                                            detail_item_index=detail_idx,
+                                            verbose_item_index=verbose_idx,
+                                            claim_subfield="l300",
+                                        )
+                                    )
+                            l300_map.append(l300_items)
+                    else:
+                        l200_items = _to_text_list(chosen_obj.get(f"{top_prefix}_l200", chosen_obj.get(f"{top_prefix}_details", [])))
+                        raw_l300 = chosen_obj.get(f"{top_prefix}_l300", [])
+                        if isinstance(raw_l300, list) and raw_l300 and isinstance(raw_l300[0], list):
+                            l300_map = [list(map(str, row)) for row in raw_l300]
+                        else:
+                            as_list = _to_text_list(raw_l300)
+                            if l200_items:
+                                if len(as_list) == len(l200_items):
+                                    l300_map = [[v] if v else [] for v in as_list]
+                                else:
+                                    l300_map = [as_list] + [[] for _ in range(max(len(l200_items) - 1, 0))]
+                            else:
+                                l300_map = [as_list] if as_list else []
+
+                    if len(l300_map) < len(l200_items):
+                        l300_map.extend([[] for _ in range(len(l200_items) - len(l300_map))])
+                    elif len(l300_map) > len(l200_items):
+                        l300_map = l300_map[:len(l200_items)]
+
+                    # Enforce at least one citation per L200/L300 bullet for deterministic evidence linkage.
+                    existing_l200 = citations_map[f"{top_prefix}_details"]
+                    existing_l300 = citations_map[f"{top_prefix}_detail_verbose"]
+                    for detail_idx, bullet_text in enumerate(l200_items):
+                        if not str(bullet_text or "").strip():
+                            continue
+                        has_detail_cite = any(int(c.get("detail_item_index", -1)) == detail_idx for c in existing_l200)
+                        if not has_detail_cite:
+                            txt = str(bullet_text)
+                            existing_l200.append(
+                                {
+                                    "citation_id": f"auto_{top_prefix}_l200_{detail_idx}",
+                                    "detail_item_index": detail_idx,
+                                    "start_index": 0,
+                                    "end_index": min(len(txt), 120),
+                                    "source_index": 1,
+                                    "source_quote": txt[:500],
+                                    "verdict": "unverified",
+                                    "confidence": 40.0,
+                                    "verdict_rationale": "Auto-citation added because model omitted L200 citations.",
+                                    "claim_subfield": "l200",
+                                }
+                            )
+                        for verbose_idx, verbose_text in enumerate(l300_map[detail_idx] if detail_idx < len(l300_map) else []):
+                            if not str(verbose_text or "").strip():
+                                continue
+                            has_verbose_cite = any(
+                                int(c.get("detail_item_index", -1)) == detail_idx
+                                and int(c.get("verbose_item_index", -1)) == verbose_idx
+                                for c in existing_l300
+                            )
+                            if not has_verbose_cite:
+                                vtxt = str(verbose_text)
+                                existing_l300.append(
+                                    {
+                                        "citation_id": f"auto_{top_prefix}_l300_{detail_idx}_{verbose_idx}",
+                                        "detail_item_index": detail_idx,
+                                        "verbose_item_index": verbose_idx,
+                                        "start_index": 0,
+                                        "end_index": min(len(vtxt), 120),
+                                        "source_index": 1,
+                                        "source_quote": vtxt[:500],
+                                        "verdict": "unverified",
+                                        "confidence": 40.0,
+                                        "verdict_rationale": "Auto-citation added because model omitted L300 citations.",
+                                        "claim_subfield": "l300",
+                                    }
+                                )
+
+                    return headline_text, l200_items, l300_map, reasoning_text, citations_map
+
+                db_head, db_details, db_l300_map, db_reasoning, db_citations = _extract_side(chosen, "databricks", "databricks")
+                comp_head, comp_details, comp_l300_map, comp_reasoning, comp_citations = _extract_side(chosen, "competitor", "competitor")
 
                 sources = _normalize_sources(chosen.get("sources", []))
                 if not sources:
@@ -2260,15 +2576,19 @@ class WorkflowRunner:
                     citations = build_fallback_citations(
                         db_details,
                         comp_details,
-                        chosen.get("databricks_reasoning", ""),
-                        chosen.get("competitor_reasoning", ""),
+                        db_reasoning,
+                        comp_reasoning,
                         sources,
                     )
                 else:
                     for key in (
+                        "databricks_headline",
                         "databricks_details",
+                        "databricks_detail_verbose",
                         "databricks_reasoning",
+                        "competitor_headline",
                         "competitor_details",
+                        "competitor_detail_verbose",
                         "competitor_reasoning",
                     ):
                         if key not in citations or not isinstance(citations.get(key), list):
@@ -2280,18 +2600,27 @@ class WorkflowRunner:
                         citations = build_fallback_citations(
                             db_details,
                             comp_details,
-                            chosen.get("databricks_reasoning", ""),
-                            chosen.get("competitor_reasoning", ""),
+                            db_reasoning,
+                            comp_reasoning,
                             sources,
                         )
 
+                for k, v in db_citations.items():
+                    citations.setdefault(k, [])
+                    citations[k].extend(v)
+                for k, v in comp_citations.items():
+                    citations.setdefault(k, [])
+                    citations[k].extend(v)
+
                 return {
-                    "databricks_headline": chosen.get("databricks_headline", ""),
+                    "databricks_headline": db_head or chosen.get("databricks_headline", ""),
                     "databricks_details": db_details,
-                    "databricks_reasoning": chosen.get("databricks_reasoning", ""),
-                    "competitor_headline": chosen.get("competitor_headline", ""),
+                    "databricks_details_verbose": db_l300_map,
+                    "databricks_reasoning": db_reasoning or chosen.get("databricks_reasoning", ""),
+                    "competitor_headline": comp_head or chosen.get("competitor_headline", ""),
                     "competitor_details": comp_details,
-                    "competitor_reasoning": chosen.get("competitor_reasoning", ""),
+                    "competitor_details_verbose": comp_l300_map,
+                    "competitor_reasoning": comp_reasoning or chosen.get("competitor_reasoning", ""),
                     "citations": citations,
                     "sources": sources,
                     "research_sources": chosen.get("research_sources", []),
@@ -2367,13 +2696,13 @@ class WorkflowRunner:
                 }
 
                 try:
-                    use_structured_output = ver not in (5, 6, 7, 8, 9)
+                    use_structured_output = bool(pass2_request_spec.get("use_structured_output"))
                     # Use debug version to capture request/response
                     debug_result = call_model_with_debug(
                         client=self.client,
                         model_name=self.model_name,
                         rendered_prompt=rendered,
-                        json_schema=L200_PASS2_JSON_SCHEMA if use_structured_output else None,
+                        json_schema=pass2_json_schema if use_structured_output else None,
                     )
 
                     raw = debug_result["content"]
@@ -2382,7 +2711,7 @@ class WorkflowRunner:
 
                     result = parse_model_json(raw)
 
-                    if ver in (5, 6, 7, 8, 9):
+                    if ver in (5, 6, 7, 8, 9, 10):
                         debug_log["response_type"] = type(result).__name__ if type(result).__name__ in ("dict", "list") else "unknown"
                         debug_log["was_list_fixed"] = False
                         debug_log["structured_output"] = json.dumps(result, indent=2)
@@ -2481,7 +2810,7 @@ class WorkflowRunner:
                             client=self.client,
                             model_name=self.model_name,
                             rendered_prompt=rendered,
-                            json_schema=None,
+                            json_schema=pass2_json_schema if pass2_request_spec.get("use_structured_output") else None,
                         )
                         raw = debug_result["content"]
                         parsed = parse_model_json(raw)
@@ -2672,7 +3001,7 @@ class WorkflowRunner:
                         client=self.client,
                         model_name=self.model_name,
                         rendered_prompt=rendered,
-                        json_schema=None,
+                        json_schema=pass2_json_schema if pass2_request_spec.get("use_structured_output") else None,
                     )
                     raw = debug_result["content"]
                     parsed = parse_model_json(raw)
@@ -2864,14 +3193,20 @@ class WorkflowRunner:
         return {
             "databricks_headline": f"Databricks: {kd_name}",
             "databricks_details": [f"Databricks provides strong capabilities in {kd_name}."],
+            "databricks_details_verbose": [[]],
             "databricks_reasoning": "Generation failed — stub reasoning.",
             "competitor_headline": f"{self.competitor}: {kd_name}",
             "competitor_details": [f"{self.competitor} has partial support for {kd_name}."],
+            "competitor_details_verbose": [[]],
             "competitor_reasoning": "Generation failed — stub reasoning.",
             "citations": {
+                "databricks_headline": [],
                 "databricks_details": [],
+                "databricks_detail_verbose": [],
                 "databricks_reasoning": [],
+                "competitor_headline": [],
                 "competitor_details": [],
+                "competitor_detail_verbose": [],
                 "competitor_reasoning": [],
             },
             "sources": [],
@@ -3017,11 +3352,46 @@ class WorkflowRunner:
                 # Track Lakebase save for debug log
                 lakebase_error = None
                 try:
+                    def _normalize_verbose_map(raw_value, detail_count):
+                        if detail_count <= 0:
+                            return []
+                        if raw_value is None:
+                            return [[] for _ in range(detail_count)]
+                        if isinstance(raw_value, str):
+                            raw_value = [raw_value]
+                        if isinstance(raw_value, list):
+                            if raw_value and isinstance(raw_value[0], list):
+                                out = []
+                                for row in raw_value:
+                                    row_items = []
+                                    if isinstance(row, list):
+                                        for cell in row:
+                                            txt = str(cell or "").strip()
+                                            if txt:
+                                                row_items.append(txt)
+                                    elif isinstance(row, str) and row.strip():
+                                        row_items.append(row.strip())
+                                    out.append(row_items)
+                            else:
+                                flat = [str(v or "").strip() for v in raw_value if str(v or "").strip()]
+                                if not flat:
+                                    out = [[] for _ in range(detail_count)]
+                                elif len(flat) == detail_count:
+                                    out = [[v] for v in flat]
+                                else:
+                                    out = [flat] + [[] for _ in range(max(detail_count - 1, 0))]
+                        else:
+                            out = [[] for _ in range(detail_count)]
+                        if len(out) < detail_count:
+                            out.extend([[] for _ in range(detail_count - len(out))])
+                        return out[:detail_count]
+
                     # Databricks claim
                     db_rating = _rating_to_db(sk.get("databricks_rating", ""))
                     db_details_raw = claim.get("databricks_details", [])
                     if isinstance(db_details_raw, str):
                         db_details_raw = [db_details_raw] if db_details_raw else []
+                    db_verbose_map = _normalize_verbose_map(claim.get("databricks_details_verbose"), len(db_details_raw))
                     db_desc_flat = " ".join(db_details_raw)
 
                     db_claim_id = conn.execute(
@@ -3043,21 +3413,39 @@ class WorkflowRunner:
 
                     # Insert detail items for Databricks claim
                     db_detail_item_ids = []
+                    db_verbose_item_ids_by_detail = {}
                     for order, item_text in enumerate(db_details_raw):
+                        verbose_items = db_verbose_map[order] if order < len(db_verbose_map) else []
                         did = conn.execute(
                             text(
-                                "INSERT INTO claim_detail_items (claim_id, item_order, item_text) "
-                                "VALUES (:cid, :ord, :txt) RETURNING detail_item_id"
+                                "INSERT INTO claim_detail_items (claim_id, item_order, item_text, item_text_verbose) "
+                                "VALUES (:cid, :ord, :txt, :txtv) RETURNING detail_item_id"
                             ),
-                            {"cid": db_claim_id, "ord": order, "txt": item_text},
+                            {
+                                "cid": db_claim_id,
+                                "ord": order,
+                                "txt": item_text,
+                                "txtv": "\n".join(verbose_items) if verbose_items else None,
+                            },
                         ).scalar()
                         db_detail_item_ids.append(did)
+                        db_verbose_item_ids_by_detail[order] = []
+                        for v_order, v_text in enumerate(verbose_items):
+                            vid = conn.execute(
+                                text(
+                                    "INSERT INTO claim_detail_verbose_items (detail_item_id, item_order, item_text) "
+                                    "VALUES (:did, :ord, :txt) RETURNING verbose_item_id"
+                                ),
+                                {"did": did, "ord": v_order, "txt": v_text},
+                            ).scalar()
+                            db_verbose_item_ids_by_detail[order].append(vid)
 
                     # Competitor claim
                     comp_rating = _rating_to_db(sk.get("competitor_rating", ""))
                     comp_details_raw = claim.get("competitor_details", [])
                     if isinstance(comp_details_raw, str):
                         comp_details_raw = [comp_details_raw] if comp_details_raw else []
+                    comp_verbose_map = _normalize_verbose_map(claim.get("competitor_details_verbose"), len(comp_details_raw))
                     comp_desc_flat = " ".join(comp_details_raw)
 
                     comp_claim_id = conn.execute(
@@ -3079,23 +3467,52 @@ class WorkflowRunner:
 
                     # Insert detail items for competitor claim
                     comp_detail_item_ids = []
+                    comp_verbose_item_ids_by_detail = {}
                     for order, item_text in enumerate(comp_details_raw):
+                        verbose_items = comp_verbose_map[order] if order < len(comp_verbose_map) else []
                         did = conn.execute(
                             text(
-                                "INSERT INTO claim_detail_items (claim_id, item_order, item_text) "
-                                "VALUES (:cid, :ord, :txt) RETURNING detail_item_id"
+                                "INSERT INTO claim_detail_items (claim_id, item_order, item_text, item_text_verbose) "
+                                "VALUES (:cid, :ord, :txt, :txtv) RETURNING detail_item_id"
                             ),
-                            {"cid": comp_claim_id, "ord": order, "txt": item_text},
+                            {
+                                "cid": comp_claim_id,
+                                "ord": order,
+                                "txt": item_text,
+                                "txtv": "\n".join(verbose_items) if verbose_items else None,
+                            },
                         ).scalar()
                         comp_detail_item_ids.append(did)
+                        comp_verbose_item_ids_by_detail[order] = []
+                        for v_order, v_text in enumerate(verbose_items):
+                            vid = conn.execute(
+                                text(
+                                    "INSERT INTO claim_detail_verbose_items (detail_item_id, item_order, item_text) "
+                                    "VALUES (:did, :ord, :txt) RETURNING verbose_item_id"
+                                ),
+                                {"did": did, "ord": v_order, "txt": v_text},
+                            ).scalar()
+                            comp_verbose_item_ids_by_detail[order].append(vid)
 
                     # Save evidence + fact checks from citations
                     self._save_evidence_and_fact_checks(
-                        conn, gen_id, db_claim_id, claim, "databricks", db_detail_item_ids,
+                        conn,
+                        gen_id,
+                        db_claim_id,
+                        claim,
+                        "databricks",
+                        db_detail_item_ids,
+                        db_verbose_item_ids_by_detail,
                         inline_fact_check=inline_fact_check,
                     )
                     self._save_evidence_and_fact_checks(
-                        conn, gen_id, comp_claim_id, claim, "competitor", comp_detail_item_ids,
+                        conn,
+                        gen_id,
+                        comp_claim_id,
+                        claim,
+                        "competitor",
+                        comp_detail_item_ids,
+                        comp_verbose_item_ids_by_detail,
                         inline_fact_check=inline_fact_check,
                     )
 
@@ -3121,6 +3538,7 @@ class WorkflowRunner:
         claim_data,
         side,
         detail_item_ids=None,
+        verbose_item_ids_by_detail=None,
         inline_fact_check: bool = False,
     ):
         """Save evidence rows and optionally seed fact-check rows from citation metadata."""
@@ -3128,6 +3546,8 @@ class WorkflowRunner:
         sources_list = claim_data.get("sources", [])
         if detail_item_ids is None:
             detail_item_ids = []
+        if verbose_item_ids_by_detail is None:
+            verbose_item_ids_by_detail = {}
 
         # Build source_index -> source mapping
         source_map = {}
@@ -3143,13 +3563,20 @@ class WorkflowRunner:
                     "type": "context",
                 }
 
-        for field_suffix in ("details", "reasoning"):
+        field_specs = (
+            ("headline", "headline"),
+            ("details", "l200"),
+            ("detail_verbose", "l300"),
+            ("reasoning", "reasoning"),
+        )
+
+        for field_suffix, claim_subfield in field_specs:
             field_key = f"{side}_{field_suffix}"
             field_citations = citations.get(field_key, [])
             if not isinstance(field_citations, list):
                 field_citations = []
 
-            for cite in field_citations:
+            for cite_order, cite in enumerate(field_citations):
                 if not isinstance(cite, dict):
                     continue
                 source_index = cite.get("source_index")
@@ -3178,25 +3605,44 @@ class WorkflowRunner:
 
                 # Resolve detail_item_id for details citations
                 detail_item_id = None
-                if field_suffix == "details" and detail_item_ids:
-                    detail_idx = cite.get("detail_item_index", 0)
+                detail_idx = int(cite.get("detail_item_index", 0) or 0)
+                if field_suffix in ("details", "detail_verbose") and detail_item_ids:
                     if 0 <= detail_idx < len(detail_item_ids):
                         detail_item_id = detail_item_ids[detail_idx]
 
-                traces_to_field = "detail_item" if detail_item_id else ("description" if field_suffix == "details" else "headline")
+                verbose_item_id = None
+                if field_suffix == "detail_verbose" and detail_item_id is not None:
+                    verbose_idx = int(cite.get("verbose_item_index", 0) or 0)
+                    verbose_ids = verbose_item_ids_by_detail.get(detail_idx, [])
+                    if 0 <= verbose_idx < len(verbose_ids):
+                        verbose_item_id = verbose_ids[verbose_idx]
+
+                if claim_subfield == "headline":
+                    traces_to_field = "headline"
+                elif detail_item_id:
+                    traces_to_field = "detail_item"
+                else:
+                    traces_to_field = "description"
+                claim_subfield_value = str(cite.get("claim_subfield", claim_subfield) or claim_subfield).strip().lower()
+                if claim_subfield_value not in ("headline", "reasoning", "l200", "l300"):
+                    claim_subfield_value = claim_subfield
 
                 # Insert evidence
                 traces_text = cite.get("source_quote", "")[:500]
                 evidence_id = conn.execute(
                     text(
-                        "INSERT INTO evidence (claim_id, detail_item_id, traces_to_field, traces_to_start_index, traces_to_end_index, "
-                        "traces_to_text, generation_source_id, generation_source_text) "
-                        "VALUES (:claim, :did, :field, :start, :end, :trace, :src, :src_text) RETURNING evidence_id"
+                        "INSERT INTO evidence (claim_id, detail_item_id, verbose_item_id, traces_to_field, claim_subfield, citation_id, citation_order, "
+                        "traces_to_start_index, traces_to_end_index, traces_to_text, generation_source_id, generation_source_text) "
+                        "VALUES (:claim, :did, :vid, :field, :subfield, :cid, :corder, :start, :end, :trace, :src, :src_text) RETURNING evidence_id"
                     ),
                     {
                         "claim": claim_id,
                         "did": detail_item_id,
+                        "vid": verbose_item_id,
                         "field": traces_to_field,
+                        "subfield": claim_subfield_value,
+                        "cid": str(cite.get("citation_id", "") or None),
+                        "corder": int(cite.get("citation_order", cite_order) or cite_order),
                         "start": cite.get("start_index", 0),
                         "end": cite.get("end_index", 0),
                         "trace": traces_text,
@@ -3283,7 +3729,9 @@ class WorkflowRunner:
                               progress_message=f"[2/4] Loading Pass 2 prompt template V{ver} for regeneration ({total} claims)...",
                               progress_current=1, progress_total=4)
             template_text = load_pass2_template(ver, engine=self.engine)
-            directives_for_template = "" if ver in (5, 6, 7, 8, 9) else directive
+            directives_for_template = "" if ver in (5, 6, 7, 8, 9, 10) else directive
+            pass2_request_spec = get_pass2_request_spec(ver)
+            pass2_json_schema = pass2_request_spec.get("schema")
 
             def _normalize_sources(sources):
                 if not isinstance(sources, list):
@@ -3318,7 +3766,19 @@ class WorkflowRunner:
                 target_name = skeleton.get("key_differentiator", "").strip().lower()
 
                 if isinstance(parsed_result, dict):
-                    candidates = [parsed_result]
+                    claims_list = parsed_result.get("claims")
+                    if isinstance(claims_list, str):
+                        try:
+                            claims_list = json.loads(claims_list)
+                        except Exception:
+                            try:
+                                claims_list = parse_model_json(claims_list)
+                            except Exception:
+                                claims_list = None
+                    if isinstance(claims_list, list):
+                        candidates = [c for c in claims_list if isinstance(c, dict)]
+                    else:
+                        candidates = [parsed_result]
                 elif isinstance(parsed_result, list):
                     candidates = [c for c in parsed_result if isinstance(c, dict)]
                 else:
@@ -3340,12 +3800,67 @@ class WorkflowRunner:
                 if chosen is None:
                     raise ValueError("Batched regeneration response did not contain a usable object")
 
-                db_details = chosen.get("databricks_l200", chosen.get("databricks_details", []))
-                comp_details = chosen.get("competitor_l200", chosen.get("competitor_details", []))
-                if isinstance(db_details, str):
-                    db_details = [db_details] if db_details else []
-                if isinstance(comp_details, str):
-                    comp_details = [comp_details] if comp_details else []
+                def _to_text_list(value):
+                    if value is None:
+                        return []
+                    if isinstance(value, str):
+                        return [value] if value else []
+                    if isinstance(value, list):
+                        out = []
+                        for item in value:
+                            if isinstance(item, str):
+                                if item:
+                                    out.append(item)
+                            elif isinstance(item, dict):
+                                txt = str(item.get("text", "") or "").strip()
+                                if txt:
+                                    out.append(txt)
+                        return out
+                    return [str(value)]
+
+                def _extract_side(chosen_obj, side_key, top_prefix):
+                    side = chosen_obj.get(side_key, {}) if isinstance(chosen_obj.get(side_key), dict) else {}
+                    headline_raw = side.get("headline", chosen_obj.get(f"{top_prefix}_headline", ""))
+                    reasoning_raw = side.get("reasoning", chosen_obj.get(f"{top_prefix}_reasoning", ""))
+                    headline_text = str(headline_raw.get("text", "") or "") if isinstance(headline_raw, dict) else str(headline_raw or "")
+                    reasoning_text = str(reasoning_raw.get("text", "") or "") if isinstance(reasoning_raw, dict) else str(reasoning_raw or "")
+                    l200_items = []
+                    l300_map = []
+                    side_l200 = side.get("l200")
+                    if isinstance(side_l200, list) and side_l200 and isinstance(side_l200[0], dict):
+                        for l200_item in side_l200:
+                            l200_items.append(str(l200_item.get("text", "") or "").strip())
+                            raw_l300 = l200_item.get("l300", [])
+                            l300_items = []
+                            if isinstance(raw_l300, list):
+                                for v in raw_l300:
+                                    if isinstance(v, dict):
+                                        txt = str(v.get("text", "") or "").strip()
+                                    else:
+                                        txt = str(v or "").strip()
+                                    if txt:
+                                        l300_items.append(txt)
+                            l300_map.append(l300_items)
+                    else:
+                        l200_items = _to_text_list(chosen_obj.get(f"{top_prefix}_l200", chosen_obj.get(f"{top_prefix}_details", [])))
+                        raw_l300 = chosen_obj.get(f"{top_prefix}_l300", [])
+                        if isinstance(raw_l300, list) and raw_l300 and isinstance(raw_l300[0], list):
+                            l300_map = [list(map(str, row)) for row in raw_l300]
+                        else:
+                            as_list = _to_text_list(raw_l300)
+                            if l200_items:
+                                if len(as_list) == len(l200_items):
+                                    l300_map = [[v] if v else [] for v in as_list]
+                                else:
+                                    l300_map = [as_list] + [[] for _ in range(max(len(l200_items) - 1, 0))]
+                            else:
+                                l300_map = [as_list] if as_list else []
+                    if len(l300_map) < len(l200_items):
+                        l300_map.extend([[] for _ in range(len(l200_items) - len(l300_map))])
+                    return headline_text, l200_items, l300_map, reasoning_text
+
+                db_head, db_details, db_l300, db_reasoning = _extract_side(chosen, "databricks", "databricks")
+                comp_head, comp_details, comp_l300, comp_reasoning = _extract_side(chosen, "competitor", "competitor")
 
                 sources = _normalize_sources(chosen.get("sources", []))
                 if not sources:
@@ -3364,15 +3879,19 @@ class WorkflowRunner:
                     citations = build_fallback_citations(
                         db_details,
                         comp_details,
-                        chosen.get("databricks_reasoning", ""),
-                        chosen.get("competitor_reasoning", ""),
+                        db_reasoning,
+                        comp_reasoning,
                         sources,
                     )
                 else:
                     for key in (
+                        "databricks_headline",
                         "databricks_details",
+                        "databricks_detail_verbose",
                         "databricks_reasoning",
+                        "competitor_headline",
                         "competitor_details",
+                        "competitor_detail_verbose",
                         "competitor_reasoning",
                     ):
                         if key not in citations or not isinstance(citations.get(key), list):
@@ -3384,18 +3903,20 @@ class WorkflowRunner:
                         citations = build_fallback_citations(
                             db_details,
                             comp_details,
-                            chosen.get("databricks_reasoning", ""),
-                            chosen.get("competitor_reasoning", ""),
+                            db_reasoning,
+                            comp_reasoning,
                             sources,
                         )
 
                 return {
-                    "databricks_headline": chosen.get("databricks_headline", ""),
+                    "databricks_headline": db_head or chosen.get("databricks_headline", ""),
                     "databricks_details": db_details,
-                    "databricks_reasoning": chosen.get("databricks_reasoning", ""),
-                    "competitor_headline": chosen.get("competitor_headline", ""),
+                    "databricks_details_verbose": db_l300 if isinstance(db_l300, list) else [],
+                    "databricks_reasoning": db_reasoning or chosen.get("databricks_reasoning", ""),
+                    "competitor_headline": comp_head or chosen.get("competitor_headline", ""),
                     "competitor_details": comp_details,
-                    "competitor_reasoning": chosen.get("competitor_reasoning", ""),
+                    "competitor_details_verbose": comp_l300 if isinstance(comp_l300, list) else [],
+                    "competitor_reasoning": comp_reasoning or chosen.get("competitor_reasoning", ""),
                     "citations": citations,
                     "sources": sources,
                     "research_sources": chosen.get("research_sources", []),
@@ -3467,7 +3988,7 @@ class WorkflowRunner:
                         client=self.client,
                         model_name=self.model_name,
                         rendered_prompt=rendered,
-                        json_schema=None,
+                        json_schema=pass2_json_schema if pass2_request_spec.get("use_structured_output") else None,
                     )
                     parsed = parse_model_json(raw)
                     return {idx: _normalize_v5_v6_result(parsed, skeletons[idx]) for idx in idx_list}
@@ -3568,7 +4089,7 @@ class WorkflowRunner:
                         client=self.client,
                         model_name=self.model_name,
                         rendered_prompt=rendered,
-                        json_schema=None,
+                        json_schema=pass2_json_schema if pass2_request_spec.get("use_structured_output") else None,
                     )
                     parsed = parse_model_json(raw)
                     for idx, sk in enumerate(skeletons):
@@ -3623,9 +4144,9 @@ class WorkflowRunner:
                             client=self.client,
                             model_name=self.model_name,
                             rendered_prompt=rendered,
-                            json_schema=L200_PASS2_JSON_SCHEMA,
+                            json_schema=pass2_json_schema if pass2_request_spec.get("use_structured_output") else None,
                         )
-                        updated_claims[idx] = parse_model_json(raw)
+                        updated_claims[idx] = _normalize_v5_v6_result(parse_model_json(raw), sk)
                     except Exception as e:
                         error_str = str(e)
                         logger.error("Pass 3 regen failed for %d (%s): %s", idx, kd_name, error_str)

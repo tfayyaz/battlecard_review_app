@@ -171,7 +171,7 @@ ENGINE = _build_engine()
 # ---------------------------------------------------------------------------
 # Default context file paths (relative to project root)
 # ---------------------------------------------------------------------------
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 DEFAULT_DIRECTIVE_PATH = os.path.join(
     _PROJECT_ROOT, "generate-battlecards", "0_context", "directives",
@@ -189,6 +189,7 @@ DEFAULT_PASS1_PROMPT_V2 = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass1_planning
 DEFAULT_PASS1_PROMPT_V3 = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass1_planning_v3.md")
 DEFAULT_PASS1_PROMPT_V4 = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass1_planning_v4_per_category.md")
 DEFAULT_PASS2_PROMPT = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass2_detail_v3_factcheck.md")
+DEFAULT_PASS2_PROMPT_V10 = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass2_detail_v10_granular.md")
 DEFAULT_DIRECTIVE_PROMPT = os.path.join(
     os.path.expanduser("~"), "databricks-dev", "compete_automation",
     "battlecard-skill", "battlecards", "fabric-platform",
@@ -392,6 +393,11 @@ Return ONLY the JSON object. No markdown fences, no explanation text.
         "description": "Category-batched generation like V6, but requires inline citation verdict metadata for direct fact-check seeding.",
         "template": "inline",
     },
+    10: {
+        "label": "V10 — Granular L200/L300 + Per-Item Citations",
+        "description": "Category-batched strict JSON. Each L200 bullet and each nested L300 bullet carries explicit citations.",
+        "file": DEFAULT_PASS2_PROMPT_V10,
+    },
 }
 
 STEP4_EXECUTION_OPTIONS = {
@@ -560,15 +566,29 @@ CREATE TABLE IF NOT EXISTS claim_detail_items (
     claim_id INT NOT NULL REFERENCES claims(claim_id) ON DELETE CASCADE,
     item_order INT NOT NULL,
     item_text TEXT NOT NULL,
+    item_text_verbose TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_detail_items_claim ON claim_detail_items(claim_id);
+
+CREATE TABLE IF NOT EXISTS claim_detail_verbose_items (
+    verbose_item_id SERIAL PRIMARY KEY,
+    detail_item_id INT NOT NULL REFERENCES claim_detail_items(detail_item_id) ON DELETE CASCADE,
+    item_order INT NOT NULL,
+    item_text TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_verbose_items_detail ON claim_detail_verbose_items(detail_item_id);
 
 CREATE TABLE IF NOT EXISTS evidence (
     evidence_id SERIAL PRIMARY KEY,
     claim_id INT REFERENCES claims(claim_id),
     detail_item_id INT REFERENCES claim_detail_items(detail_item_id),
+    verbose_item_id INT REFERENCES claim_detail_verbose_items(verbose_item_id),
     traces_to_field VARCHAR(50) NOT NULL CHECK (traces_to_field IN ('headline', 'description', 'detail_item')),
+    claim_subfield VARCHAR(30) NOT NULL DEFAULT 'l200' CHECK (claim_subfield IN ('headline', 'reasoning', 'l200', 'l300')),
+    citation_id VARCHAR(120),
+    citation_order INT,
     traces_to_start_index INT NOT NULL,
     traces_to_end_index INT NOT NULL,
     traces_to_text TEXT NOT NULL,
@@ -821,6 +841,8 @@ CREATE TABLE IF NOT EXISTS prompt_templates (
     description TEXT,
     template_text TEXT NOT NULL,
     variables TEXT,
+    response_schema_json JSONB,
+    request_config_json JSONB,
     is_active BOOLEAN DEFAULT TRUE,
     is_default BOOLEAN DEFAULT FALSE,
     display_order INT DEFAULT 0,
@@ -974,7 +996,19 @@ def init_db():
         "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS step4_execution_mode VARCHAR(50) NOT NULL DEFAULT 'auto'",
         "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS step5_execution_mode VARCHAR(50) NOT NULL DEFAULT 'auto'",
         "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS step5_inline_fact_check BOOLEAN NOT NULL DEFAULT FALSE",
+        """CREATE TABLE IF NOT EXISTS claim_detail_verbose_items (
+            verbose_item_id SERIAL PRIMARY KEY,
+            detail_item_id INT NOT NULL REFERENCES claim_detail_items(detail_item_id) ON DELETE CASCADE,
+            item_order INT NOT NULL,
+            item_text TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_verbose_items_detail ON claim_detail_verbose_items(detail_item_id)",
         "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS detail_item_id INT REFERENCES claim_detail_items(detail_item_id)",
+        "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS verbose_item_id INT REFERENCES claim_detail_verbose_items(verbose_item_id)",
+        "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS claim_subfield VARCHAR(30) NOT NULL DEFAULT 'l200'",
+        "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS citation_id VARCHAR(120)",
+        "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS citation_order INT",
         "ALTER TABLE human_reviews ADD COLUMN IF NOT EXISTS detail_item_id INT REFERENCES claim_detail_items(detail_item_id)",
         "ALTER TABLE key_differentiators ADD COLUMN IF NOT EXISTS generation_id INT REFERENCES battlecard_generations(generation_id)",
         # Migrate category references from legacy product_categories -> product_category_catalog
@@ -1009,10 +1043,14 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_key_diffs_generation ON key_differentiators(generation_id)",
         "ALTER TABLE evidence DROP CONSTRAINT IF EXISTS evidence_traces_to_field_check",
         "ALTER TABLE evidence ADD CONSTRAINT evidence_traces_to_field_check CHECK (traces_to_field IN ('headline', 'description', 'detail_item'))",
+        "ALTER TABLE evidence DROP CONSTRAINT IF EXISTS evidence_claim_subfield_check",
+        "ALTER TABLE evidence ADD CONSTRAINT evidence_claim_subfield_check CHECK (claim_subfield IN ('headline', 'reasoning', 'l200', 'l300'))",
         "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMP",
         "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS worker_id VARCHAR(100)",
         # L200/L300 detail text support
         "ALTER TABLE claim_detail_items ADD COLUMN IF NOT EXISTS item_text_verbose TEXT",
+        "ALTER TABLE prompt_templates ADD COLUMN IF NOT EXISTS response_schema_json JSONB",
+        "ALTER TABLE prompt_templates ADD COLUMN IF NOT EXISTS request_config_json JSONB",
         # Error storage for workflow steps
         "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS last_error TEXT",
         "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS error_count INT DEFAULT 0",
@@ -1743,6 +1781,69 @@ Return ONLY a JSON array with one object per differentiator id:
 ]
 """
 
+    _PASS2_V10_INLINE = """\
+You generate L200 and L300 details with granular citations for ALL key differentiators in the **{{category}}** category for Databricks vs {{competitor}}.
+
+## Execution Mode
+Category-batched structured generation. Process all differentiators for this category in one call.
+You will receive {{num_diffs}} differentiators for {{category}}.
+
+## Category
+{{category}}
+
+## Key Differentiators to Process
+{{key_diffs_json}}
+
+## Additional Context
+{{context}}
+
+## Critical Rules
+1. L200 bullets: max 10 words, target 6-8 words.
+2. L300 bullets: technical proof, 2-5 bullets per L200 bullet when needed.
+3. Every factual statement in headline, each L200 bullet, each L300 bullet, and reasoning needs citations.
+4. Keep ids stable and return one object for each input id.
+
+## Output Format
+Return ONLY a JSON object:
+{
+  "claims": [
+    {
+      "id": "<same id from input>",
+      "databricks": {
+        "headline": {"text": "<3-8 words>", "citations": []},
+        "l200": [
+          {
+            "text": "<6-8 words, max 10>",
+            "citations": [],
+            "l300": [
+              {"text": "<technical detail>", "citations": []}
+            ]
+          }
+        ],
+        "reasoning": {"text": "<1-2 sentences>", "citations": []}
+      },
+      "competitor": {
+        "headline": {"text": "<3-8 words>", "citations": []},
+        "l200": [
+          {
+            "text": "<6-8 words, max 10>",
+            "citations": [],
+            "l300": [
+              {"text": "<technical detail>", "citations": []}
+            ]
+          }
+        ],
+        "reasoning": {"text": "<1-2 sentences>", "citations": []}
+      },
+      "sources": [
+        {"index": 1, "title": "<source>", "url": "<url>", "type": "documentation", "accessed_at": "<ISO timestamp>"}
+      ],
+      "research_sources": []
+    }
+  ]
+}
+"""
+
     _PASS2_INLINE_FALLBACKS = {
         1: _PASS2_V1_INLINE,
         5: _PASS2_V5_INLINE,
@@ -1750,7 +1851,30 @@ Return ONLY a JSON array with one object per differentiator id:
         7: _PASS2_V7_INLINE,
         8: _PASS2_V8_INLINE,
         9: _PASS2_V9_INLINE,
+        10: _PASS2_V10_INLINE,
     }
+
+    def _pass2_schema_config(version_num: int):
+        if version_num == 10:
+            return {
+                "response_format": "json_schema",
+                "schema_name": "l200_diff_detail_v10",
+                "strict": True,
+            }
+        if version_num not in (5, 6, 7, 8, 9):
+            return {
+                "response_format": "json_schema",
+                "schema_name": "l200_diff_detail",
+                "strict": True,
+            }
+        return None
+
+    def _pass2_request_config(version_num: int):
+        return {
+            "structured_output": version_num not in (5, 6, 7, 8, 9),
+            "supports_category_batch": version_num in (5, 6, 7, 8, 9, 10),
+            "supports_single_call": version_num in (8,),
+        }
 
     _DIRECTIVE_INLINE = (
         "Read the following slides content about competing against {{competitor}}.\n\n"
@@ -1783,6 +1907,8 @@ Return ONLY a JSON array with one object per differentiator id:
             "description": cfg.get("description", ""),
             "template_text": tpl_text or f"[Placeholder — template v{ver_num} not available]",
             "variables": json.dumps(variables),
+            "response_schema_json": None,
+            "request_config_json": None,
             "is_active": tpl_text is not None,
             "is_default": ver_num == 3,
             "display_order": ver_num,
@@ -1809,6 +1935,8 @@ Return ONLY a JSON array with one object per differentiator id:
             "description": cfg.get("description", ""),
             "template_text": tpl_text or f"[Placeholder — template v{ver_num} not available]",
             "variables": json.dumps(variables),
+            "response_schema_json": json.dumps(_pass2_schema_config(ver_num)) if _pass2_schema_config(ver_num) else None,
+            "request_config_json": json.dumps(_pass2_request_config(ver_num)),
             "is_active": tpl_text is not None,
             "is_default": ver_num == 2,
             "display_order": ver_num,
@@ -1824,6 +1952,8 @@ Return ONLY a JSON array with one object per differentiator id:
         "description": "Default directive generation prompt. Extracts competitive positioning bullets from slides content.",
         "template_text": directive_text,
         "variables": json.dumps(directive_vars),
+        "response_schema_json": None,
+        "request_config_json": None,
         "is_active": True,
         "is_default": True,
         "display_order": 1,
@@ -1845,6 +1975,8 @@ Return ONLY a JSON array with one object per differentiator id:
                             "UPDATE prompt_templates "
                             "SET template_text = :template_text, "
                             "    variables = :variables, "
+                            "    response_schema_json = CAST(:response_schema_json AS jsonb), "
+                            "    request_config_json = CAST(:request_config_json AS jsonb), "
                             "    is_active = :is_active, "
                             "    updated_at = CURRENT_TIMESTAMP "
                             "WHERE template_name = :template_name "
@@ -1852,12 +1984,14 @@ Return ONLY a JSON array with one object per differentiator id:
                             "template_text LIKE '[Placeholder%' "
                             "OR template_text = 'inline' "
                             "OR LENGTH(template_text) < 100 "
-                            "OR template_name IN ('pass2_v5', 'pass2_v6', 'pass2_v7', 'pass2_v8', 'pass2_v9')"
+                            "OR template_name IN ('pass2_v5', 'pass2_v6', 'pass2_v7', 'pass2_v8', 'pass2_v9', 'pass2_v10')"
                             ")"
                         ),
                         {
                             "template_text": seed["template_text"],
                             "variables": seed["variables"],
+                            "response_schema_json": seed["response_schema_json"],
+                            "request_config_json": seed["request_config_json"],
                             "is_active": seed["is_active"],
                             "template_name": seed["template_name"],
                         },
@@ -1869,8 +2003,8 @@ Return ONLY a JSON array with one object per differentiator id:
                     conn.execute(
                         text(
                             "INSERT INTO prompt_templates "
-                            "(template_name, template_type, version_label, description, template_text, variables, is_active, is_default, display_order) "
-                            "VALUES (:template_name, :template_type, :version_label, :description, :template_text, :variables, :is_active, :is_default, :display_order) "
+                            "(template_name, template_type, version_label, description, template_text, variables, response_schema_json, request_config_json, is_active, is_default, display_order) "
+                            "VALUES (:template_name, :template_type, :version_label, :description, :template_text, :variables, CAST(:response_schema_json AS jsonb), CAST(:request_config_json AS jsonb), :is_active, :is_default, :display_order) "
                             "ON CONFLICT (template_name) DO NOTHING"
                         ),
                         seed,
@@ -1886,8 +2020,8 @@ Return ONLY a JSON array with one object per differentiator id:
                 conn.execute(
                     text(
                         "INSERT INTO prompt_templates "
-                        "(template_name, template_type, version_label, description, template_text, variables, is_active, is_default, display_order) "
-                        "VALUES (:template_name, :template_type, :version_label, :description, :template_text, :variables, :is_active, :is_default, :display_order)"
+                        "(template_name, template_type, version_label, description, template_text, variables, response_schema_json, request_config_json, is_active, is_default, display_order) "
+                        "VALUES (:template_name, :template_type, :version_label, :description, :template_text, :variables, CAST(:response_schema_json AS jsonb), CAST(:request_config_json AS jsonb), :is_active, :is_default, :display_order)"
                     ),
                     seed,
                 )
@@ -2268,15 +2402,18 @@ def estimate_prompt_tokens(session_id: str, step_number: int) -> dict:
         }
     """
     from workflow_runner import (
-        DEFAULT_PASS1_PROMPT, DEFAULT_PASS2_PROMPT,
-        load_prompt_template, render_template as render_prompt,
+        load_pass1_template,
+        load_pass2_template,
+        render_template as render_prompt,
         format_context_xml,
     )
 
     with ENGINE.begin() as conn:
         session = conn.execute(
             text(
-                "SELECT competitor_name, product_area, model_name, diffs_per_category "
+                "SELECT competitor_name, product_area, model_name, diffs_per_category, "
+                "COALESCE(pass1_prompt_template_version, 2) AS pass1_prompt_template_version, "
+                "COALESCE(pass2_prompt_template_version, 2) AS pass2_prompt_template_version "
                 "FROM workflow_sessions WHERE session_id::text = :sid"
             ),
             {"sid": session_id},
@@ -2308,10 +2445,11 @@ def estimate_prompt_tokens(session_id: str, step_number: int) -> dict:
 
     if step_number == 4:
         # Pass 1 prompt
+        p1_ver = int(session.get("pass1_prompt_template_version") or 2)
         try:
-            template_text = load_prompt_template(DEFAULT_PASS1_PROMPT)
+            template_text, _ = load_pass1_template(p1_ver, engine=ENGINE)
         except FileNotFoundError:
-            return {"error": "Pass 1 prompt template not found"}
+            return {"error": f"Pass 1 prompt template V{p1_ver} not found"}
 
         categories_content = _get_artifact("product_categories") or ""
         categories = [c.strip() for c in categories_content.split("\n") if c.strip()]
@@ -2341,10 +2479,11 @@ def estimate_prompt_tokens(session_id: str, step_number: int) -> dict:
 
     elif step_number == 5:
         # Pass 2 prompt — estimate for a single skeleton (they all share the same context)
+        p2_ver = int(session.get("pass2_prompt_template_version") or 2)
         try:
-            template_text = load_prompt_template(DEFAULT_PASS2_PROMPT)
+            template_text = load_pass2_template(p2_ver, engine=ENGINE)
         except FileNotFoundError:
-            return {"error": "Pass 2 prompt template not found"}
+            return {"error": f"Pass 2 prompt template V{p2_ver} not found"}
 
         skeletons_json = _get_artifact("pass1_skeletons")
         num_skeletons = 0
@@ -2364,7 +2503,7 @@ def estimate_prompt_tokens(session_id: str, step_number: int) -> dict:
                     databricks_rating=sk.get("databricks_rating", ""),
                     competitor_rating=sk.get("competitor_rating", ""),
                     selection_reasoning=sk.get("selection_reasoning", ""),
-                    directives=directive,
+                    directives="" if p2_ver in (5, 6, 7, 8, 9, 10) else directive,
                     context=context,
                 )
 
@@ -2565,28 +2704,44 @@ def _fetch_generation_by_uuid(battlecard_id):
     return row
 
 
-def _build_detail_items(claim, detail_items_by_claim):
+def _build_detail_items(claim, detail_items_by_claim, verbose_items_by_detail=None):
     """Build structured detail items list for a claim.
-    Returns list of dicts with detail_item_id, item_order, text (L200), and text_verbose (L300).
+    Returns list of dicts with detail_item_id, item_order, text (L200), and verbose_items (L300).
     Falls back to wrapping description in a single-item list for legacy claims.
     """
     if not claim:
         return []
+    verbose_items_by_detail = verbose_items_by_detail or {}
     items = detail_items_by_claim.get(claim["claim_id"], [])
     if items:
-        return [
-            {
-                "detail_item_id": di["detail_item_id"],
-                "item_order": di["item_order"],
-                "text": di["item_text"],  # L200 concise
-                "text_verbose": di.get("item_text_verbose"),  # L300 verbose (may be None for older data)
-            }
-            for di in items
-        ]
+        out = []
+        for di in items:
+            v_items = verbose_items_by_detail.get(di["detail_item_id"], [])
+            text_verbose = di.get("item_text_verbose")
+            if not v_items and text_verbose:
+                v_items = [
+                    {"verbose_item_id": None, "item_order": 0, "text": text_verbose}
+                ]
+            out.append(
+                {
+                    "detail_item_id": di["detail_item_id"],
+                    "item_order": di["item_order"],
+                    "text": di["item_text"],
+                    "text_verbose": "\n".join([v.get("text", "") for v in v_items if v.get("text")]) if v_items else None,
+                    "verbose_items": v_items,
+                }
+            )
+        return out
     # Legacy fallback: no detail items, wrap description
     desc = claim.get("description") or ""
     if desc:
-        return [{"detail_item_id": None, "item_order": 0, "text": desc, "text_verbose": None}]
+        return [{
+            "detail_item_id": None,
+            "item_order": 0,
+            "text": desc,
+            "text_verbose": None,
+            "verbose_items": [],
+        }]
     return []
 
 
@@ -2650,7 +2805,7 @@ def load_battlecard_slides(battlecard_id):
 
         fact_checks = conn.execute(
             text(
-                "SELECT fc.*, e.claim_id, e.detail_item_id, e.traces_to_field, e.traces_to_start_index, e.traces_to_end_index, "
+                "SELECT fc.*, e.claim_id, e.detail_item_id, e.verbose_item_id, e.traces_to_field, e.claim_subfield, e.citation_id, e.traces_to_start_index, e.traces_to_end_index, "
                 "s.source_name, s.source_url, s.source_type "
                 "FROM fact_checks fc "
                 "JOIN evidence e ON fc.evidence_id = e.evidence_id "
@@ -2672,10 +2827,30 @@ def load_battlecard_slides(battlecard_id):
             {"gid": gen_id},
         ).mappings().all()
 
+        verbose_items = conn.execute(
+            text(
+                "SELECT vi.* FROM claim_detail_verbose_items vi "
+                "JOIN claim_detail_items di ON vi.detail_item_id = di.detail_item_id "
+                "JOIN claims cl ON di.claim_id = cl.claim_id "
+                "WHERE cl.generation_id = :gid "
+                "ORDER BY vi.detail_item_id, vi.item_order"
+            ),
+            {"gid": gen_id},
+        ).mappings().all()
+
     # Build detail_items lookup by claim_id
     detail_items_by_claim = {}
     for di in detail_items:
         detail_items_by_claim.setdefault(di["claim_id"], []).append(di)
+    verbose_items_by_detail = {}
+    for vi in verbose_items:
+        verbose_items_by_detail.setdefault(vi["detail_item_id"], []).append(
+            {
+                "verbose_item_id": vi["verbose_item_id"],
+                "item_order": vi["item_order"],
+                "text": vi["item_text"],
+            }
+        )
 
     claims_by_keydiff = {}
     for c in claims:
@@ -2719,12 +2894,25 @@ def load_battlecard_slides(battlecard_id):
             if not claim:
                 return citations
             for e in evidence_by_claim.get(claim["claim_id"], []):
-                field = "headline" if e["traces_to_field"] == "headline" else "details"
+                subfield = (e.get("claim_subfield") or "").strip().lower()
+                if subfield == "headline":
+                    field = "headline"
+                elif subfield == "reasoning":
+                    field = "reasoning"
+                elif subfield == "l300":
+                    field = "detail_verbose"
+                else:
+                    field = "details"
                 field_name = f"{prefix}_{field}"
                 idx = add_source(e["generation_source_id"], e.get("source_name"), e.get("source_url"), e.get("source_type"))
                 entry = {
-                    "citation_id": f"ev-{e['evidence_id']}",
+                    "evidence_id": e.get("evidence_id"),
+                    "generation_source_id": e.get("generation_source_id"),
+                    "citation_id": e.get("citation_id") or f"ev-{e['evidence_id']}",
                     "detail_item_id": e.get("detail_item_id"),
+                    "verbose_item_id": e.get("verbose_item_id"),
+                    "claim_subfield": subfield or ("headline" if e["traces_to_field"] == "headline" else "l200"),
+                    "citation_order": e.get("citation_order"),
                     "start_index": int(e["traces_to_start_index"]),
                     "end_index": int(e["traces_to_end_index"]),
                     "source_index": idx,
@@ -2745,7 +2933,15 @@ def load_battlecard_slides(battlecard_id):
             if not claim:
                 return output
             for fc in fact_checks_by_claim.get(claim["claim_id"], []):
-                field = "headline" if fc["traces_to_field"] == "headline" else "details"
+                subfield = (fc.get("claim_subfield") or "").strip().lower()
+                if subfield == "headline":
+                    field = "headline"
+                elif subfield == "reasoning":
+                    field = "reasoning"
+                elif subfield == "l300":
+                    field = "detail_verbose"
+                else:
+                    field = "details"
                 claim_field = f"{prefix}_{field}"
                 confidence = None
                 if fc.get("confidence_score") is not None:
@@ -2767,6 +2963,7 @@ def load_battlecard_slides(battlecard_id):
                         "fact_check_id": str(fc["fact_check_id"]),
                         "claim_field": claim_field,
                         "detail_item_id": fc.get("detail_item_id"),
+                        "verbose_item_id": fc.get("verbose_item_id"),
                         "claim_start_index": int(fc["traces_to_start_index"]),
                         "claim_end_index": int(fc["traces_to_end_index"]),
                         "verdict": fc.get("status"),
@@ -2791,8 +2988,8 @@ def load_battlecard_slides(battlecard_id):
         slide_fact_checks.extend(build_fact_checks(db_claim, "databricks"))
         slide_fact_checks.extend(build_fact_checks(fab_claim, "fabric"))
 
-        db_detail_items = _build_detail_items(db_claim, detail_items_by_claim)
-        fab_detail_items = _build_detail_items(fab_claim, detail_items_by_claim)
+        db_detail_items = _build_detail_items(db_claim, detail_items_by_claim, verbose_items_by_detail)
+        fab_detail_items = _build_detail_items(fab_claim, detail_items_by_claim, verbose_items_by_detail)
 
         # Flat text fallback for backward compatibility
         db_details_flat = " ".join(it["text"] for it in db_detail_items) if db_detail_items else ""
@@ -2922,7 +3119,8 @@ def load_battlecard_fact_checks(battlecard_id):
     with ENGINE.begin() as conn:
         rows = conn.execute(
             text(
-                "SELECT fc.*, e.claim_id, e.detail_item_id, e.traces_to_field, e.traces_to_start_index, e.traces_to_end_index, "
+                "SELECT fc.*, e.claim_id, e.detail_item_id, e.verbose_item_id, e.claim_subfield, "
+                "e.citation_id, e.traces_to_field, e.traces_to_start_index, e.traces_to_end_index, "
                 "e.traces_to_text, e.generation_source_text, "
                 "s.source_name AS fc_source_name, s.source_url AS fc_source_url, s.source_type AS fc_source_type, "
                 "gs.source_name AS generation_source_name, gs.source_url AS generation_source_url, gs.source_type AS generation_source_type, "
@@ -2947,16 +3145,27 @@ def load_battlecard_fact_checks(battlecard_id):
         if r.get("confidence_score") is not None:
             confidence = float(r.get("confidence_score")) / 100.0
 
-        # Build vendor-prefixed claim_field (e.g. databricks_headline, fabric_details)
+        # Build vendor-prefixed claim_field (e.g. databricks_headline, fabric_detail_verbose)
         vendor_prefix = "databricks" if r.get("company_type") == "databricks" else "fabric"
-        field = "headline" if r.get("traces_to_field") == "headline" else "details"
+        subfield = (r.get("claim_subfield") or "").strip().lower()
+        if subfield == "headline":
+            field = "headline"
+        elif subfield == "reasoning":
+            field = "reasoning"
+        elif subfield == "l300":
+            field = "detail_verbose"
+        else:
+            field = "details"
         claim_field = f"{vendor_prefix}_{field}"
 
         entry = {
             "fact_check_id": str(r.get("fact_check_id")),
+            "evidence_id": r.get("evidence_id"),
+            "citation_id": r.get("citation_id"),
             "claim": r.get("traces_to_text") or "",
             "claim_field": claim_field,
             "detail_item_id": r.get("detail_item_id"),
+            "verbose_item_id": r.get("verbose_item_id"),
             "claim_start_index": int(r.get("traces_to_start_index")),
             "claim_end_index": int(r.get("traces_to_end_index")),
             "verdict": r.get("status"),
@@ -2995,6 +3204,102 @@ def load_agent_session(battlecard_id):
 
 def get_key_diff_theme_coverage(battlecard_id):
     return []
+
+
+def _find_internal_source_context(session_id, source_text):
+    """Locate source_text in workflow context artifacts and return a focused excerpt."""
+    if not session_id or not source_text:
+        return None
+
+    with ENGINE.begin() as conn:
+        arts = conn.execute(
+            text(
+                "SELECT artifact_id, step_number, artifact_type, artifact_name, artifact_content "
+                "FROM workflow_artifacts "
+                "WHERE session_id::text = :sid "
+                "AND artifact_type IN ('directive_generated', 'directive_upload', 'old_battlecard_extracted', "
+                "'old_battlecard_upload', 'product_categories', 'category_selections') "
+                "ORDER BY step_number, created_at DESC"
+            ),
+            {"sid": session_id},
+        ).mappings().all()
+        try:
+            dbg_rows = conn.execute(
+                text(
+                    "SELECT log_id, skeleton_index, key_differentiator, rendered_prompt "
+                    "FROM pass2_debug_logs "
+                    "WHERE session_id::text = :sid "
+                    "ORDER BY created_at DESC LIMIT 40"
+                ),
+                {"sid": session_id},
+            ).mappings().all()
+        except Exception:
+            dbg_rows = []
+
+    needle = (source_text or "").strip()
+    if not needle:
+        return None
+
+    for a in arts:
+        content = a.get("artifact_content") or ""
+        if not content:
+            continue
+
+        idx = content.find(needle)
+        if idx < 0:
+            short = needle[:120]
+            if short:
+                idx = content.lower().find(short.lower())
+        if idx < 0:
+            words = [w for w in needle.split() if len(w) >= 5][:6]
+            if words:
+                probe = " ".join(words)
+                idx = content.lower().find(probe.lower())
+
+        if idx >= 0:
+            before = max(0, idx - 500)
+            after = min(len(content), idx + len(needle) + 500)
+            return {
+                "artifact_id": a["artifact_id"],
+                "artifact_type": a["artifact_type"],
+                "artifact_name": a["artifact_name"],
+                "step_number": a["step_number"],
+                "match_start": idx,
+                "match_end": idx + len(needle),
+                "excerpt_start": before,
+                "excerpt_end": after,
+                "excerpt_text": content[before:after],
+            }
+
+    for d in dbg_rows:
+        content = d.get("rendered_prompt") or ""
+        if not content:
+            continue
+        idx = content.find(needle)
+        if idx < 0:
+            short = needle[:120]
+            if short:
+                idx = content.lower().find(short.lower())
+        if idx < 0:
+            continue
+        before = max(0, idx - 500)
+        after = min(len(content), idx + len(needle) + 500)
+        return {
+            "artifact_id": None,
+            "artifact_type": "pass2_debug_prompt",
+            "artifact_name": f"pass2_debug_log_{d.get('log_id')}",
+            "step_number": 5,
+            "match_start": idx,
+            "match_end": idx + len(needle),
+            "excerpt_start": before,
+            "excerpt_end": after,
+            "excerpt_text": content[before:after],
+            "debug_log_id": d.get("log_id"),
+            "skeleton_index": d.get("skeleton_index"),
+            "key_differentiator": d.get("key_differentiator"),
+        }
+
+    return None
 
 
 def get_fact_check_summary_by_gen(gen_id):
@@ -3359,7 +3664,7 @@ def _load_prompt_templates_for_ui():
 
 
 def _pass2_supports_category_batch(version: int) -> bool:
-    return int(version or 0) in (5, 6, 7, 8, 9)
+    return int(version or 0) in (5, 6, 7, 8, 9, 10)
 
 
 def _pass2_supports_single_call(version: int) -> bool:
@@ -3487,7 +3792,7 @@ def _resolve_step5_execution(pass2_ver: int, mode: str, workers: int, core_count
         return _category(parallel=False, explicit=True)
 
     # auto
-    if pass2_ver in (5, 6, 7, 8, 9):
+    if pass2_ver in (5, 6, 7, 8, 9, 10):
         return _category(parallel=True, explicit=False)
     return _per_diff(parallel=True, explicit=False)
 
@@ -3905,6 +4210,113 @@ def submit_uc_feedback():
     return jsonify({"success": True, "scores": scores, "human_review_id": review_id})
 
 
+@app.route('/api/uc/citation-feedback', methods=['POST'])
+def submit_uc_citation_feedback():
+    """Persist human review for a single citation/evidence row."""
+    data = request.json or {}
+    battlecard_id = data.get("battlecard_id")
+    diff_id = data.get("diff_id")
+    evidence_id = data.get("evidence_id")
+    fact_check_id = data.get("fact_check_id")
+    status = (data.get("status") or "").strip()
+    comment = (data.get("comment") or "").strip()
+
+    if not battlecard_id or not diff_id or not evidence_id:
+        return jsonify({"error": "battlecard_id, diff_id, and evidence_id are required"}), 400
+
+    status_map = {
+        "approved": "approve",
+        "needs_revision": "request_edit",
+        "rejected": "reject",
+    }
+    review_type = status_map.get(status, "provide_feedback")
+
+    gen = _fetch_generation_by_uuid(battlecard_id)
+    if not gen:
+        return jsonify({"error": "Battlecard not found"}), 404
+
+    payload = {
+        "scope": f"citation:{evidence_id}",
+        "diff_id": diff_id,
+        "comment": comment,
+        "status": status,
+        "evidence_id": int(evidence_id),
+        "fact_check_id": int(fact_check_id) if fact_check_id else None,
+    }
+
+    with ENGINE.begin() as conn:
+        review_id = conn.execute(
+            text(
+                "INSERT INTO human_reviews (generation_id, claim_id, detail_item_id, evidence_id, fact_check_id, "
+                "review_type, feedback_text, reviewed_by, reviewer_role) "
+                "VALUES (:gen, NULL, NULL, :eid, :fcid, :rtype, :feedback, :by, :role) "
+                "RETURNING review_id"
+            ),
+            {
+                "gen": gen["generation_id"],
+                "eid": int(evidence_id),
+                "fcid": int(fact_check_id) if fact_check_id else None,
+                "rtype": review_type,
+                "feedback": json.dumps(payload),
+                "by": "anonymous",
+                "role": "reviewer",
+            },
+        ).scalar()
+
+    return jsonify({"success": True, "review_id": review_id})
+
+
+@app.route('/api/uc/fact-check-feedback', methods=['POST'])
+def submit_uc_fact_check_feedback():
+    """Persist human feedback for a fact-check verdict row."""
+    data = request.json or {}
+    battlecard_id = data.get("battlecard_id")
+    diff_id = data.get("diff_id")
+    fact_check_id = data.get("fact_check_id")
+    status = (data.get("status") or "").strip()
+    comment = (data.get("comment") or "").strip()
+    if not battlecard_id or not fact_check_id:
+        return jsonify({"error": "battlecard_id and fact_check_id are required"}), 400
+
+    gen = _fetch_generation_by_uuid(battlecard_id)
+    if not gen:
+        return jsonify({"error": "Battlecard not found"}), 404
+
+    status_map = {
+        "approved": "approve",
+        "needs_revision": "request_edit",
+        "rejected": "reject",
+    }
+    review_type = status_map.get(status, "override_fact_check")
+    payload = {
+        "scope": f"fact_check:{fact_check_id}",
+        "diff_id": diff_id,
+        "comment": comment,
+        "status": status,
+        "fact_check_id": int(fact_check_id),
+    }
+
+    with ENGINE.begin() as conn:
+        review_id = conn.execute(
+            text(
+                "INSERT INTO human_reviews (generation_id, claim_id, detail_item_id, evidence_id, fact_check_id, "
+                "review_type, feedback_text, reviewed_by, reviewer_role) "
+                "VALUES (:gen, NULL, NULL, NULL, :fcid, :rtype, :feedback, :by, :role) "
+                "RETURNING review_id"
+            ),
+            {
+                "gen": gen["generation_id"],
+                "fcid": int(fact_check_id),
+                "rtype": review_type,
+                "feedback": json.dumps(payload),
+                "by": "anonymous",
+                "role": "reviewer",
+            },
+        ).scalar()
+
+    return jsonify({"success": True, "review_id": review_id})
+
+
 @app.route('/api/uc/reorder', methods=['POST'])
 def reorder_key_diffs():
     data = request.json
@@ -3940,6 +4352,62 @@ def get_battlecard_status(battlecard_id):
     if not gen:
         return jsonify({"status": "unknown"})
     return jsonify({"status": gen.get("status", "unknown")})
+
+
+@app.route('/api/battlecard/<battlecard_id>/citation/<int:evidence_id>/context')
+def get_battlecard_citation_context(battlecard_id, evidence_id):
+    """Resolve an internal citation to a context-document excerpt and location."""
+    gen = _fetch_generation_by_uuid(battlecard_id)
+    if not gen:
+        return jsonify({"error": "Battlecard not found"}), 404
+
+    with ENGINE.begin() as conn:
+        row = conn.execute(
+            text(
+                "SELECT e.evidence_id, e.traces_to_text, e.generation_source_text, "
+                "e.traces_to_start_index, e.traces_to_end_index, e.citation_id, "
+                "s.source_id, s.source_name, s.source_url, s.source_type "
+                "FROM evidence e "
+                "JOIN claims c ON c.claim_id = e.claim_id "
+                "LEFT JOIN sources s ON s.source_id = e.generation_source_id "
+                "WHERE e.evidence_id = :eid AND c.generation_id = :gid"
+            ),
+            {"eid": evidence_id, "gid": gen["generation_id"]},
+        ).mappings().first()
+        if not row:
+            return jsonify({"error": "Citation evidence not found"}), 404
+
+    session_id = _lookup_workflow_session_for_battlecard(battlecard_id)
+    source_text = (row.get("generation_source_text") or row.get("traces_to_text") or "").strip()
+    context_match = _find_internal_source_context(session_id, source_text)
+    if not context_match:
+        context_match = {
+            "artifact_id": None,
+            "artifact_type": "evidence_snapshot",
+            "artifact_name": row.get("source_name") or "Internal evidence",
+            "step_number": None,
+            "match_start": int(row.get("traces_to_start_index") or 0),
+            "match_end": int(row.get("traces_to_end_index") or 0),
+            "excerpt_start": int(row.get("traces_to_start_index") or 0),
+            "excerpt_end": int(row.get("traces_to_end_index") or 0),
+            "excerpt_text": source_text,
+        }
+
+    result = {
+        "battlecard_id": battlecard_id,
+        "session_id": session_id,
+        "evidence_id": row["evidence_id"],
+        "citation_id": row.get("citation_id"),
+        "source_id": row.get("source_id"),
+        "source_name": row.get("source_name") or "Internal document",
+        "source_url": row.get("source_url") or "",
+        "source_type": row.get("source_type") or "",
+        "source_quote": source_text,
+        "traces_start_index": row.get("traces_to_start_index"),
+        "traces_end_index": row.get("traces_to_end_index"),
+        "context_match": context_match,
+    }
+    return jsonify(result)
 
 
 @app.route('/api/context-document/<doc_id>')
@@ -5568,6 +6036,7 @@ def workflow_step_prompt_preview(session_id, step_number):
         load_prompt_template, render_template as render_prompt,
         format_context_xml, load_pass1_template, load_pass2_template,
         load_directive_template,
+        get_pass2_request_spec,
         resolve_context_source_flags,
     )
 
@@ -5819,7 +6288,7 @@ def workflow_step_prompt_preview(session_id, step_number):
 
         directive = (_get_artifact("directive_generated") or "[Directive not yet generated]") if context_flags["directive"] else ""
         context = _build_preview_context()
-        directives_for_template = "" if p2_ver in (5, 6, 7, 8, 9) else directive
+        directives_for_template = "" if p2_ver in (5, 6, 7, 8, 9, 10) else directive
 
         # Try to get first skeleton for a realistic preview
         skeletons_json = _get_artifact("pass1_skeletons")
@@ -5890,6 +6359,8 @@ def workflow_step_prompt_preview(session_id, step_number):
             "variables": variables,
             "prompt": rendered,
             "prompt_version": p2_ver,
+            "request_preview": get_pass2_request_spec(p2_ver).get("request_preview"),
+            "response_schema_json": get_pass2_request_spec(p2_ver).get("schema"),
             "note": (
                 f"Preview uses runtime execution mode `{step5_exec['runtime_mode']}`. "
                 f"Inline fact-check seeding is {'enabled' if session.get('step5_inline_fact_check') else 'disabled'}."
@@ -6218,6 +6689,7 @@ def admin_prompts():
                 text(
                     "SELECT template_id, template_name, template_type, version_label, "
                     "description, LENGTH(template_text) AS char_count, variables, "
+                    "response_schema_json, request_config_json, "
                     "is_active, is_default, display_order, created_at, updated_at "
                     "FROM prompt_templates ORDER BY template_type, display_order"
                 )
@@ -6257,6 +6729,7 @@ def api_list_prompts():
                 text(
                     "SELECT template_id, template_name, template_type, version_label, "
                     "description, LENGTH(template_text) AS char_count, variables, "
+                    "response_schema_json, request_config_json, "
                     "is_active, is_default, display_order, created_at, updated_at "
                     "FROM prompt_templates ORDER BY template_type, display_order"
                 )
@@ -6277,7 +6750,7 @@ def api_get_prompt(template_id):
         row = conn.execute(
             text(
                 "SELECT template_id, template_name, template_type, version_label, "
-                "description, template_text, variables, is_active, is_default, "
+                "description, template_text, variables, response_schema_json, request_config_json, is_active, is_default, "
                 "display_order, created_at, updated_at "
                 "FROM prompt_templates WHERE template_id = :tid"
             ),
@@ -6309,6 +6782,18 @@ def api_create_prompt():
 
     # Auto-extract variables
     variables = sorted(set(re.findall(r'\{\{(\w+)\}\}', template_text)))
+    schema_payload = data.get("response_schema_json")
+    request_cfg_payload = data.get("request_config_json")
+    if isinstance(schema_payload, str):
+        try:
+            schema_payload = json.loads(schema_payload)
+        except json.JSONDecodeError:
+            schema_payload = None
+    if isinstance(request_cfg_payload, str):
+        try:
+            request_cfg_payload = json.loads(request_cfg_payload)
+        except json.JSONDecodeError:
+            request_cfg_payload = None
 
     with ENGINE.begin() as conn:
         # Determine next display_order for this type
@@ -6328,8 +6813,8 @@ def api_create_prompt():
             text(
                 "INSERT INTO prompt_templates "
                 "(template_name, template_type, version_label, description, template_text, "
-                "variables, is_active, is_default, display_order) "
-                "VALUES (:name, :ttype, :label, :desc, :text, :vars, :active, :default, :order) "
+                "variables, response_schema_json, request_config_json, is_active, is_default, display_order) "
+                "VALUES (:name, :ttype, :label, :desc, :text, :vars, CAST(:schema AS jsonb), CAST(:request_cfg AS jsonb), :active, :default, :order) "
                 "RETURNING template_id"
             ),
             {
@@ -6339,6 +6824,8 @@ def api_create_prompt():
                 "desc": data.get('description', ''),
                 "text": template_text,
                 "vars": json.dumps(variables),
+                "schema": json.dumps(schema_payload) if schema_payload is not None else None,
+                "request_cfg": json.dumps(request_cfg_payload) if request_cfg_payload is not None else None,
                 "active": bool(data.get('is_active', True)),
                 "default": is_default,
                 "order": int(max_order) + 1,
@@ -6353,6 +6840,18 @@ def api_update_prompt(template_id):
     """Update an existing prompt template."""
     import re
     data = request.json
+    schema_payload = data.get("response_schema_json") if isinstance(data, dict) else None
+    request_cfg_payload = data.get("request_config_json") if isinstance(data, dict) else None
+    if isinstance(schema_payload, str):
+        try:
+            schema_payload = json.loads(schema_payload)
+        except json.JSONDecodeError:
+            schema_payload = None
+    if isinstance(request_cfg_payload, str):
+        try:
+            request_cfg_payload = json.loads(request_cfg_payload)
+        except json.JSONDecodeError:
+            request_cfg_payload = None
 
     with ENGINE.begin() as conn:
         existing = conn.execute(
@@ -6386,6 +6885,12 @@ def api_update_prompt(template_id):
         if "is_active" in data:
             sets.append("is_active = :active")
             params["active"] = bool(data["is_active"])
+        if "response_schema_json" in data:
+            sets.append("response_schema_json = CAST(:schema AS jsonb)")
+            params["schema"] = json.dumps(schema_payload) if schema_payload is not None else None
+        if "request_config_json" in data:
+            sets.append("request_config_json = CAST(:request_cfg AS jsonb)")
+            params["request_cfg"] = json.dumps(request_cfg_payload) if request_cfg_payload is not None else None
         if "display_order" in data:
             sets.append("display_order = :order")
             params["order"] = int(data["display_order"])
@@ -6421,23 +6926,34 @@ def api_delete_prompt(template_id):
 @app.route('/api/admin/prompts/<int:template_id>/test', methods=['POST'])
 def api_test_prompt(template_id):
     """Render a prompt template with real session data for testing."""
-    from workflow_runner import render_template as render_prompt, format_context_xml
+    from workflow_runner import (
+        render_template as render_prompt,
+        format_context_xml,
+        get_pass2_request_spec,
+    )
 
     data = request.json or {}
     session_id = data.get('session_id')
 
     with ENGINE.begin() as conn:
         tpl = conn.execute(
-            text("SELECT template_text, template_type, variables FROM prompt_templates WHERE template_id = :tid"),
+            text(
+                "SELECT template_name, template_text, template_type, variables, display_order, "
+                "response_schema_json, request_config_json "
+                "FROM prompt_templates WHERE template_id = :tid"
+            ),
             {"tid": template_id},
         ).mappings().first()
         if not tpl:
             return jsonify({"error": "Template not found"}), 404
 
+    template_name = tpl["template_name"]
     template_text = tpl["template_text"]
     template_type = tpl["template_type"]
     variables_json = tpl["variables"]
     variables_list = json.loads(variables_json) if variables_json else []
+    stored_schema = tpl.get("response_schema_json")
+    stored_request_cfg = tpl.get("request_config_json")
 
     # Build variables from session data (if session_id provided)
     variables = {}
@@ -6554,11 +7070,40 @@ def api_test_prompt(template_id):
     except Exception:
         token_count = len(rendered) // 4
 
+    response_schema_json = stored_schema
+    request_config_json = stored_request_cfg
+    request_preview = None
+    if template_type == "pass2":
+        pass2_ver = None
+        if template_name and template_name.startswith("pass2_v"):
+            try:
+                pass2_ver = int(template_name.split("pass2_v", 1)[1])
+            except (TypeError, ValueError):
+                pass
+        if pass2_ver is None:
+            try:
+                pass2_ver = int(tpl.get("display_order"))
+            except (TypeError, ValueError):
+                pass2_ver = None
+        if pass2_ver is not None:
+            req_spec = get_pass2_request_spec(pass2_ver)
+            if response_schema_json is None:
+                response_schema_json = req_spec.get("schema")
+            request_preview = req_spec.get("request_preview")
+            if request_config_json is None:
+                request_config_json = {
+                    "structured_output": bool(req_spec.get("use_structured_output")),
+                    "response_format_type": req_spec.get("response_format_type"),
+                }
+
     return jsonify({
         "rendered_prompt": rendered,
         "variables": variables,
         "token_count": token_count,
         "char_count": len(rendered),
+        "response_schema_json": response_schema_json,
+        "request_config_json": request_config_json,
+        "request_preview": request_preview,
     })
 
 

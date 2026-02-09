@@ -64,6 +64,22 @@
             color: var(--text);
         }
 
+        .mode-badge {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: #eef2ff;
+            color: #4338ca;
+        }
+        .mode-badge.view {
+            background: #f3f4f6;
+            color: #4b5563;
+        }
+
         .header-stats {
             display: flex;
             gap: 12px;
@@ -153,6 +169,76 @@
             max-width: 1400px;
             margin: 0 auto;
             padding: 16px;
+        }
+
+        .review-save-status {
+            position: fixed;
+            top: 74px;
+            right: 16px;
+            z-index: 1400;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: #fff;
+            color: var(--text-secondary);
+            opacity: 0;
+            transform: translateY(-8px);
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            pointer-events: none;
+        }
+        .review-save-status.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .review-save-status.saving {
+            background: #eff6ff;
+            color: #1d4ed8;
+            border-color: #bfdbfe;
+        }
+        .review-save-status.saved {
+            background: #ecfdf5;
+            color: #065f46;
+            border-color: #a7f3d0;
+        }
+        .review-save-status.error {
+            background: #fef2f2;
+            color: #991b1b;
+            border-color: #fecaca;
+        }
+
+        .category-nav {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 12px;
+            padding: 10px;
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+        }
+        .category-nav-title {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-secondary);
+            margin-right: 8px;
+            align-self: center;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+        .category-nav a {
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--teal);
+            border: 1px solid #cbd5e1;
+            border-radius: 999px;
+            padding: 4px 10px;
+            background: #f8fafc;
+        }
+        .category-nav a:hover {
+            background: #e2e8f0;
         }
 
         .category-section {
@@ -513,6 +599,35 @@
         body.hide-rating-eval td:nth-child(2) .review-details { display: none !important; }
         body.hide-rating-eval td:nth-child(3) .score-buttons { display: none !important; }
         body.hide-rating-eval td:nth-child(3) .review-details { display: none !important; }
+
+        /* View-only mode: keep evidence visibility, disable editing controls */
+        body.view-only .add-diff-btn,
+        body.view-only .drag-handle {
+            display: none !important;
+        }
+        body.view-only .score-btn,
+        body.view-only .expand-btn,
+        body.view-only .btn-approve-all,
+        body.view-only .btn-needs-work,
+        body.view-only .btn-reject-all,
+        body.view-only .btn-comment,
+        body.view-only .save-btn,
+        body.view-only .fc-action-btn,
+        body.view-only .citation-eval-btn {
+            pointer-events: none;
+            opacity: 0.55;
+        }
+        body.view-only .comment-input,
+        body.view-only .inline-comment-box textarea,
+        body.view-only #citationComment {
+            pointer-events: none;
+            background: #f3f4f6;
+        }
+        body.view-only .inline-comment-box .btn-save,
+        body.view-only .inline-comment-box .btn-cancel {
+            pointer-events: none;
+            opacity: 0.55;
+        }
 
         /* Hidden details state - hide description, headline details */
         body.hide-details .diff-desc { display: none !important; }
@@ -1400,32 +1515,31 @@
             height: 100%;
             background: rgba(0,0,0,0.3);
             z-index: 999;
+            align-items: center;
+            justify-content: center;
         }
 
-        .citation-panel-overlay.open { display: block; }
+        .citation-panel-overlay.open { display: flex; }
 
         .citation-panel {
             display: none;
             position: fixed;
-            top: 0;
-            right: 0;
-            width: 400px;
-            height: 100vh;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: min(760px, 94vw);
+            max-height: 85vh;
             background: #fff;
-            box-shadow: -4px 0 20px rgba(0,0,0,0.15);
+            border-radius: 12px;
+            box-shadow: 0 18px 42px rgba(0,0,0,0.25);
             z-index: 1000;
             overflow-y: auto;
         }
 
-        .citation-panel.open { display: block; animation: slideIn 0.2s ease-out; }
-        .citation-panel.open-DISABLED {
-            display: block;
-            animation: slideIn 0.2s ease-out;
-        }
-
-        @keyframes slideIn {
-            from { transform: translateX(100%); }
-            to { transform: translateX(0); }
+        .citation-panel.open { display: block; animation: popIn 0.18s ease-out; }
+        @keyframes popIn {
+            from { transform: translate(-50%, -52%); opacity: 0.6; }
+            to { transform: translate(-50%, -50%); opacity: 1; }
         }
 
         .citation-panel-header {
@@ -1490,6 +1604,65 @@
         .citation-panel-url a {
             color: var(--teal);
             word-break: break-all;
+        }
+        .citation-panel-context-link {
+            background: transparent;
+            border: none;
+            color: var(--teal);
+            font-weight: 600;
+            cursor: pointer;
+            padding: 0;
+            text-decoration: underline;
+        }
+        .citation-panel-context-box {
+            margin-top: 8px;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid #e2e8f0;
+            background: #f8fafc;
+            font-size: 12px;
+            line-height: 1.45;
+            max-height: 220px;
+            overflow: auto;
+            white-space: pre-wrap;
+        }
+        .citation-panel-context-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 6px;
+        }
+        .citation-comment-row {
+            margin-top: 10px;
+        }
+        .citation-comment-row textarea {
+            width: 100%;
+            min-height: 66px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 8px;
+            font-size: 12px;
+            font-family: inherit;
+            resize: vertical;
+        }
+        .citation-comment-actions {
+            margin-top: 8px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+        .citation-comment-actions button {
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: #fff;
+            padding: 5px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .citation-comment-actions button.primary {
+            border-color: var(--teal);
+            background: var(--teal);
+            color: #fff;
         }
 
         .citation-eval-section {
@@ -2864,6 +3037,14 @@
                 <a href="{% if trial.is_uc_battlecard %}/battlecards{% elif trial.task %}/task/{{ trial.task }}{% else %}/{% endif %}" class="back-btn">&#8592; Back</a>
                 <h1 class="header-title">{{ trial.name }}{% if trial.session_id %}<span class="session-id-display" onclick="copySessionId('{{ trial.session_id }}')" title="Click to copy session ID"><code>{{ trial.session_id }}</code><span class="copy-icon">&#128203;</span></span>{% endif %}</h1>
                 {% if trial.session_id %}<a href="/workflow/{{ trial.session_id }}" style="margin-left: 12px; font-size: 12px; font-weight: 600; color: var(--teal); text-decoration: none; padding: 4px 10px; border: 1px solid var(--border); border-radius: 5px;">&larr; Return to Workflow</a>{% endif %}
+                <span class="mode-badge" id="reviewModeBadge">Mode: Review</span>
+            </div>
+            <div class="toggle-container">
+                <span class="toggle-label">Review Mode</span>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="review-mode-toggle" checked onchange="toggleReviewMode()">
+                    <span class="toggle-slider"></span>
+                </label>
             </div>
             <div class="toggle-container">
                 <span class="toggle-label">Key Diff Eval</span>
@@ -2921,16 +3102,23 @@
                     <div class="stat-number" id="reorder-count">{{ scores.reordered }}</div>
                     <div class="stat-text">Reordered</div>
                 </div>
-                {% if trial.is_uc_battlecard and trial.has_flagged_slides %}
-                <button class="regenerate-all-btn" id="regenerate-all-btn" onclick="regenerateAllFlagged()">
-                    &#8635; Regenerate Flagged
-                </button>
-                {% endif %}
             </div>
         </div>
     </div>
 
     <div class="container">
+        <div id="reviewSaveStatus" class="review-save-status"></div>
+
+        <div class="category-nav">
+            <span class="category-nav-title">Jump To Category</span>
+            {% for category in category_order %}
+                {% if category in categories %}
+                {% set category_anchor = category|lower|replace(' ', '-')|replace('&', 'and')|replace('/', '-')|replace('(', '')|replace(')', '')|replace(',', '') %}
+                <a href="#cat-{{ category_anchor }}">{{ category }}</a>
+                {% endif %}
+            {% endfor %}
+        </div>
+
         <!-- Fact-check summary bar (UC battlecards only) -->
         {% if trial.is_uc_battlecard and fact_check_summary and fact_check_summary.total_claims %}
         <div class="fact-check-summary-bar">
@@ -3044,7 +3232,8 @@
         <div class="rendered-view" id="renderedView">
         {% for category in category_order %}
         {% if category in categories %}
-        <div class="category-section" data-category="{{ category }}">
+        {% set category_anchor = category|lower|replace(' ', '-')|replace('&', 'and')|replace('/', '-')|replace('(', '')|replace(')', '')|replace(',', '') %}
+        <div class="category-section" data-category="{{ category }}" id="cat-{{ category_anchor }}">
             <div class="category-header">
                 <span>{{ category }}</span>
                 <button class="add-diff-btn" onclick="openAddModal('{{ category }}')">+ Add Key Diff</button>
@@ -3082,10 +3271,6 @@
                                         <button class="score-btn reject {% if diff.feedback.key_diff.status == 'rejected' %}selected{% endif %}"
                                                 onclick="saveFeedback('{{ diff.id }}', 'key_diff', 'rejected', this)" title="Reject">&#10007;</button>
                                         <button class="expand-btn {% if diff.feedback.key_diff.comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', 'key_diff')" title="{% if diff.feedback.key_diff.comment %}View comment{% else %}Add comment{% endif %}">&#128172;{% if diff.feedback.key_diff.comment %}<span class="comment-dot"></span>{% endif %}</button>
-                                        {% set is_flagged = diff.feedback.key_diff.status in ['needs_revision', 'rejected'] or diff.feedback.databricks.status in ['needs_revision', 'rejected'] or diff.feedback.fabric.status in ['needs_revision', 'rejected'] %}
-                                        {% if is_flagged and trial.is_uc_battlecard %}
-                                        <button class="regenerate-btn" data-slide-id="{{ diff.id }}" onclick="event.stopPropagation(); regenerateSlide('{{ diff.id }}')" title="Regenerate based on feedback">&#8635;</button>
-                                        {% endif %}
                                         {% if diff.update_count and diff.update_count > 0 %}
                                         <span class="update-count-badge" title="Updated {{ diff.update_count }} time(s)">v{{ diff.update_count + 1 }}</span>
                                         {% endif %}
@@ -3211,11 +3396,12 @@
                                     <div class="detail-section-header">Details - L300</div>
                                     <div class="vendor-detail-items">
                                         {% for item in diff.databricks_detail_items %}
-                                        {% if item.text_verbose %}
-                                        {% set item_scope_l300 = 'databricks_detail_l300_' ~ (item.detail_item_id or loop.index0) %}
-                                        <div class="vendor-detail-item" data-detail-item-id="{{ item.detail_item_id or '' }}" data-level="l300">
+                                        {% if item.verbose_items and item.verbose_items|length > 0 %}
+                                        {% for vitem in item.verbose_items %}
+                                        {% set item_scope_l300 = 'databricks_detail_l300_' ~ (item.detail_item_id or loop.index0) ~ '_' ~ (vitem.verbose_item_id or loop.index0) %}
+                                        <div class="vendor-detail-item" data-detail-item-id="{{ item.detail_item_id or '' }}" data-verbose-item-id="{{ vitem.verbose_item_id or '' }}" data-level="l300">
                                             <div class="vendor-detail-item-row">
-                                                <span class="vendor-details-text">&ndash; {{ item.text_verbose }}</span>
+                                                <span class="vendor-details-text">&ndash; {{ vitem.text }}</span>
                                                 <div class="score-buttons detail-item-buttons" onclick="event.stopPropagation()">
                                                     <button class="score-btn approve {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'approved' %}selected{% endif %}"
                                                             onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'approved', this)" title="Approve">&#10003;</button>
@@ -3241,6 +3427,37 @@
                                                 </div>
                                             </div>
                                             {# Inline evidence block #}
+                                            <div class="inline-evidence-block" id="inline-evidence-{{ diff.id }}-{{ item_scope_l300 }}"></div>
+                                        </div>
+                                        {% endfor %}
+                                        {% elif item.text_verbose %}
+                                        {% set item_scope_l300 = 'databricks_detail_l300_' ~ (item.detail_item_id or loop.index0) %}
+                                        <div class="vendor-detail-item" data-detail-item-id="{{ item.detail_item_id or '' }}" data-level="l300">
+                                            <div class="vendor-detail-item-row">
+                                                <span class="vendor-details-text">&ndash; {{ item.text_verbose }}</span>
+                                                <div class="score-buttons detail-item-buttons" onclick="event.stopPropagation()">
+                                                    <button class="score-btn approve {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'approved' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'approved', this)" title="Approve">&#10003;</button>
+                                                    <button class="score-btn revision {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'needs_revision' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'needs_revision', this)" title="Needs Revision">&#9888;</button>
+                                                    <button class="score-btn reject {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'rejected' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'rejected', this)" title="Reject">&#10007;</button>
+                                                    <button class="expand-btn {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', '{{ item_scope_l300 }}')" title="{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}View comment{% else %}Add comment{% endif %}">&#128172;{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}<span class="comment-dot"></span>{% endif %}</button>
+                                                    <button class="info-btn" onclick="toggleInlineEvidence('{{ diff.id }}', '{{ item_scope_l300 }}')" title="Show evidence">&#8505;</button>
+                                                </div>
+                                            </div>
+                                            <div class="review-details" id="details-{{ diff.id }}-{{ item_scope_l300 }}">
+                                                <div class="comment-row">
+                                                    <input type="text" class="comment-input{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %} saved{% endif %}"
+                                                           id="comment-{{ diff.id }}-{{ item_scope_l300 }}"
+                                                           placeholder="Add comment..."
+                                                           value="{{ diff.feedback[item_scope_l300].comment if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment else '' }}"
+                                                           {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}readonly{% endif %}>
+                                                    <button class="save-btn{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %} saved{% endif %}"
+                                                            onclick="saveComment('{{ diff.id }}', '{{ item_scope_l300 }}', this)">
+                                                        {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}Edit{% else %}Save{% endif %}</button>
+                                                </div>
+                                            </div>
                                             <div class="inline-evidence-block" id="inline-evidence-{{ diff.id }}-{{ item_scope_l300 }}"></div>
                                         </div>
                                         {% endif %}
@@ -3400,11 +3617,12 @@
                                     <div class="detail-section-header">Details - L300</div>
                                     <div class="vendor-detail-items">
                                         {% for item in diff.fabric_detail_items %}
-                                        {% if item.text_verbose %}
-                                        {% set item_scope_l300 = 'fabric_detail_l300_' ~ (item.detail_item_id or loop.index0) %}
-                                        <div class="vendor-detail-item" data-detail-item-id="{{ item.detail_item_id or '' }}" data-level="l300">
+                                        {% if item.verbose_items and item.verbose_items|length > 0 %}
+                                        {% for vitem in item.verbose_items %}
+                                        {% set item_scope_l300 = 'fabric_detail_l300_' ~ (item.detail_item_id or loop.index0) ~ '_' ~ (vitem.verbose_item_id or loop.index0) %}
+                                        <div class="vendor-detail-item" data-detail-item-id="{{ item.detail_item_id or '' }}" data-verbose-item-id="{{ vitem.verbose_item_id or '' }}" data-level="l300">
                                             <div class="vendor-detail-item-row">
-                                                <span class="vendor-details-text">&ndash; {{ item.text_verbose }}</span>
+                                                <span class="vendor-details-text">&ndash; {{ vitem.text }}</span>
                                                 <div class="score-buttons detail-item-buttons" onclick="event.stopPropagation()">
                                                     <button class="score-btn approve {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'approved' %}selected{% endif %}"
                                                             onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'approved', this)" title="Approve">&#10003;</button>
@@ -3430,6 +3648,37 @@
                                                 </div>
                                             </div>
                                             {# Inline evidence block #}
+                                            <div class="inline-evidence-block" id="inline-evidence-{{ diff.id }}-{{ item_scope_l300 }}"></div>
+                                        </div>
+                                        {% endfor %}
+                                        {% elif item.text_verbose %}
+                                        {% set item_scope_l300 = 'fabric_detail_l300_' ~ (item.detail_item_id or loop.index0) %}
+                                        <div class="vendor-detail-item" data-detail-item-id="{{ item.detail_item_id or '' }}" data-level="l300">
+                                            <div class="vendor-detail-item-row">
+                                                <span class="vendor-details-text">&ndash; {{ item.text_verbose }}</span>
+                                                <div class="score-buttons detail-item-buttons" onclick="event.stopPropagation()">
+                                                    <button class="score-btn approve {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'approved' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'approved', this)" title="Approve">&#10003;</button>
+                                                    <button class="score-btn revision {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'needs_revision' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'needs_revision', this)" title="Needs Revision">&#9888;</button>
+                                                    <button class="score-btn reject {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].status == 'rejected' %}selected{% endif %}"
+                                                            onclick="saveFeedback('{{ diff.id }}', '{{ item_scope_l300 }}', 'rejected', this)" title="Reject">&#10007;</button>
+                                                    <button class="expand-btn {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', '{{ item_scope_l300 }}')" title="{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}View comment{% else %}Add comment{% endif %}">&#128172;{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}<span class="comment-dot"></span>{% endif %}</button>
+                                                    <button class="info-btn" onclick="toggleInlineEvidence('{{ diff.id }}', '{{ item_scope_l300 }}')" title="Show evidence">&#8505;</button>
+                                                </div>
+                                            </div>
+                                            <div class="review-details" id="details-{{ diff.id }}-{{ item_scope_l300 }}">
+                                                <div class="comment-row">
+                                                    <input type="text" class="comment-input{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %} saved{% endif %}"
+                                                           id="comment-{{ diff.id }}-{{ item_scope_l300 }}"
+                                                           placeholder="Add comment..."
+                                                           value="{{ diff.feedback[item_scope_l300].comment if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment else '' }}"
+                                                           {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}readonly{% endif %}>
+                                                    <button class="save-btn{% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %} saved{% endif %}"
+                                                            onclick="saveComment('{{ diff.id }}', '{{ item_scope_l300 }}', this)">
+                                                        {% if diff.feedback[item_scope_l300] and diff.feedback[item_scope_l300].comment %}Edit{% else %}Save{% endif %}</button>
+                                                </div>
+                                            </div>
                                             <div class="inline-evidence-block" id="inline-evidence-{{ diff.id }}-{{ item_scope_l300 }}"></div>
                                         </div>
                                         {% endif %}
@@ -3579,7 +3828,10 @@
             <div class="citation-panel-section">
                 <div class="citation-panel-label">Source URL</div>
                 <div class="citation-panel-url">
-                    <a id="citationUrl" href="#" target="_blank"></a>
+                    <a id="citationUrl" href="#" target="_blank" rel="noopener noreferrer"></a>
+                    <button id="citationContextBtn" class="citation-panel-context-link" style="display:none;" onclick="openCitationSourceContext()">Open internal source excerpt</button>
+                    <div id="citationContextMeta" class="citation-panel-context-meta"></div>
+                    <div id="citationContextBox" class="citation-panel-context-box" style="display:none;"></div>
                 </div>
             </div>
             <div class="citation-panel-section citation-eval-section">
@@ -3597,6 +3849,13 @@
                         <span class="btn-icon">&#10007;</span>
                         <span class="btn-label">Inaccurate</span>
                     </button>
+                </div>
+                <div class="citation-comment-row">
+                    <textarea id="citationComment" placeholder="Add reviewer comment for this citation..."></textarea>
+                    <div class="citation-comment-actions">
+                        <button onclick="saveCitationComment()">Save Comment</button>
+                        <button class="primary" onclick="saveCitationComment(true)">Save Review + Comment</button>
+                    </div>
                 </div>
             </div>
 
@@ -3620,6 +3879,8 @@
         <input type="hidden" id="citationVendor">
         <input type="hidden" id="citationIndex">
         <input type="hidden" id="citationFcId">
+        <input type="hidden" id="citationEvidenceId">
+        <input type="hidden" id="citationStatus">
     </div>
 
     <!-- Reasoning modal removed — content now shown inline via cell expansion -->
@@ -3733,6 +3994,8 @@
         const isUcBattlecard = {{ (trial.is_uc_battlecard or False) | tojson }};
         const battlecardId = "{{ trial.battlecard_id | default('', true) }}";
         let draggedRow = null;
+        let isReviewMode = true;
+        let saveStatusTimer = null;
 
         // Raw JSON data for the trial
         const trialData = {
@@ -3740,6 +4003,43 @@
             categories: {{ categories | tojson }},
             scores: {{ scores | tojson }}
         };
+
+        function showSaveStatus(message, kind) {
+            const el = document.getElementById('reviewSaveStatus');
+            if (!el) return;
+            el.textContent = message;
+            el.classList.remove('saving', 'saved', 'error');
+            if (kind) el.classList.add(kind);
+            el.classList.add('visible');
+            if (saveStatusTimer) window.clearTimeout(saveStatusTimer);
+            if (kind !== 'saving') {
+                saveStatusTimer = window.setTimeout(() => {
+                    el.classList.remove('visible', 'saving', 'saved', 'error');
+                }, 1600);
+            }
+        }
+
+        function toggleReviewMode() {
+            const checkbox = document.getElementById('review-mode-toggle');
+            isReviewMode = !!checkbox.checked;
+            if (isReviewMode) {
+                document.body.classList.remove('view-only');
+                localStorage.setItem('reviewModeEnabled', 'true');
+                const badge = document.getElementById('reviewModeBadge');
+                if (badge) {
+                    badge.textContent = 'Mode: Review';
+                    badge.classList.remove('view');
+                }
+            } else {
+                document.body.classList.add('view-only');
+                localStorage.setItem('reviewModeEnabled', 'false');
+                const badge = document.getElementById('reviewModeBadge');
+                if (badge) {
+                    badge.textContent = 'Mode: View';
+                    badge.classList.add('view');
+                }
+            }
+        }
 
         // Toggle key diff eval visibility
         function toggleKeyDiffEval() {
@@ -3829,6 +4129,13 @@
 
         // Restore toggle states from localStorage on page load
         (function() {
+            const reviewModeState = localStorage.getItem('reviewModeEnabled');
+            if (reviewModeState === 'false') {
+                const reviewToggle = document.getElementById('review-mode-toggle');
+                if (reviewToggle) reviewToggle.checked = false;
+            }
+            toggleReviewMode();
+
             const keydiffState = localStorage.getItem('keydiffEvalVisible');
             if (keydiffState === 'false') {
                 document.body.classList.add('hide-keydiff-eval');
@@ -3861,6 +4168,7 @@
         })();
 
         function toggleCommentDetails(diffId, level) {
+            if (!isReviewMode) return;
             const details = document.getElementById(`details-${diffId}-${level}`);
             details.classList.toggle('expanded');
         }
@@ -3868,6 +4176,14 @@
         function closeCitationPanel() {
             document.getElementById('citationPanel').classList.remove('open');
             document.getElementById('citationOverlay').classList.remove('open');
+            const urlEl = document.getElementById('citationUrl');
+            if (urlEl) urlEl.onclick = null;
+            document.getElementById('citationContextBox').style.display = 'none';
+            document.getElementById('citationContextBox').textContent = '';
+            document.getElementById('citationContextMeta').textContent = '';
+            document.getElementById('citationContextBtn').style.display = 'none';
+            document.getElementById('citationEvidenceId').value = '';
+            document.getElementById('citationStatus').value = '';
         }
 
         // Citation Rendering Functions
@@ -3965,6 +4281,16 @@
             const urlEl = document.getElementById('citationUrl');
             urlEl.textContent = url || 'No URL';
             urlEl.href = url || '#';
+            urlEl.onclick = null;
+            urlEl.style.pointerEvents = '';
+            urlEl.style.textDecoration = '';
+            document.getElementById('citationContextBtn').style.display = 'none';
+            document.getElementById('citationContextBox').style.display = 'none';
+            document.getElementById('citationContextBox').textContent = '';
+            document.getElementById('citationContextMeta').textContent = '';
+            document.getElementById('citationEvidenceId').value = '';
+            document.getElementById('citationStatus').value = '';
+            document.getElementById('citationComment').value = '';
             document.getElementById('citationOverlay').classList.add('open');
             document.getElementById('citationPanel').classList.add('open');
         }
@@ -3973,7 +4299,33 @@
             const title = el.dataset.sourceTitle || 'Source';
             const url = el.dataset.sourceUrl || '';
             const quote = el.dataset.sourceQuote || '';
-            openCitationDetail(0, title, url, quote, quote);
+            const evidenceId = el.dataset.evidenceId || '';
+            const diffId = el.dataset.diffId || '';
+            const isInternalUrl = !url || url === 'internal_document' || !/^https?:\/\//i.test(url);
+            if (!isInternalUrl) {
+                openCitationDetail(0, title, url, quote, quote);
+                return;
+            }
+            document.getElementById('citationHighlightedText').textContent = quote || 'N/A';
+            document.getElementById('citationQuote').textContent = quote || 'No source quote available';
+            document.getElementById('citationEvidenceId').value = evidenceId;
+            document.getElementById('citationDiffId').value = diffId;
+            document.getElementById('citationFcId').value = '';
+            document.getElementById('citationStatus').value = '';
+            document.getElementById('citationComment').value = '';
+            const urlEl = document.getElementById('citationUrl');
+            urlEl.textContent = title || 'Internal context document';
+            urlEl.href = '#';
+            urlEl.onclick = function(ev) { ev.preventDefault(); openCitationSourceContext(); };
+            urlEl.style.pointerEvents = '';
+            urlEl.style.textDecoration = 'underline';
+            document.getElementById('citationContextBtn').style.display = '';
+            document.getElementById('citationSourceTypeSection').style.display = 'none';
+            document.querySelectorAll('.citation-eval-btn').forEach(b => b.classList.remove('selected'));
+            document.getElementById('citationFcSection').style.display = 'none';
+            document.getElementById('citationOverlay').classList.add('open');
+            document.getElementById('citationPanel').classList.add('open');
+            if (evidenceId) openCitationSourceContext();
         }
 
         /**
@@ -3989,6 +4341,10 @@
         // Reasoning modal removed — all content now shown inline via toggleCellExpansion
 
         async function saveFeedback(diffId, level, status, btn) {
+            if (!isReviewMode) {
+                showSaveStatus('View mode enabled. Switch to Review mode to save.', 'error');
+                return;
+            }
             // Handle both regular score-btn and review-statement buttons
             const parent = btn.parentElement;
             const isReviewStatement = parent.classList.contains('review-statement-buttons');
@@ -4005,6 +4361,7 @@
             const comment = document.getElementById(`comment-${diffId}-${level}`)?.value || '';
 
             try {
+                showSaveStatus('Saving review...', 'saving');
                 const endpoint = isUcBattlecard ? '/api/uc/feedback' : '/api/feedback';
                 const payload = isUcBattlecard
                     ? { battlecard_id: battlecardId, diff_id: diffId, level: level, status: status, comment: comment }
@@ -4017,13 +4374,23 @@
                 });
 
                 const data = await response.json();
-                if (data.success) updateScores(data.scores);
+                if (data.success) {
+                    updateScores(data.scores);
+                    showSaveStatus('Review saved', 'saved');
+                } else {
+                    showSaveStatus(data.error || 'Failed to save review', 'error');
+                }
             } catch (error) {
                 console.error('Failed to save:', error);
+                showSaveStatus('Failed to save review', 'error');
             }
         }
 
         async function saveComment(diffId, level, btn) {
+            if (!isReviewMode) {
+                showSaveStatus('View mode enabled. Switch to Review mode to save.', 'error');
+                return;
+            }
             const inputEl = document.getElementById(`comment-${diffId}-${level}`);
             if (inputEl.readOnly) {
                 inputEl.readOnly = false;
@@ -4061,6 +4428,7 @@
             }
 
             try {
+                showSaveStatus('Saving comment...', 'saving');
                 const endpoint = isUcBattlecard ? '/api/uc/feedback' : '/api/feedback';
                 const payload = isUcBattlecard
                     ? { battlecard_id: battlecardId, diff_id: diffId, level: level, comment: comment, status: currentStatus }
@@ -4095,10 +4463,14 @@
                     if (btnComment && comment) {
                         btnComment.classList.add('has-comment');
                     }
+                    showSaveStatus('Comment saved', 'saved');
+                } else {
+                    showSaveStatus(data.error || 'Failed to save comment', 'error');
                 }
             } catch (error) {
                 console.error('Failed to save comment:', error);
                 btn.textContent = 'Error';
+                showSaveStatus('Failed to save comment', 'error');
                 setTimeout(() => {
                     btn.textContent = 'Save';
                     btn.disabled = false;
@@ -4141,6 +4513,10 @@
         }
 
         async function saveInlineComment(diffId, scope) {
+            if (!isReviewMode) {
+                showSaveStatus('View mode enabled. Switch to Review mode to save.', 'error');
+                return;
+            }
             const textareaId = `comment-text-${diffId}-${scope}`;
             const textarea = document.getElementById(textareaId);
             if (!textarea) return;
@@ -4152,6 +4528,7 @@
             }
 
             try {
+                showSaveStatus('Saving comment...', 'saving');
                 const endpoint = isUcBattlecard ? '/api/uc/feedback' : '/api/feedback';
                 const payload = isUcBattlecard
                     ? { battlecard_id: battlecardId, diff_id: diffId, level: scope, comment: comment, status: 'provide_feedback' }
@@ -4189,10 +4566,13 @@
 
                     // Close the comment box after successful save
                     box.classList.remove('visible');
+                    showSaveStatus('Comment saved', 'saved');
+                } else {
+                    showSaveStatus(data.error || 'Failed to save comment', 'error');
                 }
             } catch (error) {
                 console.error('Failed to save inline comment:', error);
-                alert('Failed to save comment. Please try again.');
+                showSaveStatus('Failed to save comment', 'error');
             }
         }
 
@@ -4227,49 +4607,86 @@
                     // Build evidence HTML from citations and fact checks
                     let html = '';
 
-                    // Generated From card
-                    const citations = diffData.citations || {};
+                    const parsed = scope.match(/^(databricks|fabric)_detail(_l300)?_(\d+)(?:_(\d+))?$/);
                     const vendor = scope.startsWith('databricks') ? 'databricks' : 'fabric';
-                    const detailsCitations = citations[`${vendor}_details`] || [];
+                    const isL300 = !!(parsed && parsed[2]);
+                    const detailItemId = parsed ? parseInt(parsed[3], 10) : null;
+                    const verboseItemId = parsed && parsed[4] ? parseInt(parsed[4], 10) : null;
+
+                    const citations = diffData.citations || {};
+                    const citeField = isL300 ? `${vendor}_detail_verbose` : `${vendor}_details`;
+                    let detailsCitations = citations[citeField] || [];
+                    if (detailItemId !== null && !Number.isNaN(detailItemId)) {
+                        detailsCitations = detailsCitations.filter(c => parseInt(c.detail_item_id, 10) === detailItemId);
+                    }
+                    if (isL300 && verboseItemId !== null && !Number.isNaN(verboseItemId)) {
+                        detailsCitations = detailsCitations.filter(c => parseInt(c.verbose_item_id, 10) === verboseItemId);
+                    }
 
                     if (detailsCitations.length > 0) {
-                        const cite = detailsCitations[0];
-                        const sourceTitle = escapeHtmlTrial(cite.source_title || 'Source');
-                        const sourceUrl = escapeHtmlTrial(cite.source_url || '');
-                        const sourceQuote = escapeHtmlTrial(cite.source_quote || '');
-                        html += `
-                            <div class="evidence-card generated-from evidence-card-clickable"
-                                 data-source-title="${sourceTitle}"
-                                 data-source-url="${sourceUrl}"
-                                 data-source-quote="${sourceQuote}"
-                                 onclick="openCitationFromEvidence(this)">
-                                <div class="evidence-card-header">GENERATED FROM</div>
-                                <div class="evidence-card-body">"<span class="evidence-highlight">${sourceQuote}</span>"</div>
-                                <div class="evidence-card-source">
-                                    <span class="evidence-card-source-title">${sourceTitle}</span>
-                                    <span class="evidence-card-source-link">View source &rarr;</span>
+                        detailsCitations.forEach(cite => {
+                            const sourceTitle = escapeHtmlTrial(cite.source_title || 'Source');
+                            const sourceUrl = escapeHtmlTrial(cite.source_url || '');
+                            const sourceQuote = escapeHtmlTrial(cite.source_quote || '');
+                            html += `
+                                <div class="evidence-card generated-from evidence-card-clickable"
+                                     data-source-title="${sourceTitle}"
+                                     data-source-url="${sourceUrl}"
+                                     data-source-quote="${sourceQuote}"
+                                     data-evidence-id="${escapeHtmlTrial(String(cite.evidence_id || ''))}"
+                                     data-diff-id="${escapeHtmlTrial(String(diffId || ''))}"
+                                     onclick="openCitationFromEvidence(this)">
+                                    <div class="evidence-card-header">GENERATED FROM</div>
+                                    <div class="evidence-card-body">"<span class="evidence-highlight">${sourceQuote}</span>"</div>
+                                    <div class="evidence-card-source">
+                                        <span class="evidence-card-source-title">${sourceTitle}</span>
+                                        <span class="evidence-card-source-link">View source &rarr;</span>
+                                    </div>
                                 </div>
-                            </div>
-                        `;
+                            `;
+                        });
                     }
 
                     // Fact-Check card
-                    const factChecks = (diffData.fact_checks || []).filter(fc => fc.claim_field && fc.claim_field.includes(vendor));
+                    let factChecks = (diffData.fact_checks || []).filter(fc => fc.claim_field && fc.claim_field.includes(vendor));
+                    factChecks = factChecks.filter(fc => {
+                        const fcDetail = fc.detail_item_id != null ? parseInt(fc.detail_item_id, 10) : null;
+                        const fcVerbose = fc.verbose_item_id != null ? parseInt(fc.verbose_item_id, 10) : null;
+                        if (detailItemId !== null && !Number.isNaN(detailItemId) && fcDetail !== detailItemId) return false;
+                        if (isL300 && verboseItemId !== null && !Number.isNaN(verboseItemId) && fcVerbose !== verboseItemId) return false;
+                        if (!isL300 && fc.claim_field && fc.claim_field.endsWith('detail_verbose')) return false;
+                        if (isL300 && fc.claim_field && !fc.claim_field.endsWith('detail_verbose')) return false;
+                        return true;
+                    });
                     if (factChecks.length > 0) {
-                        const fc = factChecks[0];
-                        const isVerified = fc.verdict === 'verified';
-                        const cardClass = isVerified ? 'fact-check-verified' : 'fact-check-pending';
-                        const headerText = isVerified ? 'FACT-CHECK VERIFIED' : 'FACT-CHECK PENDING';
-                        const badgeClass = isVerified ? 'verified' : 'unverified';
-                        const badgeText = isVerified ? `verified ${Math.round((fc.confidence || 0) * 100)}%` : 'unverified';
+                        factChecks.forEach(fc => {
+                            const isVerified = fc.verdict === 'verified';
+                            const cardClass = isVerified ? 'fact-check-verified' : 'fact-check-pending';
+                            const headerText = isVerified ? 'FACT-CHECK VERIFIED' : 'FACT-CHECK PENDING';
+                            const badgeClass = isVerified ? 'verified' : 'unverified';
+                            const badgeText = isVerified ? `verified ${Math.round((fc.confidence || 0) * 100)}%` : 'unverified';
+                            const quoteHtml = fc.claim_quote ? `<div style="margin-top:6px;font-size:11px;color:#374151;"><strong>Matched quote:</strong> ${escapeHtmlTrial(fc.claim_quote)}</div>` : '';
+                            let sourceHtml = '';
+                            if (Array.isArray(fc.citations) && fc.citations.length > 0) {
+                                sourceHtml = fc.citations.map(c => {
+                                    const title = escapeHtmlTrial(c.title || c.url || 'Source');
+                                    const quote = escapeHtmlTrial(c.quote || '');
+                                    const link = c.url ? `<a href="${escapeHtmlTrial(c.url)}" target="_blank" rel="noopener noreferrer" style="color:#0f766e;text-decoration:underline;">${title}</a>` : `<span>${title}</span>`;
+                                    const quoteBlock = quote ? `<div style="font-size:11px;color:#4b5563;margin-top:2px;">${quote}</div>` : '';
+                                    return `<div style="margin-top:6px;font-size:11px;">${link}${quoteBlock}</div>`;
+                                }).join('');
+                            }
 
-                        html += `
-                            <div class="evidence-card ${cardClass}">
-                                <div class="evidence-card-header">${headerText}</div>
-                                <div class="evidence-card-body">"${escapeHtmlTrial(fc.rationale || 'No rationale provided')}"</div>
-                                <span class="verification-badge ${badgeClass}">${badgeText}</span>
-                            </div>
-                        `;
+                            html += `
+                                <div class="evidence-card ${cardClass}">
+                                    <div class="evidence-card-header">${headerText}</div>
+                                    <div class="evidence-card-body">"${escapeHtmlTrial(fc.rationale || 'No rationale provided')}"</div>
+                                    ${quoteHtml}
+                                    ${sourceHtml}
+                                    <span class="verification-badge ${badgeClass}">${badgeText}</span>
+                                </div>
+                            `;
+                        });
                     } else {
                         // No fact check exists - show grey "Fact check required" card
                         html += `
@@ -4303,7 +4720,7 @@
         });
 
         function handleDragStart(e) {
-            if (document.body.classList.contains('hide-eval-buttons')) {
+            if (!isReviewMode || document.body.classList.contains('hide-eval-buttons')) {
                 e.preventDefault();
                 return;
             }
@@ -4350,6 +4767,7 @@
         }
 
         async function updateReorderedRanks(category, tbody) {
+            if (!isReviewMode) return;
             const rows = Array.from(tbody.querySelectorAll('.diff-row'));
             const newOrder = [];
 
@@ -4377,6 +4795,7 @@
             });
 
             try {
+                showSaveStatus('Saving reorder...', 'saving');
                 const endpoint = isUcBattlecard ? '/api/uc/reorder' : '/api/reorder';
                 const payload = isUcBattlecard
                     ? { battlecard_id: battlecardId, category: category, new_order: newOrder }
@@ -4388,14 +4807,24 @@
                     body: JSON.stringify(payload)
                 });
                 const data = await response.json();
-                if (data.success) updateScores(data.scores);
+                if (data.success) {
+                    updateScores(data.scores);
+                    showSaveStatus('Reorder saved', 'saved');
+                } else {
+                    showSaveStatus(data.error || 'Failed to save reorder', 'error');
+                }
             } catch (error) {
                 console.error('Failed to save reorder:', error);
+                showSaveStatus('Failed to save reorder', 'error');
             }
         }
 
         // Modal functions
         function openAddModal(category) {
+            if (!isReviewMode) {
+                showSaveStatus('View mode enabled. Switch to Review mode to edit.', 'error');
+                return;
+            }
             document.getElementById('modal-category').value = category;
             document.getElementById('addModal').classList.add('active');
             document.getElementById('addDiffForm').reset();
@@ -4468,9 +4897,92 @@
         }
 
         async function saveCitationFeedback(status, btn) {
+            if (!isReviewMode) {
+                showSaveStatus('View mode enabled. Switch to Review mode to save.', 'error');
+                return;
+            }
             document.querySelectorAll('.citation-eval-btn').forEach(b => b.classList.remove('selected'));
-            btn.classList.add('selected');
-            // Citation feedback saving would go here
+            if (btn) btn.classList.add('selected');
+            document.getElementById('citationStatus').value = status || '';
+            await persistCitationReview();
+        }
+
+        async function saveCitationComment(withStatus) {
+            if (!isReviewMode) {
+                showSaveStatus('View mode enabled. Switch to Review mode to save.', 'error');
+                return;
+            }
+            if (!withStatus && !document.getElementById('citationStatus').value) {
+                document.getElementById('citationStatus').value = 'needs_revision';
+            }
+            await persistCitationReview();
+        }
+
+        async function persistCitationReview() {
+            const evidenceId = document.getElementById('citationEvidenceId').value;
+            const diffId = document.getElementById('citationDiffId').value;
+            const factCheckId = document.getElementById('citationFcId').value;
+            const status = document.getElementById('citationStatus').value || 'needs_revision';
+            const comment = (document.getElementById('citationComment').value || '').trim();
+
+            if (!evidenceId || !diffId) {
+                showSaveStatus('Citation is missing evidence context; cannot save.', 'error');
+                return;
+            }
+
+            showSaveStatus('Saving citation review...', 'saving');
+            try {
+                const response = await fetch('/api/uc/citation-feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        battlecard_id: battlecardId,
+                        diff_id: diffId,
+                        evidence_id: evidenceId,
+                        fact_check_id: factCheckId || null,
+                        status: status,
+                        comment: comment,
+                    }),
+                });
+                const data = await response.json();
+                if (response.ok && data.success) {
+                    showSaveStatus('Citation review saved', 'saved');
+                } else {
+                    showSaveStatus(data.error || 'Failed to save citation review', 'error');
+                }
+            } catch (error) {
+                console.error('Failed to save citation review:', error);
+                showSaveStatus('Failed to save citation review', 'error');
+            }
+        }
+
+        async function openCitationSourceContext() {
+            const evidenceId = document.getElementById('citationEvidenceId').value;
+            if (!evidenceId) return;
+            const boxEl = document.getElementById('citationContextBox');
+            const metaEl = document.getElementById('citationContextMeta');
+            boxEl.style.display = '';
+            boxEl.textContent = 'Loading source excerpt...';
+            metaEl.textContent = '';
+            try {
+                const res = await fetch(`/api/battlecard/${encodeURIComponent(battlecardId)}/citation/${encodeURIComponent(evidenceId)}/context`);
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    boxEl.textContent = data.error || 'Unable to load internal source excerpt.';
+                    return;
+                }
+                const cm = data.context_match;
+                if (cm) {
+                    boxEl.textContent = cm.excerpt_text || data.source_quote || '';
+                    metaEl.textContent = `${cm.artifact_name || cm.artifact_type || 'context'}  •  char ${cm.match_start}`;
+                } else {
+                    boxEl.textContent = data.source_quote || 'No source excerpt available.';
+                    metaEl.textContent = data.source_name || 'internal document';
+                }
+            } catch (err) {
+                console.error('Failed to load citation source context:', err);
+                boxEl.textContent = 'Failed to load internal source excerpt.';
+            }
         }
 
         // =====================================================================
@@ -4530,14 +5042,39 @@
         }
 
         function fcAction(factCheckId, action) {
+            if (!isReviewMode) {
+                showSaveStatus('View mode enabled. Switch to Review mode to save.', 'error');
+                return;
+            }
             const wrapper = document.getElementById('fc-wrapper-' + factCheckId);
+            if (!wrapper) return;
             // Remove previous action states
             wrapper.querySelectorAll('.fc-action-btn').forEach(b => b.classList.remove('selected'));
             // Highlight the selected action
             const btn = wrapper.querySelector('.fc-action-btn.' + action);
             if (btn) btn.classList.add('selected');
-            // Future: persist this feedback via API
-            console.log('Fact-check action:', factCheckId, action);
+            const mapped = action === 'approve' ? 'approved' : 'rejected';
+            showSaveStatus('Saving fact-check review...', 'saving');
+            fetch('/api/uc/fact-check-feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    battlecard_id: battlecardId,
+                    diff_id: wrapper?.closest('.diff-row')?.dataset?.id || '',
+                    fact_check_id: factCheckId,
+                    status: mapped,
+                    comment: '',
+                }),
+            })
+            .then(r => r.json().then(j => ({ok: r.ok, data: j})))
+            .then(({ok, data}) => {
+                if (ok && data.success) showSaveStatus('Fact-check review saved', 'saved');
+                else showSaveStatus(data.error || 'Failed to save fact-check review', 'error');
+            })
+            .catch((err) => {
+                console.error('Failed to save fact-check action:', err);
+                showSaveStatus('Failed to save fact-check review', 'error');
+            });
         }
 
         // =====================================================================
@@ -4758,6 +5295,7 @@
 
                 const headlineCitationField = isDatabricks ? 'databricks_headline' : (citations.competitor_headline ? 'competitor_headline' : 'fabric_headline');
                 const detailsCitationField = isDatabricks ? 'databricks_details' : (citations.competitor_details ? 'competitor_details' : 'fabric_details');
+                const verboseCitationField = isDatabricks ? 'databricks_detail_verbose' : (citations.competitor_detail_verbose ? 'competitor_detail_verbose' : 'fabric_detail_verbose');
                 const reasoningCitationField = isDatabricks ? 'databricks_reasoning' : (citations.competitor_reasoning ? 'competitor_reasoning' : 'fabric_reasoning');
                 const enrichFcInline = c => ({
                     ...c,
@@ -4765,12 +5303,13 @@
                 });
                 const headlineCitations = (citations[headlineCitationField] || []).map(enrichFcInline);
                 const detailsCitations = (citations[detailsCitationField] || []).map(enrichFcInline);
+                const verboseCitations = (citations[verboseCitationField] || []).map(enrichFcInline);
                 const reasoningCitations = (citations[reasoningCitationField] || []).map(enrichFcInline);
 
                 // Get orphan fact checks for this diff
                 const orphans = (mc && mc.orphan_fact_checks) ? mc.orphan_fact_checks : (diffData.fact_checks || []);
 
-                let html = buildEvidenceSummary(headline, detailsText, headlineCitations, detailsCitations, reasoningCitations, diffId, orphans, vendor, detailItems);
+                let html = buildEvidenceSummary(headline, detailsText, headlineCitations, detailsCitations, verboseCitations, reasoningCitations, diffId, orphans, vendor, detailItems);
                 if (reasoning) {
                     html += `<div class="evidence-pill" style="margin-top: 8px;">${renderCitedText(reasoning, reasoningCitations)}</div>`;
                 }
@@ -4968,6 +5507,7 @@
             // Citation fields
             const headlineCitationField = isDatabricks ? 'databricks_headline' : (citations.competitor_headline ? 'competitor_headline' : 'fabric_headline');
             const detailsCitationField = isDatabricks ? 'databricks_details' : (citations.competitor_details ? 'competitor_details' : 'fabric_details');
+            const verboseCitationField = isDatabricks ? 'databricks_detail_verbose' : (citations.competitor_detail_verbose ? 'competitor_detail_verbose' : 'fabric_detail_verbose');
             const reasoningCitationField = isDatabricks ? 'databricks_reasoning' : (citations.competitor_reasoning ? 'competitor_reasoning' : 'fabric_reasoning');
             const enrichFc = c => ({
                 ...c,
@@ -4975,13 +5515,14 @@
             });
             const headlineCitations = (citations[headlineCitationField] || []).map(enrichFc);
             const detailsCitations = (citations[detailsCitationField] || []).map(enrichFc);
+            const verboseCitations = (citations[verboseCitationField] || []).map(enrichFc);
             const reasoningCitations = (citations[reasoningCitationField] || []).map(enrichFc);
 
             let html = '<div class="citation-expansion">';
             html += `<div class="citation-expansion-header" style="border-bottom-color:${headerColor}; color:${headerColor};">${escapeHtmlTrial(vendorLabel)} Details</div>`;
 
             // Evidence summary (simple sentences for headline + detail)
-            const evidenceHtml = buildEvidenceSummary(headline, detailsText, headlineCitations, detailsCitations, reasoningCitations, diffId, [], vendor, detailItems2);
+            const evidenceHtml = buildEvidenceSummary(headline, detailsText, headlineCitations, detailsCitations, verboseCitations, reasoningCitations, diffId, [], vendor, detailItems2);
             if (evidenceHtml || reasoning) {
                 html += '<div class="expand-section">';
                 html += '<div class="expand-section-title">Reasoning and Evidence</div>';
@@ -5131,7 +5672,7 @@
                 `</div>`;
         }
 
-        function buildEvidenceSummary(headline, detailsText, headlineCitations, detailsCitations, reasoningCitations, diffId, orphanFactChecks, vendor, detailItems) {
+        function buildEvidenceSummary(headline, detailsText, headlineCitations, detailsCitations, verboseCitations, reasoningCitations, diffId, orphanFactChecks, vendor, detailItems) {
             const blocks = [];
 
             // Build orphan fact-check lookup by claim_field
@@ -5188,6 +5729,7 @@
                     ? reasoningCitations
                     : (detailsCitations && detailsCitations.length > 0) ? detailsCitations : [];
             const dCites = (detailsCitations && detailsCitations.length > 0) ? detailsCitations : [];
+            const vCites = (verboseCitations && verboseCitations.length > 0) ? verboseCitations : [];
 
             if (headline) {
                 const enrichedHCites = enrichCitesWithOrphans(hCites, 'headline');
@@ -5221,6 +5763,29 @@
                         renderAllFactCheckCards(enrichedItemCites, diffId) +
                         `</div>`
                     );
+
+                    if (item.verbose_items && item.verbose_items.length > 0) {
+                        item.verbose_items.forEach(function(vitem) {
+                            var verboseItemCitations = vCites.filter(function(c) {
+                                const citeDid = c.detail_item_id === undefined || c.detail_item_id === null ? null : Number(c.detail_item_id);
+                                const citeVid = c.verbose_item_id === undefined || c.verbose_item_id === null ? null : Number(c.verbose_item_id);
+                                const wantDid = item.detail_item_id === undefined || item.detail_item_id === null ? null : Number(item.detail_item_id);
+                                const wantVid = vitem.verbose_item_id === undefined || vitem.verbose_item_id === null ? null : Number(vitem.verbose_item_id);
+                                const didMatch = wantDid === null ? true : citeDid === wantDid;
+                                const vidMatch = wantVid === null ? true : citeVid === wantVid;
+                                return didMatch && vidMatch;
+                            });
+                            var enrichedVerboseCites = enrichCitesWithOrphans(verboseItemCitations, 'detail_verbose');
+                            blocks.push(
+                                `<div class="evidence-block">` +
+                                `<div class="evidence-block-title">Detail (L300)</div>` +
+                                `<div class="evidence-title-pill">${escapeHtmlTrial(vitem.text || '')}</div>` +
+                                renderAllGeneratedCards(enrichedVerboseCites, diffId) +
+                                renderAllFactCheckCards(enrichedVerboseCites, diffId) +
+                                `</div>`
+                            );
+                        });
+                    }
                 });
             } else if (detailsText) {
                 // Legacy fallback: no detail items, render as single block
@@ -5470,6 +6035,16 @@
 
             document.getElementById('citationHighlightedText').textContent = highlightedText || 'N/A';
             document.getElementById('citationQuote').textContent = cite.source_quote || 'No source quote available';
+            document.getElementById('citationComment').value = '';
+            document.getElementById('citationStatus').value = '';
+            document.getElementById('citationEvidenceId').value = cite.evidence_id || '';
+            document.getElementById('citationDiffId').value = data.diffId || '';
+            document.getElementById('citationIndex').value = String(citeIdx);
+            document.getElementById('citationFcId').value = fc?.fact_check_id || '';
+            document.getElementById('citationContextBox').style.display = 'none';
+            document.getElementById('citationContextBox').textContent = '';
+            document.getElementById('citationContextMeta').textContent = '';
+            document.getElementById('citationContextBtn').style.display = 'none';
 
             // Resolve source info from the diff's sources array using source_index
             let sourceUrl = cite.source_url || '';
@@ -5485,8 +6060,25 @@
             }
 
             const urlEl = document.getElementById('citationUrl');
-            urlEl.textContent = sourceUrl || 'No URL';
-            urlEl.href = sourceUrl || '#';
+            const contextBtn = document.getElementById('citationContextBtn');
+            const isInternalUrl = !sourceUrl || sourceUrl === 'internal_document' || !/^https?:\/\//i.test(sourceUrl);
+            if (isInternalUrl) {
+                urlEl.textContent = sourceTitle || 'Internal context document';
+                urlEl.href = '#';
+                urlEl.onclick = function(ev) { ev.preventDefault(); openCitationSourceContext(); };
+                urlEl.removeAttribute('aria-disabled');
+                urlEl.style.pointerEvents = '';
+                urlEl.style.textDecoration = 'underline';
+                contextBtn.style.display = '';
+            } else {
+                urlEl.textContent = sourceUrl;
+                urlEl.href = sourceUrl;
+                urlEl.onclick = null;
+                urlEl.removeAttribute('aria-disabled');
+                urlEl.style.pointerEvents = '';
+                urlEl.style.textDecoration = '';
+                contextBtn.style.display = 'none';
+            }
 
             // Source type badge
             const sourceTypeSection = document.getElementById('citationSourceTypeSection');
@@ -5501,6 +6093,15 @@
 
             // Reset eval buttons
             document.querySelectorAll('.citation-eval-btn').forEach(b => b.classList.remove('selected'));
+            if (fc && fc.verdict) {
+                const verdictToStatus = { verified: 'approved', unverified: 'needs_revision', disputed: 'rejected', outdated: 'needs_revision' };
+                const existingStatus = verdictToStatus[(fc.verdict || '').toLowerCase()] || '';
+                if (existingStatus) {
+                    document.getElementById('citationStatus').value = existingStatus;
+                    const btn = document.querySelector(`.citation-eval-btn[data-status="${existingStatus}"]`);
+                    if (btn) btn.classList.add('selected');
+                }
+            }
 
             // Populate fact-check section
             const fcSection = document.getElementById('citationFcSection');
@@ -5526,15 +6127,27 @@
 
                 // Sources
                 const sourcesEl = document.getElementById('citationFcSources');
-                if (fc.citations && Array.isArray(fc.citations) && fc.citations.length > 0) {
-                    sourcesEl.innerHTML = fc.citations.map(s =>
-                        `<div style="margin-bottom: 4px;">` +
-                        (s.url ? `<a href="${escapeHtmlTrial(s.url)}" target="_blank">${escapeHtmlTrial(s.title || s.url)}</a>` : escapeHtmlTrial(s.title || 'Source')) +
-                        `</div>`
-                    ).join('');
-                } else {
-                    sourcesEl.innerHTML = '';
+                let fcSourceHtml = '';
+                if (fc.claim_quote || fc.claim_source_url || fc.claim_source_title) {
+                    const claimLink = fc.claim_source_url
+                        ? `<a href="${escapeHtmlTrial(fc.claim_source_url)}" target="_blank" rel="noopener noreferrer">${escapeHtmlTrial(fc.claim_source_title || fc.claim_source_url)}</a>`
+                        : `<span>${escapeHtmlTrial(fc.claim_source_title || 'Matching citation source')}</span>`;
+                    const claimQuote = fc.claim_quote
+                        ? `<div style="margin-top:3px;color:#374151;">${escapeHtmlTrial(fc.claim_quote)}</div>`
+                        : '';
+                    fcSourceHtml += `<div style="margin-bottom:8px;"><strong>Matched Citation</strong><div>${claimLink}</div>${claimQuote}</div>`;
                 }
+                if (fc.citations && Array.isArray(fc.citations) && fc.citations.length > 0) {
+                    fcSourceHtml += fc.citations.map(s => {
+                        const title = escapeHtmlTrial(s.title || s.url || 'Source');
+                        const link = s.url
+                            ? `<a href="${escapeHtmlTrial(s.url)}" target="_blank" rel="noopener noreferrer">${title}</a>`
+                            : `<span>${title}</span>`;
+                        const quote = s.quote ? `<div style="margin-top:3px;color:#374151;">${escapeHtmlTrial(s.quote)}</div>` : '';
+                        return `<div style="margin-bottom:8px;">${link}${quote}</div>`;
+                    }).join('');
+                }
+                sourcesEl.innerHTML = fcSourceHtml;
 
                 // Store fact-check ID for actions
                 document.getElementById('citationFcId').value = fc.fact_check_id || '';
@@ -5547,6 +6160,7 @@
             }
 
             // Open the panel
+            document.getElementById('citationOverlay').classList.add('open');
             document.getElementById('citationPanel').classList.add('open');
         }
 
@@ -5582,6 +6196,10 @@
          * Fact-check action from within the citation panel.
          */
         function panelFcAction(action) {
+            if (!isReviewMode) {
+                showSaveStatus('View mode enabled. Switch to Review mode to save.', 'error');
+                return;
+            }
             const fcId = document.getElementById('citationFcId').value;
             if (!fcId) return;
 
@@ -5594,8 +6212,29 @@
             } else if (action === 'dispute') {
                 document.getElementById('panelFcDispute').classList.add('selected-reject');
             }
-
-            console.log('Panel fact-check action:', fcId, action);
+            const mapped = action === 'approve' ? 'approved' : 'rejected';
+            const diffId = document.getElementById('citationDiffId').value || '';
+            showSaveStatus('Saving fact-check review...', 'saving');
+            fetch('/api/uc/fact-check-feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    battlecard_id: battlecardId,
+                    diff_id: diffId,
+                    fact_check_id: fcId,
+                    status: mapped,
+                    comment: '',
+                }),
+            })
+            .then(r => r.json().then(j => ({ok: r.ok, data: j})))
+            .then(({ok, data}) => {
+                if (ok && data.success) showSaveStatus('Fact-check review saved', 'saved');
+                else showSaveStatus(data.error || 'Failed to save fact-check review', 'error');
+            })
+            .catch((err) => {
+                console.error('Failed to save panel fact-check action:', err);
+                showSaveStatus('Failed to save fact-check review', 'error');
+            });
         }
 
         /**

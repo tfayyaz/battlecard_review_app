@@ -517,7 +517,12 @@
                 <div id="testResults" style="display:none;">
                     <div class="test-stats" id="testStats"></div>
                     <div class="var-pills" id="testVars"></div>
+                    <div style="font-size:12px; font-weight:600; margin: 10px 0 6px;">Rendered Prompt</div>
                     <div class="test-output" id="testOutput"></div>
+                    <div style="font-size:12px; font-weight:600; margin: 12px 0 6px;">API Request Preview</div>
+                    <div class="test-output" id="testRequest"></div>
+                    <div style="font-size:12px; font-weight:600; margin: 12px 0 6px;">Structured Output Schema</div>
+                    <div class="test-output" id="testSchema"></div>
                 </div>
             </div>
         </div>
@@ -718,6 +723,8 @@
 
             // Show rendered output
             document.getElementById('testOutput').textContent = data.rendered_prompt || '';
+            document.getElementById('testRequest').textContent = JSON.stringify(data.request_preview || data.request_config_json || {}, null, 2);
+            document.getElementById('testSchema').textContent = JSON.stringify(data.response_schema_json || {}, null, 2);
             document.getElementById('testResults').style.display = '';
 
         } catch (e) {

@@ -322,7 +322,7 @@
             width: 12px;
         }
 
-        .diff-info { flex: 1; cursor: pointer; }
+        .diff-info { flex: 1; }
         .diff-info:hover { background: rgba(0,0,0,0.02); border-radius: 4px; }
 
         .diff-name {
@@ -903,7 +903,48 @@
             border-radius: 4px;
         }
         .diff-info {
-            cursor: pointer;
+            cursor: default;
+        }
+
+        .keydiff-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .keydiff-toolbar .score-buttons {
+            flex-wrap: wrap;
+        }
+
+        .db-field-grid {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            gap: 6px 12px;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .db-field-key {
+            color: #6b7280;
+            font-weight: 600;
+        }
+
+        .db-field-value {
+            color: #111827;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        .db-json-block {
+            margin-top: 8px;
+            font-size: 11px;
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 8px;
+            white-space: pre-wrap;
+            overflow-x: auto;
         }
 
         /* Expansion section blocks */
@@ -3257,23 +3298,26 @@
                         <td>
                             <div class="diff-cell">
                                 <div class="drag-handle" title="Drag to reorder">&#9776;</div>
-                                <div class="diff-info" onclick="toggleCellExpansion('{{ diff.id }}', 'keydiff', this)">
+                                <div class="diff-info">
                                     <div class="diff-name">{{ diff.key_differentiator }}{% if diff.manually_added %}<span class="manually-added-badge">Manual</span>{% endif %}{% if diff.key_diff_theme %}<span class="diff-theme-badge">{{ diff.key_diff_theme }}</span>{% endif %}{% if diff.detail_status and diff.detail_status != 'complete' %}<span class="detail-status-badge {{ diff.detail_status }}">{% if diff.detail_status == 'skeleton' %}Skeleton{% elif diff.detail_status == 'generating' %}Generating...{% elif diff.detail_status == 'failed' %}Failed{% endif %}</span>{% endif %}</div>
                                     <div class="diff-desc">{{ diff.description }}</div>
                                     {% if diff.feedback.reorder %}
                                     <div class="reorder-badge">{{ diff.feedback.reorder.original_rank }} &#8594; {{ diff.feedback.reorder.new_rank }}</div>
                                     {% endif %}
-                                    <div class="score-buttons" onclick="event.stopPropagation()">
-                                        <button class="score-btn approve {% if diff.feedback.key_diff.status == 'approved' %}selected{% endif %}"
-                                                onclick="saveFeedback('{{ diff.id }}', 'key_diff', 'approved', this)" title="Approve">&#10003;</button>
-                                        <button class="score-btn revision {% if diff.feedback.key_diff.status == 'needs_revision' %}selected{% endif %}"
-                                                onclick="saveFeedback('{{ diff.id }}', 'key_diff', 'needs_revision', this)" title="Needs Revision">&#9888;</button>
-                                        <button class="score-btn reject {% if diff.feedback.key_diff.status == 'rejected' %}selected{% endif %}"
-                                                onclick="saveFeedback('{{ diff.id }}', 'key_diff', 'rejected', this)" title="Reject">&#10007;</button>
-                                        <button class="expand-btn {% if diff.feedback.key_diff.comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', 'key_diff')" title="{% if diff.feedback.key_diff.comment %}View comment{% else %}Add comment{% endif %}">&#128172;{% if diff.feedback.key_diff.comment %}<span class="comment-dot"></span>{% endif %}</button>
-                                        {% if diff.update_count and diff.update_count > 0 %}
-                                        <span class="update-count-badge" title="Updated {{ diff.update_count }} time(s)">v{{ diff.update_count + 1 }}</span>
-                                        {% endif %}
+                                    <div class="keydiff-toolbar" onclick="event.stopPropagation()">
+                                        <div class="score-buttons">
+                                            <button class="score-btn approve {% if diff.feedback.key_diff.status == 'approved' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', 'key_diff', 'approved', this)" title="Approve">&#10003;</button>
+                                            <button class="score-btn revision {% if diff.feedback.key_diff.status == 'needs_revision' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', 'key_diff', 'needs_revision', this)" title="Needs Revision">&#9888;</button>
+                                            <button class="score-btn reject {% if diff.feedback.key_diff.status == 'rejected' %}selected{% endif %}"
+                                                    onclick="saveFeedback('{{ diff.id }}', 'key_diff', 'rejected', this)" title="Reject">&#10007;</button>
+                                            <button class="expand-btn {% if diff.feedback.key_diff.comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', 'key_diff')" title="{% if diff.feedback.key_diff.comment %}View comment{% else %}Add comment{% endif %}">&#128172;{% if diff.feedback.key_diff.comment %}<span class="comment-dot"></span>{% endif %}</button>
+                                            <button class="info-btn keydiff-info-btn" onclick="toggleKeyDiffDetails('{{ diff.id }}', this)" title="Show key diff details">&#8505;</button>
+                                            {% if diff.update_count and diff.update_count > 0 %}
+                                            <span class="update-count-badge" title="Updated {{ diff.update_count }} time(s)">v{{ diff.update_count + 1 }}</span>
+                                            {% endif %}
+                                        </div>
                                     </div>
                                     <div class="review-details" id="details-{{ diff.id }}-key_diff" onclick="event.stopPropagation()">
                                         <div class="comment-row">
@@ -5363,30 +5407,41 @@
 
         // Track currently expanded cell
         let _expandedCellKey = null;
+        function toggleKeyDiffDetails(diffId, btnEl) {
+            const diffInfoEl = document.querySelector(`tr.diff-row[data-id="${diffId}"] .diff-info`);
+            if (!diffInfoEl) return;
+            toggleCellExpansion(diffId, 'keydiff', diffInfoEl, btnEl);
+        }
 
         /**
          * Toggle the inline citation/fact-check expansion row below a diff row.
          * When a Databricks or Fabric cell is clicked, a row expands below showing
          * all citations for that field, each with linked fact-check details.
          */
-        function toggleCellExpansion(diffId, vendor, cellEl) {
+        function toggleCellExpansion(diffId, vendor, cellEl, triggerBtn) {
             const cellKey = diffId + ':' + vendor;
 
             // Remove any existing expansion row and cell highlights
-            const existing = document.getElementById('cite-expand-' + diffId);
+            const targetExpansionId = 'cite-expand-' + diffId;
+            let hadCurrentExpansion = false;
+            document.querySelectorAll('.citation-expansion-row').forEach(function(row) {
+                if (row.id === targetExpansionId) hadCurrentExpansion = true;
+                row.remove();
+            });
             document.querySelectorAll('.review-cell.cell-selected, .diff-info.cell-selected').forEach(el => el.classList.remove('cell-selected'));
+            document.querySelectorAll('.keydiff-info-btn.active').forEach(el => el.classList.remove('active'));
 
-            if (existing) {
-                existing.remove();
-                if (_expandedCellKey === cellKey) {
-                    _expandedCellKey = null;
-                    return; // Toggle off — same cell clicked again
-                }
+            if (hadCurrentExpansion && _expandedCellKey === cellKey) {
+                _expandedCellKey = null;
+                return; // Toggle off — same cell clicked again
             }
             _expandedCellKey = cellKey;
 
             // Highlight the clicked cell
             cellEl.classList.add('cell-selected');
+            if (triggerBtn && vendor === 'keydiff') {
+                triggerBtn.classList.add('active');
+            }
 
             // Find the diff data
             const diffData = findDiffData(diffId);
@@ -5451,8 +5506,82 @@
          * Shows: description, selection reasoning, directive alignment, research sources, MLflow links.
          */
         function buildKeyDiffExpansionHtml(diffData, citations, sourcesArr) {
+            function formatDbValue(value) {
+                if (value === null || value === undefined || value === '') {
+                    return '<span class="no-data">N/A</span>';
+                }
+                if (typeof value === 'boolean') return value ? 'true' : 'false';
+                if (typeof value === 'object') {
+                    try {
+                        return escapeHtmlTrial(JSON.stringify(value));
+                    } catch (e) {
+                        return escapeHtmlTrial(String(value));
+                    }
+                }
+                return escapeHtmlTrial(String(value));
+            }
+
+            function renderDbFieldGrid(fields) {
+                const parts = [];
+                fields.forEach(function(field) {
+                    const key = field[0];
+                    const value = field[1];
+                    parts.push(`<div class="db-field-key">${escapeHtmlTrial(String(key))}</div>`);
+                    parts.push(`<div class="db-field-value">${formatDbValue(value)}</div>`);
+                });
+                if (parts.length === 0) return '<span class="no-data">No database fields available</span>';
+                return `<div class="db-field-grid">${parts.join('')}</div>`;
+            }
+
             let html = '<div class="citation-expansion">';
             html += '<div class="citation-expansion-header" style="border-bottom-color:#0369a1; color:#0369a1;">Key Differentiator Details</div>';
+
+            const dbRecord = diffData.db_record || {};
+            const dbRelated = diffData.db_related || {};
+            const dbFields = [
+                ['key_diff_id', dbRecord.key_diff_id ?? diffData.key_diff_id],
+                ['category_id', dbRecord.category_id ?? diffData.category_id],
+                ['generation_id', dbRecord.generation_id ?? diffData.generation_id],
+                ['key_diff_name', dbRecord.key_diff_name ?? diffData.key_differentiator],
+                ['key_diff_description', dbRecord.key_diff_description ?? diffData.description],
+                ['display_order', dbRecord.display_order ?? diffData.rank],
+                ['is_active', dbRecord.is_active ?? diffData.key_diff_is_active],
+                ['created_at', dbRecord.created_at ?? diffData.key_diff_created_at],
+                ['category_name (joined)', dbRecord.category_name ?? diffData.category],
+            ];
+
+            const relatedFields = [
+                ['databricks_claim_id', dbRelated.databricks_claim_id ?? diffData.databricks_claim_id],
+                ['competitor_claim_id', dbRelated.competitor_claim_id ?? diffData.fabric_claim_id],
+                ['databricks_detail_items', dbRelated.databricks_detail_items_count ?? (Array.isArray(diffData.databricks_detail_items) ? diffData.databricks_detail_items.length : 0)],
+                ['competitor_detail_items', dbRelated.competitor_detail_items_count ?? (Array.isArray(diffData.fabric_detail_items) ? diffData.fabric_detail_items.length : 0)],
+                ['databricks_l300_items', dbRelated.databricks_verbose_items_count ?? 0],
+                ['competitor_l300_items', dbRelated.competitor_verbose_items_count ?? 0],
+                ['evidence_rows_total', dbRelated.evidence_rows_total ?? 0],
+                ['fact_check_rows_total', dbRelated.fact_check_rows_total ?? (Array.isArray(diffData.fact_checks) ? diffData.fact_checks.length : 0)],
+            ];
+
+            html += '<div class="expand-section">';
+            html += '<div class="expand-section-title">Key Diff Database Row (key_differentiators)</div>';
+            html += `<div class="expand-section-content">${renderDbFieldGrid(dbFields)}</div>`;
+            if (Object.keys(dbRecord).length > 0) {
+                html += `<div class="db-json-block">${escapeHtmlTrial(JSON.stringify(dbRecord, null, 2))}</div>`;
+            }
+            html += '</div>';
+
+            html += '<div class="expand-section">';
+            html += '<div class="expand-section-title">Related Database Records</div>';
+            html += `<div class="expand-section-content">${renderDbFieldGrid(relatedFields)}</div>`;
+            if (Object.keys(dbRelated).length > 0) {
+                html += `<div class="db-json-block">${escapeHtmlTrial(JSON.stringify(dbRelated, null, 2))}</div>`;
+            }
+            html += '</div>';
+
+            // Description
+            html += '<div class="expand-section">';
+            html += '<div class="expand-section-title">Description</div>';
+            html += `<div class="expand-section-content">${diffData.description ? escapeHtmlTrial(diffData.description) : '<span class="no-data">No description provided</span>'}</div>`;
+            html += '</div>';
 
             // Selection Reasoning
             const selReasoning = diffData.selection_reasoning || diffData.key_diff_reasoning || diffData.reasoning || '';

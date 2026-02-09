@@ -2769,8 +2769,9 @@ def load_battlecard_slides(battlecard_id):
 
         diffs = conn.execute(
             text(
-                "SELECT kd.key_diff_id, kd.key_diff_name, kd.key_diff_description, kd.display_order, "
-                "pcc.category_name "
+                "SELECT kd.key_diff_id, kd.category_id, kd.generation_id AS key_diff_generation_id, "
+                "kd.key_diff_name, kd.key_diff_description, kd.display_order, kd.is_active, kd.created_at, "
+                "pcc.catalog_id AS category_catalog_id, pcc.category_name "
                 "FROM key_differentiators kd "
                 "JOIN product_category_catalog pcc ON kd.category_id = pcc.catalog_id "
                 "WHERE kd.is_active = TRUE "
@@ -2869,6 +2870,8 @@ def load_battlecard_slides(battlecard_id):
         key_diff_id = d["key_diff_id"]
         db_claim = claims_by_keydiff.get(key_diff_id, {}).get("databricks")
         fab_claim = claims_by_keydiff.get(key_diff_id, {}).get("competitor")
+        db_claim_id = db_claim.get("claim_id") if db_claim else None
+        fab_claim_id = fab_claim.get("claim_id") if fab_claim else None
 
         diff_id = f"kd-{key_diff_id}"
         sources = []
@@ -2990,6 +2993,14 @@ def load_battlecard_slides(battlecard_id):
 
         db_detail_items = _build_detail_items(db_claim, detail_items_by_claim, verbose_items_by_detail)
         fab_detail_items = _build_detail_items(fab_claim, detail_items_by_claim, verbose_items_by_detail)
+        db_verbose_count = sum(len(it.get("verbose_items") or []) for it in db_detail_items)
+        fab_verbose_count = sum(len(it.get("verbose_items") or []) for it in fab_detail_items)
+        db_evidence_count = len(evidence_by_claim.get(db_claim_id, [])) if db_claim_id else 0
+        fab_evidence_count = len(evidence_by_claim.get(fab_claim_id, [])) if fab_claim_id else 0
+        db_fact_check_count = len(fact_checks_by_claim.get(db_claim_id, [])) if db_claim_id else 0
+        fab_fact_check_count = len(fact_checks_by_claim.get(fab_claim_id, [])) if fab_claim_id else 0
+        created_at = d.get("created_at")
+        created_at_iso = created_at.isoformat() if hasattr(created_at, "isoformat") else (str(created_at) if created_at else "")
 
         # Flat text fallback for backward compatibility
         db_details_flat = " ".join(it["text"] for it in db_detail_items) if db_detail_items else ""
@@ -3002,6 +3013,11 @@ def load_battlecard_slides(battlecard_id):
             "key_differentiator": d.get("key_diff_name") or "",
             "description": d.get("key_diff_description") or "",
             "rank": d.get("display_order") or 0,
+            "key_diff_id": key_diff_id,
+            "category_id": d.get("category_id"),
+            "generation_id": d.get("key_diff_generation_id"),
+            "key_diff_is_active": bool(d.get("is_active")),
+            "key_diff_created_at": created_at_iso,
             "databricks_headline": (db_claim.get("headline") if db_claim else ""),
             "databricks_details": db_details_flat,
             "databricks_detail_items": db_detail_items,
@@ -3022,6 +3038,31 @@ def load_battlecard_slides(battlecard_id):
             "detail_status": "complete",
             "update_count": 0,
             "fact_checks": slide_fact_checks,
+            "db_record": {
+                "key_diff_id": key_diff_id,
+                "category_id": d.get("category_id"),
+                "generation_id": d.get("key_diff_generation_id"),
+                "key_diff_name": d.get("key_diff_name") or "",
+                "key_diff_description": d.get("key_diff_description") or "",
+                "display_order": d.get("display_order") or 0,
+                "is_active": bool(d.get("is_active")),
+                "created_at": created_at_iso,
+                "category_name": d.get("category_name") or "",
+            },
+            "db_related": {
+                "databricks_claim_id": db_claim_id,
+                "competitor_claim_id": fab_claim_id,
+                "databricks_detail_items_count": len(db_detail_items),
+                "competitor_detail_items_count": len(fab_detail_items),
+                "databricks_verbose_items_count": db_verbose_count,
+                "competitor_verbose_items_count": fab_verbose_count,
+                "databricks_evidence_rows": db_evidence_count,
+                "competitor_evidence_rows": fab_evidence_count,
+                "databricks_fact_check_rows": db_fact_check_count,
+                "competitor_fact_check_rows": fab_fact_check_count,
+                "evidence_rows_total": db_evidence_count + fab_evidence_count,
+                "fact_check_rows_total": db_fact_check_count + fab_fact_check_count,
+            },
         }
 
         slides.append(diff)

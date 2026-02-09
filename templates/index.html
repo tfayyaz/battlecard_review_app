@@ -83,6 +83,34 @@
             font-weight: 600;
             color: var(--teal);
         }
+        .nav-card-danger {
+            border-color: #FECACA;
+            background: #FEF2F2;
+        }
+        .nav-card-danger:hover {
+            border-color: #F87171;
+        }
+        .danger-btn {
+            margin-top: 14px;
+            border: 1px solid #DC2626;
+            background: #DC2626;
+            color: #fff;
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .danger-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+        .danger-status {
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            min-height: 18px;
+        }
     </style>
 </head>
 <body>
@@ -141,7 +169,63 @@
                 <p>Download review feedback data as JSON for analysis.</p>
                 <span class="arrow">Export &rarr;</span>
             </a>
+
+            <div class="nav-card nav-card-danger">
+                <div class="nav-card-icon">&#x1F5D1;</div>
+                <h3>Delete Generated Content</h3>
+                <p>Delete all workflows, battlecards, claims, fact-checks, reviews, and eval/debug output. Product categories, mappings, and prompt templates are kept.</p>
+                <button class="danger-btn" id="btn-purge-content" onclick="purgeGeneratedContent(event)">Delete Data</button>
+                <div class="danger-status" id="purge-status"></div>
+            </div>
         </div>
     </div>
+    <script>
+    async function purgeGeneratedContent(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        const required = 'DELETE WORKFLOWS AND BATTLECARDS';
+        const typed = prompt('Type exactly: ' + required);
+        if (typed === null) return;
+        if (typed.trim() !== required) {
+            alert('Confirmation phrase mismatch. Nothing was deleted.');
+            return;
+        }
+        if (!confirm('This will permanently delete generated workflow and battlecard content. Continue?')) {
+            return;
+        }
+
+        const btn = document.getElementById('btn-purge-content');
+        const status = document.getElementById('purge-status');
+        btn.disabled = true;
+        status.textContent = 'Deleting generated content...';
+        status.style.color = '#6B7280';
+
+        try {
+            const resp = await fetch('/api/admin/purge-generated-content', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({confirm: required}),
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.success) {
+                status.textContent = data.error || 'Delete failed';
+                status.style.color = '#B91C1C';
+                btn.disabled = false;
+                return;
+            }
+            const deleted = data.deleted_counts || {};
+            const summary = 'Deleted ' +
+                (deleted.workflow_sessions || 0) + ' workflows, ' +
+                (deleted.battlecard_generations || 0) + ' battlecard generations, ' +
+                (deleted.claims || 0) + ' claims.';
+            status.textContent = summary;
+            status.style.color = '#065F46';
+        } catch (err) {
+            status.textContent = 'Delete failed: ' + err.message;
+            status.style.color = '#B91C1C';
+            btn.disabled = false;
+        }
+    }
+    </script>
 </body>
 </html>

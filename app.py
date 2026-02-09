@@ -6897,6 +6897,97 @@ def admin_categories():
     )
 
 
+@app.route('/api/admin/purge-generated-content', methods=['POST'])
+def api_admin_purge_generated_content():
+    """Delete generated workflow/battlecard content while preserving catalogs/prompts."""
+    data = request.json or {}
+    confirm = str(data.get("confirm", "")).strip()
+    required = "DELETE WORKFLOWS AND BATTLECARDS"
+    if confirm != required:
+        return jsonify({
+            "success": False,
+            "error": f"Confirmation phrase mismatch. Type exactly: {required}",
+            "required_confirmation": required,
+        }), 400
+
+    tracked_tables = [
+        "workflow_sessions",
+        "workflow_steps",
+        "workflow_artifacts",
+        "agent_turns",
+        "session_category_selections",
+        "pass2_debug_logs",
+        "battlecard_generations",
+        "key_differentiators",
+        "claims",
+        "claim_detail_items",
+        "claim_detail_verbose_items",
+        "evidence",
+        "fact_checks",
+        "human_reviews",
+        "regeneration_requests",
+        "eval_runs",
+        "eval_run_results",
+        "eval_datasets",
+        "eval_dataset_items",
+        "sources",
+    ]
+
+    def _counts(conn):
+        out = {}
+        for table_name in tracked_tables:
+            out[table_name] = int(conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).scalar() or 0)
+        return out
+
+    with ENGINE.begin() as conn:
+        before = _counts(conn)
+
+        # Delete dependent rows first.
+        conn.execute(text("DELETE FROM human_reviews"))
+        conn.execute(text("DELETE FROM fact_checks"))
+        conn.execute(text("DELETE FROM evidence"))
+        conn.execute(text("DELETE FROM claim_detail_verbose_items"))
+        conn.execute(text("DELETE FROM claim_detail_items"))
+        conn.execute(text("DELETE FROM claims"))
+        conn.execute(text("DELETE FROM regeneration_requests"))
+
+        conn.execute(text("DELETE FROM eval_run_results"))
+        conn.execute(text("DELETE FROM eval_runs"))
+        conn.execute(text("DELETE FROM eval_dataset_items"))
+        conn.execute(text("DELETE FROM eval_datasets"))
+
+        conn.execute(text("DELETE FROM pass2_debug_logs"))
+        conn.execute(text("DELETE FROM agent_turns"))
+        conn.execute(text("DELETE FROM workflow_artifacts"))
+        conn.execute(text("DELETE FROM workflow_steps"))
+        conn.execute(text("DELETE FROM session_category_selections"))
+        conn.execute(text("DELETE FROM workflow_sessions"))
+
+        conn.execute(text("DELETE FROM key_differentiators"))
+        conn.execute(text("DELETE FROM battlecard_generations"))
+        conn.execute(text("DELETE FROM sources"))
+
+        conn.execute(
+            text(
+                "DELETE FROM audit_log "
+                "WHERE entity_type IN ("
+                "'workflow_session', 'workflow_step', 'workflow_artifact', "
+                "'battlecard_generation', 'key_differentiator', 'claim', "
+                "'fact_check', 'human_review', 'regeneration_request', 'eval_run'"
+                ")"
+            )
+        )
+        after = _counts(conn)
+
+    deleted = {k: max(0, before.get(k, 0) - after.get(k, 0)) for k in tracked_tables}
+    return jsonify({
+        "success": True,
+        "message": "Generated workflow and battlecard content deleted.",
+        "deleted_counts": deleted,
+        "remaining_counts": after,
+    })
+
+
 @app.route('/api/admin/categories', methods=['POST'])
 def create_category():
     """Create a new product category."""

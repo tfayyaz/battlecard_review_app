@@ -2075,6 +2075,9 @@
             font-size: 10px;
             margin-bottom: 2px;
         }
+        .fc-popover-source-body {
+            min-width: 0;
+        }
 
         .fc-popover-source-num {
             flex-shrink: 0;
@@ -2085,6 +2088,28 @@
         .fc-popover-source-title {
             color: var(--text);
             font-weight: 500;
+        }
+        .fc-popover-quote {
+            font-size: 11px;
+            color: #374151;
+            background: #F8FAFC;
+            border: 1px solid #E2E8F0;
+            border-radius: 6px;
+            padding: 6px 8px;
+            margin: 4px 0;
+            line-height: 1.4;
+            max-height: 120px;
+            overflow: auto;
+            white-space: pre-wrap;
+        }
+        .fc-popover-source-link {
+            font-size: 11px;
+            color: var(--teal);
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .fc-popover-source-link:hover {
+            text-decoration: underline;
         }
 
         /* "Show more" link in popover */
@@ -3469,7 +3494,7 @@
                                 <div class="fc-claim-wrapper" id="fc-wrapper-{{ fc.fact_check_id }}">
                                     <div class="fc-claim-text-row" onclick="toggleFcPopover('{{ fc.fact_check_id }}')">
                                         <span class="fc-verdict-dot {{ fc.verdict }}"></span>
-                                        <span class="fc-claim-text">{{ fc.claim }}</span>
+                                        <span class="fc-claim-text">{{ fc.claim or fc.claim_quote or 'Fact-check statement' }}</span>
                                     </div>
                                     <div class="fc-popover" id="fc-popover-{{ fc.fact_check_id }}">
                                         <div class="fc-popover-header">
@@ -3485,6 +3510,23 @@
                                             {{ fc.rationale or 'No rationale provided' }}
                                         </div>
                                         <button class="fc-show-more" onclick="event.stopPropagation(); toggleFcRationale('{{ fc.fact_check_id }}')">Show more</button>
+                                        {% if fc.claim_quote or fc.claim_source_url %}
+                                        <div class="fc-popover-sources">
+                                            <div class="fc-popover-source-item">
+                                                <span class="fc-popover-source-num">Claim</span>
+                                                <div class="fc-popover-source-body">
+                                                    {% if fc.claim_quote %}
+                                                    <div class="fc-popover-quote">{{ fc.claim_quote }}</div>
+                                                    {% endif %}
+                                                    {% if fc.claim_source_url %}
+                                                    <a class="fc-popover-source-link" href="{{ fc.claim_source_url }}" target="_blank" onclick="event.stopPropagation()">Open matching citation source &rarr;</a>
+                                                    {% elif fc.claim_source_title %}
+                                                    <div class="fc-popover-source-title">{{ fc.claim_source_title }}</div>
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {% endif %}
                                         {% if fc.citations and fc.citations|length > 0 %}
                                         <div class="fc-popover-sources">
                                             {% for cite in fc.citations %}

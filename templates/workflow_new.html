@@ -188,6 +188,52 @@
             font-weight: 600;
             display: none;
         }
+        .execution-preview {
+            margin-top: 10px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: #F9FAFB;
+            padding: 10px 12px;
+        }
+        .execution-preview-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+            color: #4B5563;
+            margin-bottom: 8px;
+        }
+        .execution-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+        .execution-row:last-child {
+            margin-bottom: 0;
+        }
+        .execution-chip {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            border-radius: 999px;
+            padding: 2px 8px;
+            border: 1px solid transparent;
+        }
+        .execution-chip.parallel {
+            background: #DCFCE7;
+            color: #166534;
+            border-color: #86EFAC;
+        }
+        .execution-chip.sequential {
+            background: #FEF3C7;
+            color: #92400E;
+            border-color: #FCD34D;
+        }
+        .execution-text {
+            font-size: 12px;
+            color: #4B5563;
+        }
     </style>
 </head>
 <body>
@@ -239,7 +285,9 @@
                     <div class="form-group">
                         <label for="model_name">Model</label>
                         <select id="model_name" name="model_name">
+                            <option value="databricks-claude-opus-4-6">Claude Opus 4.6</option>
                             <option value="databricks-claude-opus-4-5">Claude Opus 4.5</option>
+                            <option value="databricks-claude-sonnet-4-5">Claude Sonnet 4.5</option>
                             <option value="databricks-claude-sonnet-4">Claude Sonnet 4</option>
                             <option value="databricks-claude-haiku-4-5">Claude Haiku 4.5</option>
                             <option value="databricks-meta-llama-3-3-70b-instruct">Llama 3.3 70B</option>
@@ -253,8 +301,35 @@
 
                 <div class="form-group">
                     <label for="max_workers">Max Concurrent Workers</label>
-                    <div class="hint">Number of parallel model calls in Pass 2</div>
+                    <div class="hint">Upper bound for parallel model calls</div>
                     <input type="number" id="max_workers" name="max_workers" value="5" min="1" max="20">
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="step4_execution_mode">Step 4 Execution Strategy</label>
+                        <select id="step4_execution_mode" name="step4_execution_mode">
+                            {% for mode, cfg in step4_execution_options.items() %}
+                            <option value="{{ mode }}" {% if mode == 'auto' %}selected{% endif %}>{{ cfg.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="step5_execution_mode">Step 5 Execution Strategy</label>
+                        <select id="step5_execution_mode" name="step5_execution_mode">
+                            {% for mode, cfg in step5_execution_options.items() %}
+                            <option value="{{ mode }}" {% if mode == 'auto' %}selected{% endif %}>{{ cfg.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label style="display:flex; align-items:center; gap:8px;">
+                        <input type="checkbox" id="step5_inline_fact_check" name="step5_inline_fact_check">
+                        Seed Step 6 fact checks from Step 5 citation verdicts
+                    </label>
+                    <div class="hint">Useful for V8 or fast benchmark runs. Step 6 can still be rerun with Exa.</div>
                 </div>
 
                 <div class="form-group">
@@ -277,6 +352,17 @@
                         {% endfor %}
                     </select>
                     <div class="hint" id="prompt-version-hint" style="margin-top:4px; font-style: italic;"></div>
+                    <div class="execution-preview" id="executionPreview">
+                        <div class="execution-preview-title">Execution Plan Preview</div>
+                        <div class="execution-row">
+                            <span class="execution-chip" id="step4-mode-chip">-</span>
+                            <span class="execution-text" id="step4-mode-text"></span>
+                        </div>
+                        <div class="execution-row">
+                            <span class="execution-chip" id="step5-mode-chip">-</span>
+                            <span class="execution-text" id="step5-mode-text"></span>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="error-msg" id="errorMsg"></div>
@@ -336,6 +422,9 @@
             model_name: document.getElementById('model_name').value,
             diffs_per_category: parseInt(document.getElementById('diffs_per_category').value),
             max_workers: parseInt(document.getElementById('max_workers').value),
+            step4_execution_mode: document.getElementById('step4_execution_mode').value,
+            step5_execution_mode: document.getElementById('step5_execution_mode').value,
+            step5_inline_fact_check: document.getElementById('step5_inline_fact_check').checked,
             pass1_prompt_template_version: parseInt(document.getElementById('pass1_prompt_template_version').value),
             pass2_prompt_template_version: parseInt(document.getElementById('pass2_prompt_template_version').value),
         };
@@ -386,6 +475,60 @@
             p2Sel.addEventListener('change', updateP2Hint);
             updateP2Hint();
         }
+
+        const workersEl = document.getElementById('max_workers');
+        const step4ModeEl = document.getElementById('step4_execution_mode');
+        const step5ModeEl = document.getElementById('step5_execution_mode');
+        function setModeChip(el, isParallel) {
+            if (!el) return;
+            el.textContent = isParallel ? 'Parallel' : 'Sequential';
+            el.className = 'execution-chip ' + (isParallel ? 'parallel' : 'sequential');
+        }
+        function updateExecutionPreview() {
+            const workers = parseInt((workersEl && workersEl.value) || '1', 10) || 1;
+            const p1v = parseInt((p1Sel && p1Sel.value) || '3', 10) || 3;
+            const p2v = parseInt((p2Sel && p2Sel.value) || '2', 10) || 2;
+            const s4mode = (step4ModeEl && step4ModeEl.value) || 'auto';
+            const s5mode = (step5ModeEl && step5ModeEl.value) || 'auto';
+
+            const step4Parallel = (s4mode === 'category_parallel') || (s4mode === 'auto' && p1v >= 3 && workers > 1);
+            setModeChip(document.getElementById('step4-mode-chip'), step4Parallel);
+            document.getElementById('step4-mode-text').textContent = (s4mode === 'single_call')
+                ? 'Step 4: single-call planning'
+                : (s4mode === 'category_sequential')
+                    ? 'Step 4: category-batched sequential calls'
+                    : step4Parallel
+                        ? 'Step 4: category-batched parallel calls (if 2+ core categories)'
+                        : 'Step 4: template-driven auto mode';
+
+            const step5Parallel = (
+                s5mode === 'per_diff_parallel' ||
+                s5mode === 'category_parallel' ||
+                (s5mode === 'auto' && workers > 1)
+            );
+            setModeChip(document.getElementById('step5-mode-chip'), step5Parallel);
+            if (s5mode === 'single_call') {
+                document.getElementById('step5-mode-text').textContent = 'Step 5: single-call generation (all key diffs together)';
+            } else if (s5mode === 'per_diff_parallel') {
+                document.getElementById('step5-mode-text').textContent = 'Step 5: per-diff parallel calls (cap 8 workers)';
+            } else if (s5mode === 'per_diff_sequential') {
+                document.getElementById('step5-mode-text').textContent = 'Step 5: per-diff sequential calls';
+            } else if (s5mode === 'category_parallel') {
+                document.getElementById('step5-mode-text').textContent = 'Step 5: category-batched parallel calls (cap 4 workers)';
+            } else if (s5mode === 'category_sequential') {
+                document.getElementById('step5-mode-text').textContent = 'Step 5: category-batched sequential calls';
+            } else {
+                document.getElementById('step5-mode-text').textContent = (p2v === 5 || p2v === 6 || p2v === 7 || p2v === 8)
+                    ? 'Step 5: auto category-batched mode'
+                    : 'Step 5: auto per-diff mode';
+            }
+        }
+        if (p1Sel) p1Sel.addEventListener('change', updateExecutionPreview);
+        if (p2Sel) p2Sel.addEventListener('change', updateExecutionPreview);
+        if (step4ModeEl) step4ModeEl.addEventListener('change', updateExecutionPreview);
+        if (step5ModeEl) step5ModeEl.addEventListener('change', updateExecutionPreview);
+        if (workersEl) workersEl.addEventListener('input', updateExecutionPreview);
+        updateExecutionPreview();
     })();
     </script>
 </body>

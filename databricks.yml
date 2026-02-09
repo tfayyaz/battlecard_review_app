@@ -13,6 +13,11 @@ resources:
             database_name: databricks_postgres
             instance_name: "battlestation"
             permission: CAN_CONNECT_AND_CREATE
+        - name: exa_api_key
+          secret:
+            scope: battlecards-review-pg-secrets
+            key: exa_api_key
+            permission: READ
 
 targets:
   dev:

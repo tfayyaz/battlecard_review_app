@@ -59,6 +59,21 @@
             cursor: pointer;
         }
         .btn-new:hover { background: #1e4444; }
+        .btn-secondary {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            background: #fff;
+            color: var(--teal);
+            border: 1px solid var(--teal);
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .btn-secondary:hover { background: #f0f9f9; }
 
         .container {
             max-width: 1200px;
@@ -248,7 +263,10 @@
                 <a href="/" style="color: var(--text-secondary); text-decoration: none; font-size: 20px;">&larr;</a>
                 <h1 class="header-title">Battlecard Workflows</h1>
             </div>
-            <a href="/workflow/new" class="btn-new">+ New Battlecard</a>
+            <div style="display:flex; gap:8px; align-items:center;">
+                <a href="/evals" class="btn-secondary">Evals</a>
+                <a href="/workflow/new" class="btn-new">+ New Battlecard</a>
+            </div>
         </div>
     </div>
 

@@ -24,3 +24,6 @@ Thumbs.db
 # Databricks
 .databricks/
 .playwright-cli/
+
+# Generated runs / backups
+runs/

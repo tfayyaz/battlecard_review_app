@@ -325,13 +325,56 @@
         .step-header {
             display: flex;
             justify-content: space-between;
-            align-items: center;
+            align-items: flex-start;
             margin-bottom: 12px;
+        }
+        .step-title-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
         }
         .step-title {
             font-size: 16px;
             font-weight: 700;
             color: var(--text);
+        }
+        .step-execution-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .step-execution-chip {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            border-radius: 999px;
+            padding: 2px 8px;
+            border: 1px solid transparent;
+        }
+        .step-execution-chip.parallel {
+            background: #DCFCE7;
+            color: #166534;
+            border-color: #86EFAC;
+        }
+        .step-execution-chip.sequential {
+            background: #FEF3C7;
+            color: #92400E;
+            border-color: #FCD34D;
+        }
+        .step-execution-text {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .strategy-hint {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #1F2937;
+            background: #EEF2FF;
+            border: 1px solid #C7D2FE;
+            border-radius: 8px;
+            padding: 8px 10px;
         }
         .step-status-badge {
             display: inline-flex;
@@ -579,6 +622,73 @@
         .category-checkbox.selected {
             border-color: var(--teal);
             background: #f0fafa;
+        }
+        .step3-baseline-banner {
+            border: 1px solid #BFDBFE;
+            background: #EFF6FF;
+            color: #1E3A8A;
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            font-size: 12px;
+        }
+        .step3-baseline-banner.no-baseline {
+            border-color: #E5E7EB;
+            background: #F9FAFB;
+            color: #4B5563;
+        }
+        .step3-diff-summary {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #374151;
+        }
+        .step3-row-changed td {
+            background: #FFF7ED;
+        }
+        .step3-pill {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 999px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .step3-pill.core {
+            background: #DCFCE7;
+            color: #166534;
+        }
+        .step3-pill.cross {
+            background: #DBEAFE;
+            color: #1E3A8A;
+        }
+        .step3-pill.skip {
+            background: #E5E7EB;
+            color: #374151;
+        }
+        .step3-pill.none {
+            background: #F3F4F6;
+            color: #6B7280;
+        }
+        .step3-diff-pill {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 999px;
+            text-transform: uppercase;
+        }
+        .step3-diff-pill.changed {
+            background: #FFEDD5;
+            color: #9A3412;
+        }
+        .step3-diff-pill.unchanged {
+            background: #DCFCE7;
+            color: #166534;
+        }
+        .step3-diff-pill.no-baseline {
+            background: #E5E7EB;
+            color: #374151;
         }
 
         /* Artifact preview */
@@ -1850,6 +1960,9 @@
                 <span><strong>Model:</strong> {{ session.model_name }}</span>
                 <span><strong>Diffs/Category:</strong> {{ session.diffs_per_category }}</span>
             </div>
+            <div class="strategy-hint">
+                <strong>Execution strategy:</strong> {{ fastest_strategy_hint }}
+            </div>
         </div>
     </div>
 
@@ -1889,7 +2002,21 @@
                 <div class="step-number {{ step.status }}">{{ step.step_number }}</div>
                 <div class="step-card {% if step.status in ('in_progress', 'ready', 'waiting_human') %}active{% elif step.status == 'completed' %}completed{% elif step.status == 'failed' %}failed{% endif %}">
                     <div class="step-header">
-                        <span class="step-title">{{ step.step_name }}</span>
+                        <div class="step-title-group">
+                            <span class="step-title">{{ step.step_name }}</span>
+                            {% set exec_mode = step_execution_modes.get(step.step_number) %}
+                            {% if exec_mode %}
+                            <div class="step-execution-row">
+                                <span class="step-execution-chip {{ exec_mode.mode }}">{{ exec_mode.mode | title }}</span>
+                                <span class="step-execution-text" title="{{ exec_mode.details }}">{{ exec_mode.summary }}</span>
+                            </div>
+                            {% if exec_mode.fallback_reason %}
+                            <div class="step-execution-row">
+                                <span class="step-execution-text" style="color:#b45309;">Fallback: {{ exec_mode.fallback_reason }}</span>
+                            </div>
+                            {% endif %}
+                            {% endif %}
+                        </div>
                         <span class="step-status-badge {{ step.status }}" id="step-badge-{{ step.step_number }}">
                             <span class="step-status-dot"></span>
                             <span id="step-status-text-{{ step.step_number }}">{{ step.status | replace('_', ' ') | title }}</span>
@@ -2022,41 +2149,82 @@
                         <!-- Step 3: Classify Product Categories -->
                         {% elif step.step_number == 3 %}
                             {% if step.status in ('ready', 'pending') %}
+                            {% set has_previous_baseline = previous_selection_source and previous_selection_source.selection_count > 0 %}
                             <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">
                                 Classify each product category for the battlecard. Choose <strong>Core Product Category</strong> (gets its own slide),
                                 <strong>Cross-Platform Capability</strong> (supporting context), or <strong>Skip</strong> to exclude.
                             </p>
+                            {% if has_previous_baseline %}
+                            <div class="step3-baseline-banner" id="step3-baseline-banner">
+                                Loaded defaults from previous version (generation #{{ previous_selection_source.previous_generation_id }}).
+                                Edit any row, then save to continue.
+                                <div class="step3-diff-summary" id="step3-diff-summary"></div>
+                            </div>
+                            {% else %}
+                            <div class="step3-baseline-banner no-baseline">
+                                No previous version selections were found. Starting from catalog defaults.
+                            </div>
+                            {% endif %}
                             <div id="category-classification-form">
                                 <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
                                     <thead>
                                         <tr style="border-bottom: 2px solid var(--border-color); text-align: left;">
-                                            <th style="padding: 6px 8px; width: 25%;">Category</th>
-                                            <th style="padding: 6px 8px; width: 30%;">Description</th>
-                                            <th style="padding: 6px 4px; width: 15%; text-align: center;">Core Product</th>
-                                            <th style="padding: 6px 4px; width: 15%; text-align: center;">Cross-Platform</th>
-                                            <th style="padding: 6px 4px; width: 15%; text-align: center;">Skip</th>
+                                            <th style="padding: 6px 8px; width: 20%;">Category</th>
+                                            <th style="padding: 6px 8px; width: 24%;">Description</th>
+                                            <th style="padding: 6px 4px; width: 11%; text-align: center;">Core Product</th>
+                                            <th style="padding: 6px 4px; width: 11%; text-align: center;">Cross-Platform</th>
+                                            <th style="padding: 6px 4px; width: 9%; text-align: center;">Skip</th>
+                                            {% if has_previous_baseline %}
+                                            <th style="padding: 6px 8px; width: 10%; text-align: center;">Previous</th>
+                                            <th style="padding: 6px 8px; width: 10%; text-align: center;">Current</th>
+                                            <th style="padding: 6px 8px; width: 5%; text-align: center;">Diff</th>
+                                            {% endif %}
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {% for cat in category_catalog %}
-                                        <tr style="border-bottom: 1px solid var(--border-color);">
+                                        {% set prev_sel = previous_session_selections.get(cat.catalog_id) if previous_session_selections else None %}
+                                        {% set current_sel = None %}
+                                        {% if session_selections and session_selections.get(cat.catalog_id) %}
+                                            {% set current_sel = session_selections.get(cat.catalog_id) %}
+                                        {% elif prev_sel %}
+                                            {% set current_sel = prev_sel %}
+                                        {% elif cat.is_core_product_category %}
+                                            {% set current_sel = 'core_product_category' %}
+                                        {% elif cat.is_cross_platform_capability %}
+                                            {% set current_sel = 'cross_platform_capability' %}
+                                        {% else %}
+                                            {% set current_sel = 'skip' %}
+                                        {% endif %}
+                                        <tr style="border-bottom: 1px solid var(--border-color);"
+                                            data-step3-row="1"
+                                            data-catalog-id="{{ cat.catalog_id }}"
+                                            data-prev-selection="{{ prev_sel or '' }}">
                                             <td style="padding: 6px 8px; font-weight: 500;">{{ cat.category_name }}</td>
                                             <td style="padding: 6px 8px; color: var(--text-secondary); font-size: 11px;">{{ cat.category_description or '' }}</td>
                                             <td style="padding: 6px 4px; text-align: center;">
                                                 <input type="radio" name="cat_{{ cat.catalog_id }}" value="core_product_category"
-                                                    {% if cat.is_core_product_category %}checked{% endif %}
-                                                    {% if session_selections and session_selections.get(cat.catalog_id) == 'core_product_category' %}checked{% endif %}>
+                                                    {% if current_sel == 'core_product_category' %}checked{% endif %}>
                                             </td>
                                             <td style="padding: 6px 4px; text-align: center;">
                                                 <input type="radio" name="cat_{{ cat.catalog_id }}" value="cross_platform_capability"
-                                                    {% if cat.is_cross_platform_capability and not cat.is_core_product_category %}checked{% endif %}
-                                                    {% if session_selections and session_selections.get(cat.catalog_id) == 'cross_platform_capability' %}checked{% endif %}>
+                                                    {% if current_sel == 'cross_platform_capability' %}checked{% endif %}>
                                             </td>
                                             <td style="padding: 6px 4px; text-align: center;">
                                                 <input type="radio" name="cat_{{ cat.catalog_id }}" value="skip"
-                                                    {% if not cat.is_core_product_category and not cat.is_cross_platform_capability %}checked{% endif %}
-                                                    {% if session_selections and session_selections.get(cat.catalog_id) == 'skip' %}checked{% endif %}>
+                                                    {% if current_sel == 'skip' %}checked{% endif %}>
                                             </td>
+                                            {% if has_previous_baseline %}
+                                            <td style="padding: 6px 8px; text-align: center;">
+                                                <span id="cat-prev-{{ cat.catalog_id }}" class="step3-pill" data-selection="{{ prev_sel or '' }}">{{ prev_sel or 'none' }}</span>
+                                            </td>
+                                            <td style="padding: 6px 8px; text-align: center;">
+                                                <span id="cat-current-{{ cat.catalog_id }}" class="step3-pill" data-selection="{{ current_sel }}">{{ current_sel }}</span>
+                                            </td>
+                                            <td style="padding: 6px 8px; text-align: center;">
+                                                <span id="cat-diff-{{ cat.catalog_id }}" class="step3-diff-pill"></span>
+                                            </td>
+                                            {% endif %}
                                         </tr>
                                         {% endfor %}
                                     </tbody>
@@ -2236,8 +2404,7 @@
                             </div>
                             {% elif step.status == 'waiting_human' %}
                             <div id="claims-preview">
-                                {% set skel_json = None %}
-                                {% for a in artifacts_by_step.get(4, []) if a.artifact_type == 'pass1_skeletons' %}{% set skel_json = a.artifact_content %}{% endfor %}
+                                {% set skel_arts_waiting = artifacts_by_step.get(4, [])|selectattr('artifact_type', 'eq', 'pass1_skeletons')|list %}
                                 {% for a in artifacts_by_step.get(5, []) if a.artifact_type in ('pass2_claims', 'pass3_regenerated') %}
                                 <div class="artifact-header">
                                     <span class="artifact-title">Generated Claims</span>
@@ -2305,7 +2472,7 @@
                                 (function() {
                                     try {
                                         var claims = {{ a.artifact_content | safe }};
-                                        var skeletons = {% if skel_json %}{{ skel_json | safe }}{% else %}[]{% endif %};
+                                        var skeletons = {% if skel_arts_waiting %}{{ skel_arts_waiting[0].artifact_content | safe }}{% else %}[]{% endif %};
                                         window._claimsData = claims;
                                         window._claimFeedback = {};
                                         var tbody = document.getElementById('claims-tbody');
@@ -2419,6 +2586,11 @@
                                 <div class="progress-text" id="step6-progress-text">{{ step.progress_message or 'Fact checking claims...' }}</div>
                             </div>
                             {% elif step.status == 'waiting_human' %}
+                            {% if step.error_message %}
+                            <div class="error-box">
+                                {{ step.error_message }}
+                            </div>
+                            {% endif %}
                             <!-- Fact Check Summary Bar -->
                             {% if fact_check_summary %}
                             <div class="fc-summary-bar">
@@ -2701,6 +2873,8 @@
 
     <script>
     const SESSION_ID = "{{ session.session_id }}";
+    const STEP3_PREVIOUS_SELECTIONS = {{ (previous_session_selections or {}) | tojson }};
+    const STEP3_HAS_BASELINE = {{ 'true' if previous_selection_source and previous_selection_source.selection_count > 0 else 'false' }};
     let pollingInterval = null;
 
     // --- Context Sources ---
@@ -2806,6 +2980,14 @@
             sources[cb.dataset.key] = cb.checked;
         });
         return sources;
+    }
+
+    function getPromptContextSources(stepNum) {
+        if (stepNum !== 4 && stepNum !== 5) return null;
+        // When waiting_human, the active controls are usually in the regen panel.
+        var regen = getContextSources(stepNum + '-regen');
+        if (regen) return regen;
+        return getContextSources(stepNum);
     }
 
     // Start polling if any step is in_progress
@@ -2930,6 +3112,17 @@
                     }
                     if (text && step.progress_message) {
                         text.textContent = step.progress_message;
+                    }
+                    if (n === 6) {
+                        const s6Fill = document.getElementById('step6-progress-fill');
+                        const s6Text = document.getElementById('step6-progress-text');
+                        if (s6Fill && step.progress_total > 0) {
+                            const s6Pct = Math.round((step.progress_current / step.progress_total) * 100);
+                            s6Fill.style.width = s6Pct + '%';
+                        }
+                        if (s6Text && step.progress_message) {
+                            s6Text.textContent = step.progress_message;
+                        }
                     }
 
                     // Show inline errors during progress
@@ -3251,6 +3444,99 @@
     }
 
     // --- Step 3: Category Classification (form-based) ---
+
+    function step3SelectionLabel(value) {
+        if (value === 'core_product_category') return 'Core';
+        if (value === 'cross_platform_capability') return 'Cross';
+        if (value === 'skip') return 'Skip';
+        return 'None';
+    }
+
+    function step3SelectionClass(value) {
+        if (value === 'core_product_category') return 'core';
+        if (value === 'cross_platform_capability') return 'cross';
+        if (value === 'skip') return 'skip';
+        return 'none';
+    }
+
+    function renderStep3Pill(el, value) {
+        if (!el) return;
+        var normalized = value || '';
+        el.textContent = step3SelectionLabel(normalized);
+        el.className = 'step3-pill ' + step3SelectionClass(normalized);
+    }
+
+    function updateStep3RowDiff(catalogId) {
+        var row = document.querySelector('[data-step3-row="1"][data-catalog-id="' + catalogId + '"]');
+        if (!row) return;
+
+        var prev = row.dataset.prevSelection || '';
+        var checked = row.querySelector('input[name="cat_' + catalogId + '"]:checked');
+        var current = checked ? checked.value : '';
+
+        renderStep3Pill(document.getElementById('cat-prev-' + catalogId), prev);
+        renderStep3Pill(document.getElementById('cat-current-' + catalogId), current);
+
+        var diffEl = document.getElementById('cat-diff-' + catalogId);
+        if (!diffEl) return;
+
+        row.classList.remove('step3-row-changed');
+        if (!prev) {
+            diffEl.textContent = 'No baseline';
+            diffEl.className = 'step3-diff-pill no-baseline';
+            return;
+        }
+
+        if (current === prev) {
+            diffEl.textContent = 'Unchanged';
+            diffEl.className = 'step3-diff-pill unchanged';
+        } else {
+            diffEl.textContent = 'Changed';
+            diffEl.className = 'step3-diff-pill changed';
+            row.classList.add('step3-row-changed');
+        }
+    }
+
+    function updateStep3DiffSummary() {
+        var summaryEl = document.getElementById('step3-diff-summary');
+        if (!summaryEl || !STEP3_HAS_BASELINE) return;
+
+        var rows = document.querySelectorAll('[data-step3-row="1"]');
+        var baselineCount = 0;
+        var changedCount = 0;
+        rows.forEach(function(row) {
+            var catalogId = row.dataset.catalogId;
+            var prev = row.dataset.prevSelection || '';
+            if (!prev) return;
+            baselineCount += 1;
+            var checked = row.querySelector('input[name="cat_' + catalogId + '"]:checked');
+            var current = checked ? checked.value : '';
+            if (current !== prev) changedCount += 1;
+        });
+        var unchangedCount = baselineCount - changedCount;
+        summaryEl.textContent = changedCount + ' changed, ' + unchangedCount + ' unchanged vs previous version.';
+    }
+
+    function initStep3DiffView() {
+        var form = document.getElementById('category-classification-form');
+        if (!form) return;
+
+        var rows = form.querySelectorAll('[data-step3-row="1"]');
+        rows.forEach(function(row) {
+            var catalogId = row.dataset.catalogId;
+            var radios = row.querySelectorAll('input[type="radio"]');
+            radios.forEach(function(radio) {
+                radio.addEventListener('change', function() {
+                    updateStep3RowDiff(catalogId);
+                    updateStep3DiffSummary();
+                });
+            });
+            updateStep3RowDiff(catalogId);
+        });
+        updateStep3DiffSummary();
+    }
+
+    document.addEventListener('DOMContentLoaded', initStep3DiffView);
 
     async function saveCategorySelections() {
         var selections = {};
@@ -3727,7 +4013,14 @@
 
     async function viewPrompt(stepNum) {
         try {
-            var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/prompt');
+            var bodyObj = {};
+            var cs = getPromptContextSources(stepNum);
+            if (cs) bodyObj.context_sources = cs;
+            var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/prompt', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(bodyObj),
+            });
             var data = await resp.json();
             var modal = document.getElementById('prompt-modal');
 

@@ -3,3 +3,5 @@ command: ["python", "app.py"]
 env:
   - name: DATABRICKS_HOST
     value: https://fe-vm-pmt.cloud.databricks.com
+  - name: EXA_API_KEY
+    valueFrom: exa_api_key

@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Battlecard Evals</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; margin: 0; color: #111827; }
+        .header { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 14px 20px; }
+        .header a { color: #2563eb; text-decoration: none; font-size: 14px; }
+        .header h1 { margin: 8px 0 0 0; font-size: 22px; }
+        .container { max-width: 1400px; margin: 18px auto; padding: 0 18px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; }
+        h2 { margin: 0 0 10px 0; font-size: 16px; }
+        label { display: block; font-size: 12px; color: #374151; margin-bottom: 6px; }
+        input, textarea { width: 100%; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 8px; padding: 9px 10px; font-size: 13px; margin-bottom: 10px; }
+        textarea { min-height: 90px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+        button { border: none; background: #2563eb; color: #fff; border-radius: 8px; padding: 9px 12px; font-size: 13px; cursor: pointer; }
+        button:disabled { background: #93c5fd; cursor: not-allowed; }
+        .muted { color: #6b7280; font-size: 12px; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th, td { text-align: left; border-bottom: 1px solid #e5e7eb; padding: 7px 6px; vertical-align: top; }
+        th { color: #374151; font-weight: 600; background: #f9fafb; }
+        .pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; display: inline-block; }
+        .pill.running { background: #dbeafe; color: #1d4ed8; }
+        .pill.completed { background: #dcfce7; color: #166534; }
+        .pill.failed { background: #fee2e2; color: #b91c1c; }
+        .pill.queued { background: #f3f4f6; color: #374151; }
+        .full { margin-top: 16px; }
+        pre { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; overflow-x: auto; font-size: 11px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a href="/battlecards">&larr; Dashboard</a>
+        <h1>Eval Runs</h1>
+    </div>
+
+    <div class="container">
+        <div class="grid">
+            <div class="card">
+                <h2>Create Eval Dataset</h2>
+                <label>Generation ID (numeric)</label>
+                <input id="dataset_generation_id" placeholder="27">
+                <label>Battlecard UUID (optional alternative)</label>
+                <input id="dataset_battlecard_id" placeholder="039ebaf5-e6ad-...">
+                <label>Dataset Name</label>
+                <input id="dataset_name" placeholder="fabric_factchecked_reference">
+                <label>Notes</label>
+                <input id="dataset_notes" placeholder="Fact-checked baseline">
+                <button onclick="createDataset()">Create / Refresh Dataset</button>
+                <div class="muted" id="dataset_result" style="margin-top:8px;"></div>
+            </div>
+
+            <div class="card">
+                <h2>Start Benchmark Matrix</h2>
+                <label>Dataset ID (optional)</label>
+                <input id="run_dataset_id" placeholder="1">
+                <label>Competitor Name</label>
+                <input id="run_competitor" value="Microsoft Fabric">
+                <label>Product Area</label>
+                <input id="run_product_area" value="Data Platform">
+                <label>Models (JSON array)</label>
+                <textarea id="run_models">["databricks-claude-sonnet-4-5","databricks-claude-opus-4-6"]</textarea>
+                <label>Scenarios (JSON)</label>
+                <textarea id="run_scenarios">[
+  {"label":"2c_x_2d","core_categories":2,"diffs_per_category":2},
+  {"label":"4c_x_5d","core_categories":4,"diffs_per_category":5},
+  {"label":"8c_x_10d","core_categories":8,"diffs_per_category":10}
+]</textarea>
+                <label>Techniques (JSON)</label>
+                <textarea id="run_techniques">{{ default_techniques | tojson(indent=2) }}</textarea>
+                <button id="start_btn" onclick="startRun()">Start Run</button>
+                <div class="muted" id="run_result" style="margin-top:8px;"></div>
+            </div>
+        </div>
+
+        <div class="card full">
+            <h2>Datasets</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th><th>Name</th><th>Source Generation</th><th>Source Battlecard</th><th>Created</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for d in datasets %}
+                    <tr>
+                        <td>{{ d.dataset_id }}</td>
+                        <td>{{ d.dataset_name }}</td>
+                        <td>{{ d.source_generation_id }}</td>
+                        <td>{{ d.source_battlecard_uuid or '' }}</td>
+                        <td>{{ d.created_at }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5" class="muted">No datasets yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card full">
+            <h2>Runs</h2>
+            <table id="runs_table">
+                <thead>
+                    <tr>
+                        <th>Run ID</th><th>Status</th><th>Created</th><th>Completed</th><th>Error</th><th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in runs %}
+                    <tr>
+                        <td><code>{{ r.run_id }}</code></td>
+                        <td><span class="pill {{ r.status }}">{{ r.status }}</span></td>
+                        <td>{{ r.created_at }}</td>
+                        <td>{{ r.completed_at or '' }}</td>
+                        <td>{{ r.error_message or '' }}</td>
+                        <td><button onclick="loadRun('{{ r.run_id }}')">View</button></td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="muted">No runs yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card full">
+            <h2>Run Results</h2>
+            <div id="selected_run_meta" class="muted">Select a run to view detailed results.</div>
+            <table id="results_table">
+                <thead>
+                    <tr>
+                        <th>Scenario</th><th>Model</th><th>P2</th><th>Step5 Mode</th><th>Inline FC</th>
+                        <th>Duration (s)</th><th>Total Tokens</th><th>Claim Match</th><th>Rating Match</th><th>Verdict Match</th><th>Notes</th><th>Session</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for rr in recent_results %}
+                    <tr>
+                        <td>{{ rr.scenario_label }}</td>
+                        <td>{{ rr.model_name }}</td>
+                        <td>V{{ rr.pass2_prompt_template_version }}</td>
+                        <td>{{ rr.step5_execution_mode }}</td>
+                        <td>{{ rr.step5_inline_fact_check }}</td>
+                        <td>{{ rr.duration_seconds or '' }}</td>
+                        <td>{{ rr.total_tokens or '' }}</td>
+                        <td>{{ "%.3f"|format(rr.eval_claim_match_rate) if rr.eval_claim_match_rate is not none else '' }}</td>
+                        <td>{{ "%.3f"|format(rr.eval_rating_match_rate) if rr.eval_rating_match_rate is not none else '' }}</td>
+                        <td>{{ "%.3f"|format(rr.eval_verdict_match_rate) if rr.eval_verdict_match_rate is not none else '' }}</td>
+                        <td>{{ rr.notes or '' }}</td>
+                        <td><code>{{ rr.run_id }}</code></td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="12" class="muted">No results yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        async function createDataset() {
+            const payload = {
+                generation_id: document.getElementById('dataset_generation_id').value || null,
+                battlecard_id: document.getElementById('dataset_battlecard_id').value || null,
+                dataset_name: document.getElementById('dataset_name').value || null,
+                notes: document.getElementById('dataset_notes').value || null
+            };
+            const resp = await fetch('/api/evals/datasets', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+            const data = await resp.json();
+            const el = document.getElementById('dataset_result');
+            if (!resp.ok) {
+                el.textContent = data.error || 'Dataset creation failed';
+                return;
+            }
+            el.textContent = `Dataset ${data.dataset_id} saved with ${data.item_count} items. Refresh page to see updates.`;
+        }
+
+        function parseJsonField(id, fallback) {
+            const raw = document.getElementById(id).value.trim();
+            if (!raw) return fallback;
+            try { return JSON.parse(raw); } catch (e) { throw new Error(`Invalid JSON in ${id}: ${e.message}`); }
+        }
+
+        async function startRun() {
+            const btn = document.getElementById('start_btn');
+            const result = document.getElementById('run_result');
+            btn.disabled = true;
+            result.textContent = '';
+            try {
+                const payload = {
+                    dataset_id: document.getElementById('run_dataset_id').value || null,
+                    competitor_name: document.getElementById('run_competitor').value || 'Microsoft Fabric',
+                    product_area: document.getElementById('run_product_area').value || 'Data Platform',
+                    models: parseJsonField('run_models', null),
+                    scenarios: parseJsonField('run_scenarios', null),
+                    techniques: parseJsonField('run_techniques', null)
+                };
+                const resp = await fetch('/api/evals/runs', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || 'Run creation failed');
+                result.textContent = `Run started: ${data.run_id}.`;
+                loadRun(data.run_id, true);
+            } catch (e) {
+                result.textContent = e.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        let runPollTimer = null;
+        async function loadRun(runId, poll) {
+            if (runPollTimer) {
+                clearTimeout(runPollTimer);
+                runPollTimer = null;
+            }
+            const resp = await fetch('/api/evals/runs/' + runId);
+            const data = await resp.json();
+            if (!resp.ok) {
+                document.getElementById('selected_run_meta').textContent = data.error || 'Failed to load run';
+                return;
+            }
+            const run = data.run;
+            document.getElementById('selected_run_meta').textContent =
+                `Run ${run.run_id} | status=${run.status} | started=${run.started_at || ''} | completed=${run.completed_at || ''}`;
+
+            const tbody = document.querySelector('#results_table tbody');
+            tbody.innerHTML = '';
+            for (const r of data.results) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${r.scenario_label || ''}</td>
+                    <td>${r.model_name || ''}</td>
+                    <td>V${r.pass2_prompt_template_version || ''}</td>
+                    <td>${r.step5_execution_mode || ''}</td>
+                    <td>${r.step5_inline_fact_check}</td>
+                    <td>${r.duration_seconds || ''}</td>
+                    <td>${r.total_tokens || ''}</td>
+                    <td>${r.eval_claim_match_rate == null ? '' : Number(r.eval_claim_match_rate).toFixed(3)}</td>
+                    <td>${r.eval_rating_match_rate == null ? '' : Number(r.eval_rating_match_rate).toFixed(3)}</td>
+                    <td>${r.eval_verdict_match_rate == null ? '' : Number(r.eval_verdict_match_rate).toFixed(3)}</td>
+                    <td>${r.notes || ''}</td>
+                    <td>${r.session_id ? `<a href="/workflow/${r.session_id}" target="_blank">${r.session_id.slice(0,8)}...</a>` : ''}</td>
+                `;
+                tbody.appendChild(tr);
+            }
+            if (!data.results.length) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = '<td colspan="12" class="muted">No result rows yet.</td>';
+                tbody.appendChild(tr);
+            }
+
+            if (poll && (run.status === 'queued' || run.status === 'running')) {
+                runPollTimer = setTimeout(() => loadRun(runId, true), 5000);
+            }
+        }
+    </script>
+</body>
+</html>

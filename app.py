@@ -15,7 +15,9 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from datetime import datetime
+from difflib import SequenceMatcher
 from uuid import uuid4
 
 try:
@@ -29,6 +31,7 @@ from databricks.sdk import WorkspaceClient
 from flask import Flask, jsonify, redirect, render_template, request
 from flask_cors import CORS
 from sqlalchemy import create_engine, event, text
+from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__)
 CORS(app)
@@ -38,9 +41,13 @@ logger = logging.getLogger(__name__)
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    """Return JSON instead of HTML for API errors."""
+    """Return JSON for API errors while preserving normal HTTP exceptions."""
+    if isinstance(e, HTTPException):
+        return e
     logger.exception("Unhandled exception: %s", e)
-    return jsonify({"error": str(e)}), 500
+    if request.path.startswith("/api/"):
+        return jsonify({"error": str(e)}), 500
+    return "Internal server error", 500
 
 # =============================================================================
 # Configuration
@@ -58,6 +65,7 @@ DB_HOST = os.getenv(
 )
 DB_PORT = int(os.getenv("PGPORT", "5432"))
 DB_NAME = os.getenv("PGDATABASE", "databricks_postgres")
+DEFAULT_LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
 
 
 def _build_engine():
@@ -369,6 +377,67 @@ Return ONLY the JSON object. No markdown fences, no explanation text.
         "description": "Processes ALL key diffs for one category in a single call. L200 (1-2 bullets) + L300 (2-5 detailed bullets). 8 calls instead of 80.",
         "template": "inline",  # Will be loaded from DB or inline fallback
     },
+    7: {
+        "label": "V7 — Per-Category Strict JSON",
+        "description": "Per-category batched generation with stricter JSON and citation requirements for improved determinism.",
+        "template": "inline",
+    },
+    8: {
+        "label": "V8 — Single-Call Claims + Inline Fact Check",
+        "description": "Generates all key diff claims in one response and can seed fact-check verdicts inline.",
+        "template": "inline",
+    },
+    9: {
+        "label": "V9 — Per-Category L200+L300 + Inline Fact Check",
+        "description": "Category-batched generation like V6, but requires inline citation verdict metadata for direct fact-check seeding.",
+        "template": "inline",
+    },
+}
+
+STEP4_EXECUTION_OPTIONS = {
+    "auto": {
+        "label": "Auto (Template-Driven)",
+        "description": "Use runtime defaults from selected template and worker count.",
+    },
+    "single_call": {
+        "label": "Single Call",
+        "description": "Generate all key diffs in one request.",
+    },
+    "category_parallel": {
+        "label": "Category Parallel",
+        "description": "One request per category using parallel workers.",
+    },
+    "category_sequential": {
+        "label": "Category Sequential",
+        "description": "One request per category, processed sequentially.",
+    },
+}
+
+STEP5_EXECUTION_OPTIONS = {
+    "auto": {
+        "label": "Auto (Template-Driven)",
+        "description": "Use runtime defaults from selected template and worker count.",
+    },
+    "per_diff_parallel": {
+        "label": "Per-Diff Parallel",
+        "description": "One request per key diff in parallel.",
+    },
+    "per_diff_sequential": {
+        "label": "Per-Diff Sequential",
+        "description": "One request per key diff sequentially.",
+    },
+    "category_parallel": {
+        "label": "Category Parallel",
+        "description": "One batched request per category in parallel.",
+    },
+    "category_sequential": {
+        "label": "Category Sequential",
+        "description": "One batched request per category sequentially.",
+    },
+    "single_call": {
+        "label": "Single Call",
+        "description": "Generate all key diff claims in one request.",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -417,6 +486,7 @@ CREATE TABLE IF NOT EXISTS product_categories (
 CREATE TABLE IF NOT EXISTS key_differentiators (
     key_diff_id SERIAL PRIMARY KEY,
     category_id INT REFERENCES product_categories(category_id),
+    generation_id INT,
     key_diff_name VARCHAR(255) NOT NULL,
     key_diff_description TEXT,
     display_order INT DEFAULT 0,
@@ -653,6 +723,9 @@ CREATE TABLE IF NOT EXISTS workflow_sessions (
     model_name VARCHAR(255) DEFAULT 'databricks-claude-sonnet-4',
     diffs_per_category INT DEFAULT 10,
     max_workers INT DEFAULT 5,
+    step4_execution_mode VARCHAR(50) NOT NULL DEFAULT 'auto',
+    step5_execution_mode VARCHAR(50) NOT NULL DEFAULT 'auto',
+    step5_inline_fact_check BOOLEAN NOT NULL DEFAULT FALSE,
     pass1_prompt_version_id INT REFERENCES prompt_versions(prompt_version_id),
     pass2_prompt_version_id INT REFERENCES prompt_versions(prompt_version_id),
     pass1_prompt_template_version INT NOT NULL DEFAULT 3,
@@ -783,6 +856,70 @@ CREATE TABLE IF NOT EXISTS pass2_debug_logs (
     UNIQUE(session_id, skeleton_index)
 );
 CREATE INDEX IF NOT EXISTS idx_pass2_debug_session ON pass2_debug_logs(session_id);
+
+CREATE TABLE IF NOT EXISTS eval_datasets (
+    dataset_id SERIAL PRIMARY KEY,
+    dataset_name VARCHAR(255) NOT NULL UNIQUE,
+    source_generation_id INT REFERENCES battlecard_generations(generation_id),
+    source_battlecard_uuid UUID,
+    notes TEXT,
+    created_by VARCHAR(255) NOT NULL DEFAULT 'system',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS eval_dataset_items (
+    item_id SERIAL PRIMARY KEY,
+    dataset_id INT NOT NULL REFERENCES eval_datasets(dataset_id) ON DELETE CASCADE,
+    key_diff_name VARCHAR(500) NOT NULL,
+    category_name VARCHAR(255) NOT NULL,
+    company_type VARCHAR(50) NOT NULL CHECK (company_type IN ('databricks', 'competitor')),
+    rating VARCHAR(20),
+    headline TEXT,
+    details_text TEXT,
+    verdict_label VARCHAR(50),
+    source_count INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_eval_dataset_items_dataset ON eval_dataset_items(dataset_id);
+
+CREATE TABLE IF NOT EXISTS eval_runs (
+    run_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    status VARCHAR(50) NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'completed', 'failed')),
+    benchmark_config JSONB,
+    requested_by VARCHAR(255) NOT NULL DEFAULT 'system',
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS eval_run_results (
+    result_id SERIAL PRIMARY KEY,
+    run_id UUID NOT NULL REFERENCES eval_runs(run_id) ON DELETE CASCADE,
+    session_id UUID REFERENCES workflow_sessions(session_id) ON DELETE SET NULL,
+    dataset_id INT REFERENCES eval_datasets(dataset_id),
+    scenario_label VARCHAR(100) NOT NULL,
+    model_name VARCHAR(255) NOT NULL,
+    pass1_prompt_template_version INT NOT NULL,
+    pass2_prompt_template_version INT NOT NULL,
+    step4_execution_mode VARCHAR(50) NOT NULL,
+    step5_execution_mode VARCHAR(50) NOT NULL,
+    step5_inline_fact_check BOOLEAN NOT NULL DEFAULT FALSE,
+    core_categories INT NOT NULL,
+    diffs_per_category INT NOT NULL,
+    expected_diffs INT NOT NULL,
+    generated_diffs INT NOT NULL,
+    duration_seconds NUMERIC(12,3),
+    total_tokens INT,
+    input_tokens INT,
+    output_tokens INT,
+    eval_claim_match_rate NUMERIC(6,3),
+    eval_rating_match_rate NUMERIC(6,3),
+    eval_verdict_match_rate NUMERIC(6,3),
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_eval_run_results_run ON eval_run_results(run_id);
 """
 
 
@@ -841,8 +978,13 @@ def init_db():
     migrations = [
         "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS pass2_prompt_template_version INT NOT NULL DEFAULT 2",
         "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS pass1_prompt_template_version INT NOT NULL DEFAULT 2",
+        "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS step4_execution_mode VARCHAR(50) NOT NULL DEFAULT 'auto'",
+        "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS step5_execution_mode VARCHAR(50) NOT NULL DEFAULT 'auto'",
+        "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS step5_inline_fact_check BOOLEAN NOT NULL DEFAULT FALSE",
         "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS detail_item_id INT REFERENCES claim_detail_items(detail_item_id)",
         "ALTER TABLE human_reviews ADD COLUMN IF NOT EXISTS detail_item_id INT REFERENCES claim_detail_items(detail_item_id)",
+        "ALTER TABLE key_differentiators ADD COLUMN IF NOT EXISTS generation_id INT REFERENCES battlecard_generations(generation_id)",
+        "CREATE INDEX IF NOT EXISTS idx_key_diffs_generation ON key_differentiators(generation_id)",
         "ALTER TABLE evidence DROP CONSTRAINT IF EXISTS evidence_traces_to_field_check",
         "ALTER TABLE evidence ADD CONSTRAINT evidence_traces_to_field_check CHECK (traces_to_field IN ('headline', 'description', 'detail_item'))",
         "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMP",
@@ -873,6 +1015,66 @@ def init_db():
             UNIQUE(session_id, skeleton_index)
         )""",
         "CREATE INDEX IF NOT EXISTS idx_pass2_debug_session ON pass2_debug_logs(session_id)",
+        """CREATE TABLE IF NOT EXISTS eval_datasets (
+            dataset_id SERIAL PRIMARY KEY,
+            dataset_name VARCHAR(255) NOT NULL UNIQUE,
+            source_generation_id INT REFERENCES battlecard_generations(generation_id),
+            source_battlecard_uuid UUID,
+            notes TEXT,
+            created_by VARCHAR(255) NOT NULL DEFAULT 'system',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS eval_dataset_items (
+            item_id SERIAL PRIMARY KEY,
+            dataset_id INT NOT NULL REFERENCES eval_datasets(dataset_id) ON DELETE CASCADE,
+            key_diff_name VARCHAR(500) NOT NULL,
+            category_name VARCHAR(255) NOT NULL,
+            company_type VARCHAR(50) NOT NULL CHECK (company_type IN ('databricks', 'competitor')),
+            rating VARCHAR(20),
+            headline TEXT,
+            details_text TEXT,
+            verdict_label VARCHAR(50),
+            source_count INT DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_eval_dataset_items_dataset ON eval_dataset_items(dataset_id)",
+        """CREATE TABLE IF NOT EXISTS eval_runs (
+            run_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            status VARCHAR(50) NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'completed', 'failed')),
+            benchmark_config JSONB,
+            requested_by VARCHAR(255) NOT NULL DEFAULT 'system',
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS eval_run_results (
+            result_id SERIAL PRIMARY KEY,
+            run_id UUID NOT NULL REFERENCES eval_runs(run_id) ON DELETE CASCADE,
+            session_id UUID REFERENCES workflow_sessions(session_id) ON DELETE SET NULL,
+            dataset_id INT REFERENCES eval_datasets(dataset_id),
+            scenario_label VARCHAR(100) NOT NULL,
+            model_name VARCHAR(255) NOT NULL,
+            pass1_prompt_template_version INT NOT NULL,
+            pass2_prompt_template_version INT NOT NULL,
+            step4_execution_mode VARCHAR(50) NOT NULL,
+            step5_execution_mode VARCHAR(50) NOT NULL,
+            step5_inline_fact_check BOOLEAN NOT NULL DEFAULT FALSE,
+            core_categories INT NOT NULL,
+            diffs_per_category INT NOT NULL,
+            expected_diffs INT NOT NULL,
+            generated_diffs INT NOT NULL,
+            duration_seconds NUMERIC(12,3),
+            total_tokens INT,
+            input_tokens INT,
+            output_tokens INT,
+            eval_claim_match_rate NUMERIC(6,3),
+            eval_rating_match_rate NUMERIC(6,3),
+            eval_verdict_match_rate NUMERIC(6,3),
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_eval_run_results_run ON eval_run_results(run_id)",
     ]
     for migration in migrations:
         try:
@@ -1213,9 +1415,6 @@ This battlecard is for **C-suite executives** (CIO, CTO, CDO, VP Data/AI) and **
 - C-suite cares about: strategic direction, TCO, vendor risk, governance, time-to-value, AI readiness.
 - Practitioners care about: performance, developer experience, tooling, open standards, reliability.
 
-## Directives
-{{directives}}
-
 ## Additional Context
 {{context}}
 
@@ -1223,7 +1422,7 @@ This battlecard is for **C-suite executives** (CIO, CTO, CDO, VP Data/AI) and **
 
 L200 bullets are **executive-ready sound bites**. They must be:
 - **Outcome-focused**: Lead with the benefit or limitation, NOT technology
-- **Concise**: 1-2 bullets, max 15 words each
+- **Concise**: 1-2 bullets, max 10 words each (aim for 6-8)
 - **No jargon**: Write for a VP, not an engineer
 - **Specific**: Include proof points where possible (benchmarks, percentages)
 
@@ -1254,10 +1453,10 @@ Return a JSON array with one object per key differentiator. Each object must hav
 {
   "id": "<same id from input>",
   "databricks_headline": "<3-8 word headline for Databricks position>",
-  "databricks_l200": ["<bullet 1: 10-15 words, outcome-focused>", "<bullet 2 (optional)>"],
+  "databricks_l200": ["<bullet 1: 6-8 words, max 10, outcome-focused>", "<bullet 2 (optional)>"],
   "databricks_reasoning": "<why this rating — 1-2 sentences with technical depth>",
   "competitor_headline": "<3-8 word headline for competitor position>",
-  "competitor_l200": ["<bullet 1: 10-15 words, outcome-focused>", "<bullet 2 (optional)>"],
+  "competitor_l200": ["<bullet 1: 6-8 words, max 10, outcome-focused>", "<bullet 2 (optional)>"],
   "competitor_reasoning": "<why this rating — 1-2 sentences with technical depth>",
   "sources": ["<source 1>", "<source 2>"]
 }
@@ -1293,9 +1492,6 @@ This battlecard is for **C-suite executives** (CIO, CTO, CDO, VP Data/AI) and **
 - C-suite cares about: strategic direction, TCO, vendor risk, governance, time-to-value, AI readiness.
 - Practitioners care about: performance, developer experience, tooling, open standards, reliability.
 
-## Directives
-{{directives}}
-
 ## Additional Context
 {{context}}
 
@@ -1303,7 +1499,7 @@ This battlecard is for **C-suite executives** (CIO, CTO, CDO, VP Data/AI) and **
 
 **L200 (Executive Summary)** — For C-suite and quick scanning:
 - Outcome-focused: Lead with benefit or limitation
-- 1-2 bullets, max 15 words each
+- 1-2 bullets, max 10 words each (aim for 6-8)
 - No technical jargon
 - Include proof points (benchmarks, percentages)
 
@@ -1340,11 +1536,11 @@ Return a JSON array with one object per key differentiator. Each object must hav
 {
   "id": "<same id from input>",
   "databricks_headline": "<3-8 word headline for Databricks position>",
-  "databricks_l200": ["<bullet 1: 10-15 words, outcome-focused>", "<bullet 2 (optional)>"],
+  "databricks_l200": ["<bullet 1: 6-8 words, max 10, outcome-focused>", "<bullet 2 (optional)>"],
   "databricks_l300": ["<detail 1>", "<detail 2>", "...up to 5 technical bullets"],
   "databricks_reasoning": "<why this rating — 1-2 sentences>",
   "competitor_headline": "<3-8 word headline for competitor position>",
-  "competitor_l200": ["<bullet 1: 10-15 words, outcome-focused>", "<bullet 2 (optional)>"],
+  "competitor_l200": ["<bullet 1: 6-8 words, max 10, outcome-focused>", "<bullet 2 (optional)>"],
   "competitor_l300": ["<detail 1>", "<detail 2>", "...up to 5 technical bullets"],
   "competitor_reasoning": "<why this rating — 1-2 sentences>",
   "sources": ["<source 1>", "<source 2>"]
@@ -1362,10 +1558,176 @@ Return a JSON array with one object per key differentiator. Each object must hav
 Return ONLY the JSON array. No markdown fences, no explanation text.
 """
 
+    _PASS2_V7_INLINE = """\
+You generate L200 details for ALL key differentiators in the **{{category}}** category for a Databricks vs {{competitor}} battlecard.
+
+## Execution Mode
+This prompt is category-batched. Process every key differentiator provided in one deterministic JSON response.
+
+## Category: {{category}}
+
+## Key Differentiators to Process
+{{key_diffs_json}}
+
+## Additional Context
+{{context}}
+
+## Requirements
+1. Return one object per input differentiator `id` and keep the same ordering.
+2. Keep L200 bullets concise: max 10 words (aim for 6-8), 1-2 bullets each side.
+3. Include citations and sources for every factual point in details and reasoning.
+4. Use stable phrasing and avoid random stylistic variation.
+
+## Output Format
+Return ONLY a JSON array:
+[
+  {
+    "id": "<same id from input>",
+    "databricks_headline": "<3-8 words>",
+    "databricks_l200": ["<bullet>", "<optional bullet>"],
+    "databricks_reasoning": "<1-2 sentences>",
+    "competitor_headline": "<3-8 words>",
+    "competitor_l200": ["<bullet>", "<optional bullet>"],
+    "competitor_reasoning": "<1-2 sentences>",
+    "citations": {
+      "databricks_details": [],
+      "databricks_reasoning": [],
+      "competitor_details": [],
+      "competitor_reasoning": []
+    },
+    "sources": [
+      {"index": 1, "title": "<source>", "url": "<url>", "type": "context", "accessed_at": "<ISO timestamp>"}
+    ],
+    "research_sources": []
+  }
+]
+"""
+
+    _PASS2_V8_INLINE = """\
+You generate final claim content for ALL provided key differentiators in a Databricks vs {{competitor}} battlecard.
+
+## Execution Mode
+Single-call batched generation. Process every differentiator in one response.
+
+## Key Differentiators to Process
+{{key_diffs_json}}
+
+## Additional Context
+{{context}}
+
+## Task
+For each differentiator:
+1. Generate concise L200 bullets for Databricks and competitor (max 10 words each, aim 6-8).
+2. Add short reasoning for both sides.
+3. Provide citations and sources.
+4. Provide inline fact-check verdict metadata per citation (`verdict`, `confidence`, `verdict_rationale`).
+
+## Output Format
+Return ONLY a JSON array with one object per differentiator id:
+[
+  {
+    "id": "<same id from input>",
+    "databricks_headline": "<3-8 words>",
+    "databricks_l200": ["<bullet>", "<optional bullet>"],
+    "databricks_reasoning": "<1-2 sentences>",
+    "competitor_headline": "<3-8 words>",
+    "competitor_l200": ["<bullet>", "<optional bullet>"],
+    "competitor_reasoning": "<1-2 sentences>",
+    "citations": {
+      "databricks_details": [
+        {
+          "citation_id": "cite_databricks_details_0_1",
+          "detail_item_index": 0,
+          "start_index": 0,
+          "end_index": 20,
+          "source_index": 1,
+          "source_quote": "<exact support quote>",
+          "verdict": "verified|unverified|disputed|outdated",
+          "confidence": 0.0,
+          "verdict_rationale": "<why verdict applies>"
+        }
+      ],
+      "databricks_reasoning": [],
+      "competitor_details": [],
+      "competitor_reasoning": []
+    },
+    "sources": [
+      {"index": 1, "title": "<source>", "url": "<url>", "type": "documentation", "accessed_at": "<ISO timestamp>"}
+    ],
+    "research_sources": []
+  }
+]
+"""
+
+    _PASS2_V9_INLINE = """\
+You generate L200 and L300 details for ALL key differentiators in the **{{category}}** category for a Databricks vs {{competitor}} battlecard.
+
+## Execution Mode
+Category-batched generation. Process all differentiators for this category in one call.
+You will receive {{num_diffs}} key differentiators for {{category}}.
+
+## Category: {{category}}
+
+## Key Differentiators to Process
+{{key_diffs_json}}
+
+## Additional Context
+{{context}}
+
+## Task
+For each differentiator:
+1. Generate concise L200 bullets for Databricks and competitor (max 10 words, aim 6-8).
+2. Generate L300 technical detail bullets (2-5 bullets per side).
+3. Add short reasoning for both sides.
+4. Provide citations and sources.
+5. Include inline fact-check metadata on each citation: `verdict`, `confidence`, `verdict_rationale`.
+
+## Output Format
+Return ONLY a JSON array with one object per differentiator id:
+[
+  {
+    "id": "<same id from input>",
+    "databricks_headline": "<3-8 words>",
+    "databricks_l200": ["<bullet>", "<optional bullet>"],
+    "databricks_l300": ["<technical detail>", "<optional detail>"],
+    "databricks_reasoning": "<1-2 sentences>",
+    "competitor_headline": "<3-8 words>",
+    "competitor_l200": ["<bullet>", "<optional bullet>"],
+    "competitor_l300": ["<technical detail>", "<optional detail>"],
+    "competitor_reasoning": "<1-2 sentences>",
+    "citations": {
+      "databricks_details": [
+        {
+          "citation_id": "cite_databricks_details_0_1",
+          "detail_item_index": 0,
+          "start_index": 0,
+          "end_index": 20,
+          "source_index": 1,
+          "source_quote": "<exact support quote>",
+          "verdict": "verified|unverified|disputed|outdated",
+          "confidence": 0.0,
+          "verdict_rationale": "<why verdict applies>"
+        }
+      ],
+      "databricks_reasoning": [],
+      "competitor_details": [],
+      "competitor_reasoning": []
+    },
+    "sources": [
+      {"index": 1, "title": "<source>", "url": "<url>", "type": "documentation", "accessed_at": "<ISO timestamp>"}
+    ],
+    "research_sources": []
+  }
+]
+"""
+
     _PASS2_INLINE_FALLBACKS = {
         1: _PASS2_V1_INLINE,
         5: _PASS2_V5_INLINE,
         6: _PASS2_V6_INLINE,
+        7: _PASS2_V7_INLINE,
+        8: _PASS2_V8_INLINE,
+        9: _PASS2_V9_INLINE,
     }
 
     _DIRECTIVE_INLINE = (
@@ -1464,7 +1826,12 @@ Return ONLY the JSON array. No markdown fences, no explanation text.
                             "    is_active = :is_active, "
                             "    updated_at = CURRENT_TIMESTAMP "
                             "WHERE template_name = :template_name "
-                            "  AND (template_text LIKE '[Placeholder%' OR template_text = 'inline' OR LENGTH(template_text) < 100)"
+                            "  AND ("
+                            "template_text LIKE '[Placeholder%' "
+                            "OR template_text = 'inline' "
+                            "OR LENGTH(template_text) < 100 "
+                            "OR template_name IN ('pass2_v5', 'pass2_v6', 'pass2_v7', 'pass2_v8', 'pass2_v9')"
+                            ")"
                         ),
                         {
                             "template_text": seed["template_text"],
@@ -1475,6 +1842,19 @@ Return ONLY the JSON array. No markdown fences, no explanation text.
                     )
                 except Exception as e:
                     logger.warning("Repair prompt_templates row %s (non-fatal): %s", seed["template_name"], e)
+
+                try:
+                    conn.execute(
+                        text(
+                            "INSERT INTO prompt_templates "
+                            "(template_name, template_type, version_label, description, template_text, variables, is_active, is_default, display_order) "
+                            "VALUES (:template_name, :template_type, :version_label, :description, :template_text, :variables, :is_active, :is_default, :display_order) "
+                            "ON CONFLICT (template_name) DO NOTHING"
+                        ),
+                        seed,
+                    )
+                except Exception as e:
+                    logger.warning("Upsert prompt_templates row %s (non-fatal): %s", seed["template_name"], e)
             logger.info("Repaired any placeholder prompt_templates rows")
             return
 
@@ -2192,8 +2572,22 @@ def load_battlecard_slides(battlecard_id):
         return [], {}
 
     gen_id = gen["generation_id"]
+    selected_core_categories = set()
 
     with ENGINE.begin() as conn:
+        selected_rows = conn.execute(
+            text(
+                "SELECT DISTINCT pcc.category_name "
+                "FROM workflow_sessions ws "
+                "JOIN session_category_selections scs ON scs.session_id = ws.session_id "
+                "JOIN product_category_catalog pcc ON pcc.catalog_id = scs.catalog_id "
+                "WHERE ws.generation_id = :gid "
+                "AND scs.inclusion_type = 'core_product_category'"
+            ),
+            {"gid": gen_id},
+        ).scalars().all()
+        selected_core_categories = set(selected_rows or [])
+
         diffs = conn.execute(
             text(
                 "SELECT kd.key_diff_id, kd.key_diff_name, kd.key_diff_description, kd.display_order, "
@@ -2206,6 +2600,8 @@ def load_battlecard_slides(battlecard_id):
             ),
             {"gid": gen_id},
         ).mappings().all()
+        if selected_core_categories:
+            diffs = [d for d in diffs if d["category_name"] in selected_core_categories]
 
         claims = conn.execute(
             text(
@@ -2503,11 +2899,14 @@ def load_battlecard_fact_checks(battlecard_id):
         rows = conn.execute(
             text(
                 "SELECT fc.*, e.claim_id, e.detail_item_id, e.traces_to_field, e.traces_to_start_index, e.traces_to_end_index, "
-                "s.source_name, s.source_url, s.source_type, "
+                "e.traces_to_text, e.generation_source_text, "
+                "s.source_name AS fc_source_name, s.source_url AS fc_source_url, s.source_type AS fc_source_type, "
+                "gs.source_name AS generation_source_name, gs.source_url AS generation_source_url, gs.source_type AS generation_source_type, "
                 "cl.key_diff_id, co.company_type "
                 "FROM fact_checks fc "
                 "JOIN evidence e ON fc.evidence_id = e.evidence_id "
                 "LEFT JOIN sources s ON fc.fact_check_source_id = s.source_id "
+                "LEFT JOIN sources gs ON e.generation_source_id = gs.source_id "
                 "JOIN claims cl ON e.claim_id = cl.claim_id "
                 "JOIN companies co ON cl.company_id = co.company_id "
                 "WHERE cl.generation_id = :gid "
@@ -2531,6 +2930,7 @@ def load_battlecard_fact_checks(battlecard_id):
 
         entry = {
             "fact_check_id": str(r.get("fact_check_id")),
+            "claim": r.get("traces_to_text") or "",
             "claim_field": claim_field,
             "detail_item_id": r.get("detail_item_id"),
             "claim_start_index": int(r.get("traces_to_start_index")),
@@ -2538,17 +2938,21 @@ def load_battlecard_fact_checks(battlecard_id):
             "verdict": r.get("status"),
             "confidence": confidence,
             "rationale": r.get("reasoning") or "",
+            "claim_quote": r.get("generation_source_text") or "",
+            "claim_source_title": r.get("generation_source_name") or "Source",
+            "claim_source_url": r.get("generation_source_url") or "",
+            "claim_source_type": r.get("generation_source_type") or "",
             "citations": [],
             "checked_at": r.get("checked_at"),
         }
 
-        if r.get("source_name") or r.get("source_url") or r.get("fact_check_source_text"):
+        if r.get("fc_source_name") or r.get("fc_source_url") or r.get("fact_check_source_text"):
             entry["citations"].append(
                 {
-                    "title": r.get("source_name") or "Source",
-                    "url": r.get("source_url") or "",
+                    "title": r.get("fc_source_name") or "Source",
+                    "url": r.get("fc_source_url") or "",
                     "quote": r.get("fact_check_source_text") or "",
-                    "source_type": r.get("source_type") or "",
+                    "source_type": r.get("fc_source_type") or "",
                 }
             )
 
@@ -2930,6 +3334,140 @@ def _load_prompt_templates_for_ui():
     return PASS1_PROMPT_TEMPLATES, PASS2_PROMPT_TEMPLATES
 
 
+def _pass2_supports_category_batch(version: int) -> bool:
+    return int(version or 0) in (5, 6, 7, 8, 9)
+
+
+def _pass2_supports_single_call(version: int) -> bool:
+    return int(version or 0) in (8,)
+
+
+def _resolve_step4_execution(pass1_ver: int, mode: str, workers: int, core_count: int) -> dict:
+    mode = (mode or "auto").strip().lower()
+    workers = max(1, int(workers or 1))
+    core_count = max(0, int(core_count or 0))
+
+    if mode == "single_call":
+        return {
+            "mode": "sequential",
+            "summary": "Single-call planning",
+            "details": f"Prompt V{pass1_ver} with one request",
+            "runtime_mode": "single_call",
+            "workers": 1,
+            "batches": 1 if core_count > 0 else 0,
+        }
+    if mode in ("category_parallel", "category_sequential"):
+        can_batch = core_count > 1
+        use_parallel = mode == "category_parallel" and can_batch and workers > 1
+        worker_cap = min(workers, max(core_count, 1), 6) if use_parallel else 1
+        return {
+            "mode": "parallel" if use_parallel else "sequential",
+            "summary": (
+                f"Parallel by category ({core_count} calls, up to {worker_cap} workers)"
+                if use_parallel
+                else f"Sequential by category ({core_count} calls)"
+            ),
+            "details": f"Prompt V4 runtime path ({'parallel' if use_parallel else 'sequential'} category mode)",
+            "runtime_mode": "category_parallel" if use_parallel else "category_sequential",
+            "workers": worker_cap,
+            "batches": core_count,
+        }
+
+    # auto
+    pass1_parallel = bool(pass1_ver >= 3 and workers > 1 and core_count > 1)
+    pass1_effective_ver = 4 if pass1_parallel else pass1_ver
+    pass1_batches = core_count if pass1_parallel else (1 if core_count > 0 else 0)
+    pass1_workers = min(workers, pass1_batches, 6) if pass1_parallel else 1
+    return {
+        "mode": "parallel" if pass1_parallel else "sequential",
+        "summary": (
+            f"Parallel by category ({pass1_batches} calls, up to {pass1_workers} workers)"
+            if pass1_parallel
+            else "Sequential single-call planning"
+        ),
+        "details": f"Prompt V{pass1_effective_ver} runtime behavior (auto)",
+        "runtime_mode": "category_parallel" if pass1_parallel else "single_call",
+        "workers": pass1_workers,
+        "batches": pass1_batches,
+    }
+
+
+def _resolve_step5_execution(pass2_ver: int, mode: str, workers: int, core_count: int, diffs_per_category: int) -> dict:
+    mode = (mode or "auto").strip().lower()
+    workers = max(1, int(workers or 1))
+    core_count = max(0, int(core_count or 0))
+    diffs_per_category = max(0, int(diffs_per_category or 0))
+    total_diffs = core_count * diffs_per_category
+    supports_category = _pass2_supports_category_batch(pass2_ver)
+    supports_single = _pass2_supports_single_call(pass2_ver)
+
+    def _per_diff(parallel: bool, explicit: bool = False) -> dict:
+        use_parallel = parallel and workers > 1 and total_diffs > 1
+        wc = min(workers, max(total_diffs, 1), 8) if use_parallel else 1
+        return {
+            "mode": "parallel" if use_parallel else "sequential",
+            "summary": (
+                f"Parallel per-diff calls (~{total_diffs} calls, up to {wc} workers)"
+                if use_parallel
+                else "Sequential per-diff generation"
+            ),
+            "details": f"Prompt V{pass2_ver} (per-diff{' explicit' if explicit else ''})",
+            "runtime_mode": "per_diff_parallel" if use_parallel else "per_diff_sequential",
+            "workers": wc,
+            "batches": total_diffs,
+            "fallback_reason": None,
+        }
+
+    def _category(parallel: bool, explicit: bool = False) -> dict:
+        if not supports_category:
+            out = _per_diff(parallel=False, explicit=True)
+            out["fallback_reason"] = f"Prompt V{pass2_ver} does not support category batching."
+            return out
+        use_parallel = parallel and workers > 1 and core_count > 1
+        wc = min(workers, max(core_count, 1), 4) if use_parallel else 1
+        return {
+            "mode": "parallel" if use_parallel else "sequential",
+            "summary": (
+                f"Parallel category batches ({core_count} calls, up to {wc} workers)"
+                if use_parallel
+                else "Sequential category batches"
+            ),
+            "details": f"Prompt V{pass2_ver} (category-batched{' explicit' if explicit else ''})",
+            "runtime_mode": "category_parallel" if use_parallel else "category_sequential",
+            "workers": wc,
+            "batches": core_count,
+            "fallback_reason": None,
+        }
+
+    if mode == "single_call":
+        if not supports_single:
+            out = _per_diff(parallel=False, explicit=True)
+            out["fallback_reason"] = f"Prompt V{pass2_ver} does not support single-call batching."
+            return out
+        return {
+            "mode": "sequential",
+            "summary": f"Single-call generation ({total_diffs} diffs in one request)",
+            "details": f"Prompt V{pass2_ver} (single-call)",
+            "runtime_mode": "single_call",
+            "workers": 1,
+            "batches": 1 if total_diffs > 0 else 0,
+            "fallback_reason": None,
+        }
+    if mode == "per_diff_parallel":
+        return _per_diff(parallel=True, explicit=True)
+    if mode == "per_diff_sequential":
+        return _per_diff(parallel=False, explicit=True)
+    if mode == "category_parallel":
+        return _category(parallel=True, explicit=True)
+    if mode == "category_sequential":
+        return _category(parallel=False, explicit=True)
+
+    # auto
+    if pass2_ver in (5, 6, 7, 8, 9):
+        return _category(parallel=True, explicit=False)
+    return _per_diff(parallel=True, explicit=False)
+
+
 @app.route('/workflow/new')
 def workflow_new():
     # Fetch existing competitors so the user can create a new version
@@ -2946,7 +3484,9 @@ def workflow_new():
     p1_templates, p2_templates = _load_prompt_templates_for_ui()
     return render_template('workflow_new.html', competitors=competitors,
                            pass1_prompt_templates=p1_templates,
-                           pass2_prompt_templates=p2_templates)
+                           pass2_prompt_templates=p2_templates,
+                           step4_execution_options=STEP4_EXECUTION_OPTIONS,
+                           step5_execution_options=STEP5_EXECUTION_OPTIONS)
 
 
 @app.route('/workflow/<session_id>')
@@ -2956,7 +3496,10 @@ def workflow_session(session_id):
             text(
                 "SELECT session_id::text, competitor_name, product_area, current_step, status, "
                 "model_name, diffs_per_category, max_workers, generation_id, "
-                "pass2_prompt_template_version, created_at "
+                "COALESCE(step4_execution_mode, 'auto') AS step4_execution_mode, "
+                "COALESCE(step5_execution_mode, 'auto') AS step5_execution_mode, "
+                "COALESCE(step5_inline_fact_check, FALSE) AS step5_inline_fact_check, "
+                "pass1_prompt_template_version, pass2_prompt_template_version, created_at "
                 "FROM workflow_sessions WHERE session_id::text = :sid"
             ),
             {"sid": session_id},
@@ -3046,6 +3589,51 @@ def workflow_session(session_id):
         ).mappings().all()
     session_selections = {r["catalog_id"]: r["inclusion_type"] for r in sel_rows}
 
+    # Load previous version Step 3 selections for baseline comparison.
+    previous_session_selections = {}
+    previous_selection_source = {
+        "previous_generation_id": None,
+        "session_id": None,
+        "selection_count": 0,
+    }
+    with ENGINE.begin() as conn:
+        prev_gen_id = conn.execute(
+            text(
+                "SELECT bg.previous_generation_id "
+                "FROM workflow_sessions ws "
+                "JOIN battlecard_generations bg ON ws.generation_id = bg.generation_id "
+                "WHERE ws.session_id::text = :sid"
+            ),
+            {"sid": session_id},
+        ).scalar()
+        previous_selection_source["previous_generation_id"] = prev_gen_id
+        if prev_gen_id:
+            prev_session_id = conn.execute(
+                text(
+                    "SELECT ws.session_id::text "
+                    "FROM workflow_sessions ws "
+                    "WHERE ws.generation_id = :gid "
+                    "AND EXISTS ("
+                    "  SELECT 1 FROM session_category_selections scs "
+                    "  WHERE scs.session_id = ws.session_id"
+                    ") "
+                    "ORDER BY ws.created_at DESC LIMIT 1"
+                ),
+                {"gid": prev_gen_id},
+            ).scalar()
+            previous_selection_source["session_id"] = prev_session_id
+            if prev_session_id:
+                prev_rows = conn.execute(
+                    text(
+                        "SELECT catalog_id, inclusion_type "
+                        "FROM session_category_selections "
+                        "WHERE session_id::text = :sid"
+                    ),
+                    {"sid": prev_session_id},
+                ).mappings().all()
+                previous_session_selections = {r["catalog_id"]: r["inclusion_type"] for r in prev_rows}
+                previous_selection_source["selection_count"] = len(previous_session_selections)
+
     # Load product mappings for the session's competitor (for display context)
     competitor_name = session.get("competitor_name", "")
     with ENGINE.begin() as conn:
@@ -3066,6 +3654,41 @@ def workflow_session(session_id):
             "name": pm["product_name"],
             "description": pm["product_description"],
         })
+
+    effective_step3_selections = session_selections or previous_session_selections
+    core_count = sum(1 for v in effective_step3_selections.values() if v == "core_product_category")
+    pass1_ver = int(session.get("pass1_prompt_template_version") or 3)
+    pass2_ver = int(session.get("pass2_prompt_template_version") or 2)
+    configured_workers = int(session.get("max_workers") or 1)
+    diffs_per_category = int(session.get("diffs_per_category") or 0)
+    step4_mode_cfg = (session.get("step4_execution_mode") or "auto").strip().lower()
+    step5_mode_cfg = (session.get("step5_execution_mode") or "auto").strip().lower()
+    step4_exec = _resolve_step4_execution(pass1_ver, step4_mode_cfg, configured_workers, core_count)
+    step5_exec = _resolve_step5_execution(pass2_ver, step5_mode_cfg, configured_workers, core_count, diffs_per_category)
+    pass1_parallel = step4_exec["mode"] == "parallel"
+    pass2_parallel = step5_exec["mode"] == "parallel"
+
+    step_execution_modes = {
+        4: {
+            "mode": step4_exec["mode"],
+            "summary": step4_exec["summary"],
+            "details": step4_exec["details"],
+            "runtime_mode": step4_exec["runtime_mode"],
+            "configured_mode": step4_mode_cfg,
+        },
+        5: {
+            "mode": step5_exec["mode"],
+            "summary": step5_exec["summary"],
+            "details": step5_exec["details"],
+            "runtime_mode": step5_exec["runtime_mode"],
+            "configured_mode": step5_mode_cfg,
+            "fallback_reason": step5_exec.get("fallback_reason"),
+        },
+    }
+    fastest_strategy_hint = (
+        "Fastest balanced setup: Step 3 select only core categories you need, "
+        "then use category-batched Step 5 with 3-4 workers and inline fact-check disabled."
+    )
 
     # Load fact check summary for step 6
     fact_check_summary = {}
@@ -3090,6 +3713,8 @@ def workflow_session(session_id):
         artifacts_by_step=artifacts_by_step,
         category_catalog=category_catalog,
         session_selections=session_selections,
+        previous_session_selections=previous_session_selections,
+        previous_selection_source=previous_selection_source,
         product_mappings_by_catalog=product_mappings_by_catalog,
         battlecard_id=battlecard_id,
         battlecard_link_id=battlecard_link_id,
@@ -3099,7 +3724,11 @@ def workflow_session(session_id):
         pill_config=PILL_CONFIG,
         pass1_prompt_templates=p1_templates,
         pass2_prompt_templates=p2_templates,
+        step4_execution_options=STEP4_EXECUTION_OPTIONS,
+        step5_execution_options=STEP5_EXECUTION_OPTIONS,
         context_steps_locked=context_steps_locked,
+        step_execution_modes=step_execution_modes,
+        fastest_strategy_hint=fastest_strategy_hint,
     )
 
 
@@ -3355,12 +3984,30 @@ def create_workflow():
     model_name = data.get('model_name', 'databricks-claude-sonnet-4').strip()
     diffs_per_category = int(data.get('diffs_per_category', 10))
     max_workers = int(data.get('max_workers', 5))
+    step4_execution_mode = str(data.get('step4_execution_mode', 'auto') or 'auto')
+    step5_execution_mode = str(data.get('step5_execution_mode', 'auto') or 'auto')
+    step5_inline_fact_check_raw = data.get('step5_inline_fact_check', False)
+    if isinstance(step5_inline_fact_check_raw, str):
+        step5_inline_fact_check = step5_inline_fact_check_raw.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        step5_inline_fact_check = bool(step5_inline_fact_check_raw)
     pass1_prompt_template_version = int(data.get('pass1_prompt_template_version', 3))
     pass2_prompt_template_version = int(data.get('pass2_prompt_template_version', 2))
     previous_generation_id = data.get('previous_generation_id')
+    if previous_generation_id in ("", None):
+        previous_generation_id = None
+    elif not isinstance(previous_generation_id, int):
+        try:
+            previous_generation_id = int(previous_generation_id)
+        except (TypeError, ValueError):
+            previous_generation_id = None
 
     if not competitor_name:
         return jsonify({"error": "competitor_name is required"}), 400
+    if step4_execution_mode not in STEP4_EXECUTION_OPTIONS:
+        step4_execution_mode = "auto"
+    if step5_execution_mode not in STEP5_EXECUTION_OPTIONS:
+        step5_execution_mode = "auto"
 
     with ENGINE.begin() as conn:
         # If no explicit previous_generation_id was provided but the competitor
@@ -3394,8 +4041,15 @@ def create_workflow():
 
         row = conn.execute(
             text(
-                "INSERT INTO workflow_sessions (competitor_name, product_area, model_name, diffs_per_category, max_workers, generation_id, pass1_prompt_template_version, pass2_prompt_template_version) "
-                "VALUES (:comp, :area, :model, :diffs, :workers, :gid, :p1tv, :p2tv) RETURNING session_id::text"
+                "INSERT INTO workflow_sessions ("
+                "competitor_name, product_area, model_name, diffs_per_category, max_workers, "
+                "step4_execution_mode, step5_execution_mode, step5_inline_fact_check, "
+                "generation_id, pass1_prompt_template_version, pass2_prompt_template_version"
+                ") VALUES ("
+                ":comp, :area, :model, :diffs, :workers, "
+                ":s4mode, :s5mode, :s5fc, "
+                ":gid, :p1tv, :p2tv"
+                ") RETURNING session_id::text"
             ),
             {
                 "comp": competitor_name,
@@ -3403,6 +4057,9 @@ def create_workflow():
                 "model": model_name,
                 "diffs": diffs_per_category,
                 "workers": max_workers,
+                "s4mode": step4_execution_mode,
+                "s5mode": step5_execution_mode,
+                "s5fc": step5_inline_fact_check,
                 "gid": gen_id,
                 "p1tv": pass1_prompt_template_version,
                 "p2tv": pass2_prompt_template_version,
@@ -3420,7 +4077,39 @@ def create_workflow():
                 {"sid": session_id, "num": step_num, "name": step_name, "status": status},
             )
 
-    return jsonify({"success": True, "session_id": session_id})
+        # For new versions, preload Step 3 defaults from the linked previous generation.
+        seeded_category_defaults = 0
+        if previous_generation_id:
+            source_session_id = conn.execute(
+                text(
+                    "SELECT ws.session_id::text "
+                    "FROM workflow_sessions ws "
+                    "WHERE ws.generation_id = :gid "
+                    "AND EXISTS ("
+                    "  SELECT 1 FROM session_category_selections scs "
+                    "  WHERE scs.session_id = ws.session_id"
+                    ") "
+                    "ORDER BY ws.created_at DESC LIMIT 1"
+                ),
+                {"gid": previous_generation_id},
+            ).scalar()
+            if source_session_id:
+                seeded_category_defaults = conn.execute(
+                    text(
+                        "INSERT INTO session_category_selections (session_id, catalog_id, inclusion_type, display_order) "
+                        "SELECT CAST(:sid AS uuid), scs.catalog_id, scs.inclusion_type, scs.display_order "
+                        "FROM session_category_selections scs "
+                        "WHERE scs.session_id::text = :src "
+                        "ORDER BY scs.display_order, scs.catalog_id"
+                    ),
+                    {"sid": session_id, "src": source_session_id},
+                ).rowcount or 0
+
+    return jsonify({
+        "success": True,
+        "session_id": session_id,
+        "seeded_category_defaults": seeded_category_defaults,
+    })
 
 
 # Heartbeat timeout threshold in seconds - steps in_progress longer than this are considered stuck
@@ -3855,7 +4544,7 @@ def workflow_step1_generate(session_id):
             response = client.chat.completions.create(
                 model=model_name,
                 messages=[{"role": "user", "content": full_prompt}],
-                temperature=0.3,
+                temperature=DEFAULT_LLM_TEMPERATURE,
                 max_tokens=4096,
             )
             directive_content = response.choices[0].message.content
@@ -4697,7 +5386,28 @@ def workflow_step_reopen(session_id, step_number):
 @app.route('/api/workflow/<session_id>/step/6/generate', methods=['POST'])
 def workflow_step6_fact_check(session_id):
     """Trigger fact checking in a background thread."""
-    _update_step_status(session_id, 6, "in_progress", progress_message="Starting fact checks...")
+    _update_step_status(
+        session_id,
+        6,
+        "in_progress",
+        progress_current=0,
+        progress_total=4,
+        progress_message="[1/4] Starting fact checks...",
+    )
+
+    # Fast-fail preflight so users get immediate feedback instead of a silent stall.
+    if not os.getenv("EXA_API_KEY"):
+        err = "Fact check unavailable: EXA_API_KEY is not configured for this app deployment."
+        _update_step_status(
+            session_id,
+            6,
+            "waiting_human",
+            progress_current=0,
+            progress_total=0,
+            progress_message="Fact check could not start.",
+            error_message=err,
+        )
+        return jsonify({"success": False, "error": err}), 400
 
     def _run():
         try:
@@ -4706,8 +5416,13 @@ def workflow_step6_fact_check(session_id):
             checker.run_fact_checks()
         except Exception as e:
             logger.exception("Fact check failed for session %s", session_id)
-            _update_step_status(session_id, 6, "waiting_human",
-                                error_message=f"Fact check error: {e}")
+            _update_step_status(
+                session_id,
+                6,
+                "waiting_human",
+                progress_message="Fact check stopped due to an error.",
+                error_message=f"Fact check error: {e}",
+            )
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -4769,6 +5484,8 @@ def _update_step_status(session_id, step_number, status, progress_current=None, 
         if error_message is not None:
             sets.append("error_message = :em")
             params["em"] = error_message
+        elif status in ("ready", "in_progress", "waiting_human", "completed"):
+            sets.append("error_message = NULL")
 
         conn.execute(
             text(f"UPDATE workflow_steps SET {', '.join(sets)} WHERE session_id::text = :sid AND step_number = :step"),
@@ -4819,7 +5536,7 @@ def _advance_workflow(session_id, completed_step):
 # =============================================================================
 
 
-@app.route('/api/workflow/<session_id>/step/<int:step_number>/prompt')
+@app.route('/api/workflow/<session_id>/step/<int:step_number>/prompt', methods=['GET', 'POST'])
 def workflow_step_prompt_preview(session_id, step_number):
     """Return the rendered prompt that will be (or was) used for a given step."""
     from workflow_runner import (
@@ -4827,13 +5544,32 @@ def workflow_step_prompt_preview(session_id, step_number):
         load_prompt_template, render_template as render_prompt,
         format_context_xml, load_pass1_template, load_pass2_template,
         load_directive_template,
+        resolve_context_source_flags,
     )
+
+    # Optional context source overrides for prompt preview (used by Step 4/5 UI).
+    context_sources = None
+    payload = request.get_json(silent=True) or {}
+    if isinstance(payload.get("context_sources"), dict):
+        context_sources = payload["context_sources"]
+    elif request.args.get("context_sources"):
+        try:
+            parsed = json.loads(request.args.get("context_sources") or "{}")
+            if isinstance(parsed, dict):
+                context_sources = parsed
+        except (json.JSONDecodeError, TypeError):
+            context_sources = None
+    context_flags = resolve_context_source_flags(context_sources)
 
     # Load session config
     with ENGINE.begin() as conn:
         session = conn.execute(
             text(
                 "SELECT competitor_name, product_area, model_name, diffs_per_category, "
+                "max_workers, "
+                "COALESCE(step4_execution_mode, 'auto') AS step4_execution_mode, "
+                "COALESCE(step5_execution_mode, 'auto') AS step5_execution_mode, "
+                "COALESCE(step5_inline_fact_check, FALSE) AS step5_inline_fact_check, "
                 "COALESCE(pass1_prompt_template_version, 2) AS pass1_prompt_template_version, "
                 "COALESCE(pass2_prompt_template_version, 2) AS pass2_prompt_template_version "
                 "FROM workflow_sessions WHERE session_id::text = :sid"
@@ -4859,6 +5595,54 @@ def workflow_step_prompt_preview(session_id, step_number):
     product_area = session["product_area"]
     model_name = session["model_name"]
     diffs_per_category = session["diffs_per_category"]
+
+    def _build_preview_context():
+        directive_text = (_get_artifact("directive_generated") or "") if context_flags["directive"] else ""
+        old_battlecard_text = (_get_artifact("old_battlecard_extracted") or "") if context_flags["old_battlecard"] else ""
+        review_feedback = ""
+        fact_check_results = ""
+
+        if context_flags["review_feedback"] or context_flags["fact_checks"]:
+            with ENGINE.begin() as conn:
+                prev_gen_id = conn.execute(
+                    text(
+                        "SELECT bg.previous_generation_id "
+                        "FROM workflow_sessions ws "
+                        "JOIN battlecard_generations bg ON ws.generation_id = bg.generation_id "
+                        "WHERE ws.session_id::text = :sid"
+                    ),
+                    {"sid": session_id},
+                ).scalar()
+            if prev_gen_id:
+                if context_flags["review_feedback"]:
+                    review_feedback = _collect_review_feedback_text(prev_gen_id)
+                if context_flags["fact_checks"]:
+                    fc_rows = get_fact_check_details_by_gen(prev_gen_id)
+                    if fc_rows:
+                        lines = ["## Previous Version Fact-Check Results", ""]
+                        for r in fc_rows:
+                            verdict = str((r.get("verdict") or "unknown")).upper()
+                            headline = str(r.get("claim_headline") or "")
+                            traced = str(r.get("traces_to_text") or r.get("claim_description") or "")
+                            reasoning = str(r.get("reasoning") or "")
+                            confidence = r.get("confidence_score")
+                            line = f"- [{verdict}] {headline}"
+                            if traced:
+                                line += f' — claim text: "{traced[:200]}"'
+                            if reasoning:
+                                line += f" — reason: {reasoning[:200]}"
+                            if confidence is not None:
+                                line += f" (confidence: {confidence}%)"
+                            lines.append(line)
+                        fact_check_results = "\n".join(lines)
+
+        return format_context_xml(
+            directive_text,
+            old_battlecard_text,
+            competitor,
+            review_feedback=review_feedback,
+            fact_check_results=fact_check_results,
+        )
 
     if step_number == 1:
         # Step 1: Show the directive generation prompt (DB-first)
@@ -4914,14 +5698,9 @@ def workflow_step_prompt_preview(session_id, step_number):
     elif step_number == 4:
         # Step 4: Pass 1 prompt
         p1_ver = session["pass1_prompt_template_version"]
-        try:
-            template_text, template_file = load_pass1_template(p1_ver, engine=ENGINE)
-        except FileNotFoundError:
-            return jsonify({"error": f"Pass 1 prompt template V{p1_ver} not found"}), 404
 
-        directive = _get_artifact("directive_generated") or "[Directive not yet generated]"
-        old_battlecard = _get_artifact("old_battlecard_extracted") or ""
-        context = format_context_xml(directive, old_battlecard, competitor)
+        directive = (_get_artifact("directive_generated") or "[Directive not yet generated]") if context_flags["directive"] else ""
+        context = _build_preview_context()
 
         categories_content = _get_artifact("product_categories") or ""
         categories = [c.strip() for c in categories_content.split("\n") if c.strip()]
@@ -4937,16 +5716,37 @@ def workflow_step_prompt_preview(session_id, step_number):
         core_cats = classifications.get("core_product_categories", [])
         cross_cats = classifications.get("cross_platform_capabilities", [])
 
+        # Match runtime behavior: V3 with multiple core categories and multiple
+        # workers executes using the V4 per-category prompt.
+        step4_exec = _resolve_step4_execution(
+            p1_ver,
+            session.get("step4_execution_mode"),
+            session.get("max_workers", 1),
+            len(core_cats),
+        )
+        use_parallel_pass1 = step4_exec["runtime_mode"] in ("category_parallel", "category_sequential")
+        effective_p1_ver = 4 if use_parallel_pass1 else p1_ver
+        try:
+            template_text, template_file = load_pass1_template(effective_p1_ver, engine=ENGINE)
+        except FileNotFoundError:
+            return jsonify({"error": f"Pass 1 prompt template V{effective_p1_ver} not found"}), 404
+
         if p1_ver >= 3 and core_cats:
             # V3+: separate core and cross-platform category lists
             core_text = "\n".join(f"- {c}" for c in core_cats)
             cross_text = "\n".join(f"- {c}" for c in cross_cats) if cross_cats else "_(none selected)_"
             total_diffs = len(core_cats) * diffs_per_category
+            target_category = core_cats[0] if core_cats else "[Category]"
+            other_core = "\n".join(f"- {c}" for c in core_cats[1:]) if len(core_cats) > 1 else "_(none)_"
             variables = {
                 "competitor": competitor,
                 "product_area": product_area,
                 "comparison": f"Databricks vs {competitor}",
+                # Keep both names populated for template compatibility.
+                "product_categories": core_text,
                 "core_product_categories": core_text,
+                "target_category": target_category,
+                "other_core_categories": other_core,
                 "cross_platform_capabilities": cross_text,
                 "core_category_count": str(len(core_cats)),
                 "diffs_per_category": str(diffs_per_category),
@@ -4973,12 +5773,16 @@ def workflow_step_prompt_preview(session_id, step_number):
 
         return jsonify({
             "step": 4,
-            "title": f"Pass 1: Generate Key Differentiators (V{p1_ver})",
+            "title": f"Pass 1: Generate Key Differentiators (V{effective_p1_ver})",
             "template_file": template_file,
             "model": model_name,
             "template": template_text,
             "variables": variables,
             "prompt": rendered,
+            "selected_prompt_version": p1_ver,
+            "effective_prompt_version": effective_p1_ver,
+            "note": f"Preview uses runtime execution mode `{step4_exec['runtime_mode']}`.",
+            "context_sources": context_flags,
         })
 
     elif step_number == 5:
@@ -4989,9 +5793,9 @@ def workflow_step_prompt_preview(session_id, step_number):
         except FileNotFoundError:
             return jsonify({"error": f"Prompt template V{p2_ver} not found"}), 404
 
-        directive = _get_artifact("directive_generated") or "[Directive not yet generated]"
-        old_battlecard = _get_artifact("old_battlecard_extracted") or ""
-        context = format_context_xml(directive, old_battlecard, competitor)
+        directive = (_get_artifact("directive_generated") or "[Directive not yet generated]") if context_flags["directive"] else ""
+        context = _build_preview_context()
+        directives_for_template = "" if p2_ver in (5, 6, 7, 8, 9) else directive
 
         # Try to get first skeleton for a realistic preview
         skeletons_json = _get_artifact("pass1_skeletons")
@@ -5008,6 +5812,19 @@ def workflow_step_prompt_preview(session_id, step_number):
                 "competitor_rating": "[Rating]",
                 "selection_reasoning": "[Reasoning]",
             }
+            skeletons = [sk]
+
+        step5_exec = _resolve_step5_execution(
+            p2_ver,
+            session.get("step5_execution_mode"),
+            session.get("max_workers", 1),
+            len({s.get("category", "") for s in skeletons if s.get("category")}),
+            session.get("diffs_per_category", 0),
+        )
+        if step5_exec["runtime_mode"] == "single_call":
+            category_diffs = skeletons
+        else:
+            category_diffs = [s for s in skeletons if s.get("category") == sk.get("category")] if skeletons else [sk]
 
         variables = {
             "competitor": competitor,
@@ -5017,7 +5834,23 @@ def workflow_step_prompt_preview(session_id, step_number):
             "databricks_rating": sk.get("databricks_rating", ""),
             "competitor_rating": sk.get("competitor_rating", ""),
             "selection_reasoning": sk.get("selection_reasoning", ""),
-            "directives": directive,
+            "num_diffs": len(category_diffs),
+            "key_diffs_json": json.dumps(
+                [
+                    {
+                        "id": s.get("id", ""),
+                        "category": s.get("category", ""),
+                        "key_differentiator": s.get("key_differentiator", ""),
+                        "description": s.get("description", ""),
+                        "databricks_rating": s.get("databricks_rating", ""),
+                        "competitor_rating": s.get("competitor_rating", ""),
+                        "selection_reasoning": s.get("selection_reasoning", ""),
+                    }
+                    for s in category_diffs
+                ],
+                indent=2,
+            ),
+            "directives": directives_for_template,
             "context": context,
         }
 
@@ -5033,7 +5866,11 @@ def workflow_step_prompt_preview(session_id, step_number):
             "variables": variables,
             "prompt": rendered,
             "prompt_version": p2_ver,
-            "note": "This prompt is rendered for the first skeleton only. Each skeleton gets its own prompt.",
+            "note": (
+                f"Preview uses runtime execution mode `{step5_exec['runtime_mode']}`. "
+                f"Inline fact-check seeding is {'enabled' if session.get('step5_inline_fact_check') else 'disabled'}."
+            ),
+            "context_sources": context_flags,
         })
 
     elif step_number == 6:
@@ -5653,8 +6490,30 @@ def api_test_prompt(template_id):
                             variables["databricks_rating"] = first.get("databricks_rating", "")
                             variables["competitor_rating"] = first.get("competitor_rating", "")
                             variables["selection_reasoning"] = first.get("selection_reasoning", "")
+                            category = first.get("category", "")
+                            category_diffs = [s for s in skeletons if s.get("category") == category]
+                            variables["num_diffs"] = len(category_diffs)
+                            variables["key_diffs_json"] = json.dumps(
+                                [
+                                    {
+                                        "id": s.get("id", ""),
+                                        "category": s.get("category", ""),
+                                        "key_differentiator": s.get("key_differentiator", ""),
+                                        "description": s.get("description", ""),
+                                        "databricks_rating": s.get("databricks_rating", ""),
+                                        "competitor_rating": s.get("competitor_rating", ""),
+                                        "selection_reasoning": s.get("selection_reasoning", ""),
+                                    }
+                                    for s in category_diffs
+                                ],
+                                indent=2,
+                            )
                     except (json.JSONDecodeError, TypeError):
                         pass
+
+                # V5/V6 templates already get directive content inside {{context}}.
+                if "key_diffs_json" in variables_list:
+                    variables["directives"] = ""
 
     # Fill in any missing variables with placeholders
     for var in variables_list:
@@ -5680,6 +6539,660 @@ def api_test_prompt(template_id):
 
 
 # =============================================================================
+# Eval / Benchmark
+# =============================================================================
+
+
+def _read_text_file(path: str) -> str:
+    try:
+        if path and os.path.isfile(path):
+            with open(path) as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
+
+def _select_core_categories(limit_count: int) -> list[str]:
+    with ENGINE.begin() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT category_name FROM product_category_catalog "
+                "WHERE is_core_product_category = TRUE "
+                "ORDER BY display_order LIMIT :lim"
+            ),
+            {"lim": max(1, int(limit_count or 1))},
+        ).scalars().all()
+    return [r for r in rows if r]
+
+
+def _create_workflow_session_internal(
+    competitor_name: str,
+    product_area: str,
+    model_name: str,
+    diffs_per_category: int,
+    max_workers: int,
+    pass1_prompt_template_version: int,
+    pass2_prompt_template_version: int,
+    step4_execution_mode: str,
+    step5_execution_mode: str,
+    step5_inline_fact_check: bool,
+) -> tuple[str, int]:
+    with ENGINE.begin() as conn:
+        gen_id = conn.execute(
+            text(
+                "INSERT INTO battlecard_generations "
+                "(trigger_type, generated_by, generation_model, status) "
+                "VALUES ('manual_request', 'eval_runner', :model, 'draft') "
+                "RETURNING generation_id"
+            ),
+            {"model": model_name},
+        ).scalar()
+
+        session_id = conn.execute(
+            text(
+                "INSERT INTO workflow_sessions ("
+                "competitor_name, product_area, model_name, diffs_per_category, max_workers, "
+                "step4_execution_mode, step5_execution_mode, step5_inline_fact_check, "
+                "generation_id, pass1_prompt_template_version, pass2_prompt_template_version"
+                ") VALUES ("
+                ":comp, :area, :model, :diffs, :workers, "
+                ":s4mode, :s5mode, :s5fc, "
+                ":gid, :p1v, :p2v"
+                ") RETURNING session_id::text"
+            ),
+            {
+                "comp": competitor_name,
+                "area": product_area,
+                "model": model_name,
+                "diffs": int(diffs_per_category),
+                "workers": int(max_workers),
+                "s4mode": step4_execution_mode,
+                "s5mode": step5_execution_mode,
+                "s5fc": bool(step5_inline_fact_check),
+                "gid": gen_id,
+                "p1v": int(pass1_prompt_template_version),
+                "p2v": int(pass2_prompt_template_version),
+            },
+        ).scalar()
+
+        for step_num, step_name in WORKFLOW_STEPS:
+            status = "ready" if step_num == 1 else "pending"
+            conn.execute(
+                text(
+                    "INSERT INTO workflow_steps (session_id, step_number, step_name, status) "
+                    "VALUES (CAST(:sid AS uuid), :num, :name, :status)"
+                ),
+                {"sid": session_id, "num": step_num, "name": step_name, "status": status},
+            )
+    return session_id, gen_id
+
+
+def _seed_context_for_benchmark_session(session_id: str, core_categories: list[str]):
+    directive_content = _read_text_file(DEFAULT_DIRECTIVE_PATH)
+    old_battlecard_content = _read_text_file(DEFAULT_OLD_BATTLECARD_PATH)
+    product_categories_content = "\n".join(core_categories)
+    selections = {
+        "core_product_categories": core_categories,
+        "cross_platform_capabilities": [],
+        "skipped": [],
+    }
+
+    with ENGINE.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
+                "VALUES (CAST(:sid AS uuid), 1, 'directive_generated', 'directive.md', :content, CAST(:meta AS jsonb))"
+            ),
+            {"sid": session_id, "content": directive_content, "meta": json.dumps({"seeded": True})},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
+                "VALUES (CAST(:sid AS uuid), 2, 'old_battlecard_extracted', 'old_battlecard.md', :content, CAST(:meta AS jsonb))"
+            ),
+            {"sid": session_id, "content": old_battlecard_content, "meta": json.dumps({"seeded": True})},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
+                "VALUES (CAST(:sid AS uuid), 3, 'product_categories', 'categories.md', :content, CAST(:meta AS jsonb))"
+            ),
+            {"sid": session_id, "content": product_categories_content, "meta": json.dumps({"seeded": True})},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
+                "VALUES (CAST(:sid AS uuid), 3, 'category_selections', 'category_selections.json', :content, CAST(:meta AS jsonb))"
+            ),
+            {"sid": session_id, "content": json.dumps(selections, indent=2), "meta": json.dumps({"seeded": True})},
+        )
+
+        # Keep relational selections in sync with the seeded artifact so Step 4
+        # can resolve canonical catalog IDs (instead of string-only fallback).
+        conn.execute(
+            text("DELETE FROM session_category_selections WHERE session_id::text = :sid"),
+            {"sid": session_id},
+        )
+        catalog_rows = conn.execute(
+            text("SELECT catalog_id, category_name FROM product_category_catalog ORDER BY display_order")
+        ).mappings().all()
+        catalog_by_name = {r["category_name"]: r["catalog_id"] for r in catalog_rows}
+
+        missing_core_categories = []
+        display_order = 0
+        for category_name in core_categories:
+            catalog_id = catalog_by_name.get(category_name)
+            if catalog_id is None:
+                missing_core_categories.append(category_name)
+                continue
+            conn.execute(
+                text(
+                    "INSERT INTO session_category_selections (session_id, catalog_id, inclusion_type, display_order) "
+                    "VALUES (CAST(:sid AS uuid), :cid, 'core_product_category', :ord)"
+                ),
+                {"sid": session_id, "cid": int(catalog_id), "ord": display_order},
+            )
+            display_order += 1
+
+        if missing_core_categories:
+            logger.warning(
+                "Benchmark seed skipped %d core categories missing from product_category_catalog (session %s): %s",
+                len(missing_core_categories),
+                session_id,
+                ", ".join(missing_core_categories),
+            )
+
+        conn.execute(
+            text(
+                "UPDATE workflow_steps SET status = 'completed', completed_at = NOW(), "
+                "progress_current = 1, progress_total = 1, progress_message = 'Seeded by eval runner' "
+                "WHERE session_id::text = :sid AND step_number IN (1,2,3)"
+            ),
+            {"sid": session_id},
+        )
+        conn.execute(
+            text(
+                "UPDATE workflow_steps SET status = 'ready', progress_message = 'Ready for benchmark generation' "
+                "WHERE session_id::text = :sid AND step_number = 4"
+            ),
+            {"sid": session_id},
+        )
+        conn.execute(
+            text("UPDATE workflow_sessions SET current_step = 4, updated_at = NOW() WHERE session_id::text = :sid"),
+            {"sid": session_id},
+        )
+
+
+def _load_generation_eval_items(generation_id: int) -> list[dict]:
+    with ENGINE.begin() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT cl.claim_id, co.company_type, kd.key_diff_name, pc.category_name, cl.rating, cl.headline, "
+                "COALESCE(string_agg(di.item_text, ' ' ORDER BY di.item_order), cl.description) AS details_text "
+                "FROM claims cl "
+                "JOIN companies co ON cl.company_id = co.company_id "
+                "JOIN key_differentiators kd ON cl.key_diff_id = kd.key_diff_id "
+                "JOIN product_categories pc ON kd.category_id = pc.category_id "
+                "LEFT JOIN claim_detail_items di ON di.claim_id = cl.claim_id "
+                "WHERE cl.generation_id = :gid "
+                "GROUP BY cl.claim_id, co.company_type, kd.key_diff_name, kd.display_order, pc.category_name, cl.rating, cl.headline, cl.description "
+                "ORDER BY pc.category_name, kd.display_order, co.company_type"
+            ),
+            {"gid": generation_id},
+        ).mappings().all()
+
+        verdict_rows = conn.execute(
+            text(
+                "SELECT e.claim_id, fc.status, COUNT(*) AS cnt "
+                "FROM fact_checks fc "
+                "JOIN evidence e ON fc.evidence_id = e.evidence_id "
+                "JOIN claims cl ON e.claim_id = cl.claim_id "
+                "WHERE cl.generation_id = :gid "
+                "GROUP BY e.claim_id, fc.status"
+            ),
+            {"gid": generation_id},
+        ).mappings().all()
+
+    verdict_by_claim = {}
+    for row in verdict_rows:
+        cid = row["claim_id"]
+        candidate = {"status": row["status"], "cnt": int(row["cnt"] or 0)}
+        current = verdict_by_claim.get(cid)
+        if current is None or candidate["cnt"] > current["cnt"]:
+            verdict_by_claim[cid] = candidate
+
+    items = []
+    for row in rows:
+        cid = row["claim_id"]
+        items.append(
+            {
+                "claim_id": cid,
+                "company_type": row["company_type"] or "",
+                "key_diff_name": row["key_diff_name"] or "",
+                "category_name": row["category_name"] or "",
+                "rating": row["rating"] or "",
+                "headline": row["headline"] or "",
+                "details_text": row["details_text"] or "",
+                "verdict_label": (verdict_by_claim.get(cid) or {}).get("status"),
+                "source_count": int((verdict_by_claim.get(cid) or {}).get("cnt") or 0),
+            }
+        )
+    return items
+
+
+def _upsert_eval_dataset(dataset_name: str, generation_id: int, source_battlecard_uuid: str = "", notes: str = "") -> dict:
+    items = _load_generation_eval_items(generation_id)
+    with ENGINE.begin() as conn:
+        dataset_id = conn.execute(
+            text(
+                "INSERT INTO eval_datasets (dataset_name, source_generation_id, source_battlecard_uuid, notes, created_by) "
+                "VALUES (:name, :gid, CAST(NULLIF(:bid, '') AS uuid), :notes, 'user') "
+                "ON CONFLICT (dataset_name) DO UPDATE SET "
+                "source_generation_id = EXCLUDED.source_generation_id, "
+                "source_battlecard_uuid = EXCLUDED.source_battlecard_uuid, "
+                "notes = EXCLUDED.notes, "
+                "created_at = CURRENT_TIMESTAMP "
+                "RETURNING dataset_id"
+            ),
+            {"name": dataset_name, "gid": generation_id, "bid": source_battlecard_uuid or "", "notes": notes},
+        ).scalar()
+
+        conn.execute(text("DELETE FROM eval_dataset_items WHERE dataset_id = :did"), {"did": dataset_id})
+        for item in items:
+            conn.execute(
+                text(
+                    "INSERT INTO eval_dataset_items ("
+                    "dataset_id, key_diff_name, category_name, company_type, rating, headline, details_text, verdict_label, source_count"
+                    ") VALUES ("
+                    ":did, :kd, :cat, :ctype, :rating, :headline, :details, :verdict, :sc"
+                    ")"
+                ),
+                {
+                    "did": dataset_id,
+                    "kd": item["key_diff_name"],
+                    "cat": item["category_name"],
+                    "ctype": item["company_type"],
+                    "rating": item["rating"],
+                    "headline": item["headline"],
+                    "details": item["details_text"],
+                    "verdict": item["verdict_label"],
+                    "sc": item["source_count"],
+                },
+            )
+    return {"dataset_id": dataset_id, "dataset_name": dataset_name, "item_count": len(items)}
+
+
+def _session_token_usage(session_id: str) -> dict:
+    with ENGINE.begin() as conn:
+        row = conn.execute(
+            text(
+                "SELECT "
+                "COALESCE(SUM(token_count), 0) AS total_tokens, "
+                "COALESCE(SUM(CASE WHEN turn_type IN ('system_prompt', 'user_input') THEN token_count ELSE 0 END), 0) AS input_tokens, "
+                "COALESCE(SUM(CASE WHEN turn_type = 'model_output' THEN token_count ELSE 0 END), 0) AS output_tokens "
+                "FROM agent_turns WHERE session_id::text = :sid AND step_number IN (4,5,6)"
+            ),
+            {"sid": session_id},
+        ).mappings().first()
+    return {
+        "total_tokens": int((row or {}).get("total_tokens") or 0),
+        "input_tokens": int((row or {}).get("input_tokens") or 0),
+        "output_tokens": int((row or {}).get("output_tokens") or 0),
+    }
+
+
+def _score_generation_against_dataset(generation_id: int, dataset_id: int) -> dict:
+    with ENGINE.begin() as conn:
+        refs = conn.execute(
+            text(
+                "SELECT key_diff_name, category_name, company_type, rating, headline, details_text, verdict_label "
+                "FROM eval_dataset_items WHERE dataset_id = :did"
+            ),
+            {"did": dataset_id},
+        ).mappings().all()
+
+    if not refs:
+        return {"claim_match_rate": None, "rating_match_rate": None, "verdict_match_rate": None}
+
+    generated = _load_generation_eval_items(generation_id)
+    grouped = {}
+    for idx, item in enumerate(generated):
+        key = (item["category_name"], item["company_type"])
+        grouped.setdefault(key, []).append((idx, item))
+
+    used = set()
+    claim_scores, rating_scores, verdict_scores = [], [], []
+
+    for ref in refs:
+        key = (ref["category_name"], ref["company_type"])
+        candidates = [(idx, g) for idx, g in grouped.get(key, []) if idx not in used]
+        if not candidates:
+            continue
+        best_idx, best = max(
+            candidates,
+            key=lambda pair: SequenceMatcher(
+                None,
+                (ref["key_diff_name"] or "").lower(),
+                (pair[1]["key_diff_name"] or "").lower(),
+            ).ratio(),
+        )
+        used.add(best_idx)
+        head_sim = SequenceMatcher(None, (ref["headline"] or "").lower(), (best["headline"] or "").lower()).ratio()
+        details_sim = SequenceMatcher(None, (ref["details_text"] or "").lower(), (best["details_text"] or "").lower()).ratio()
+        claim_scores.append((head_sim + details_sim) / 2.0)
+        rating_scores.append(1.0 if (ref["rating"] or "") == (best["rating"] or "") else 0.0)
+        if ref.get("verdict_label") and best.get("verdict_label"):
+            verdict_scores.append(1.0 if ref["verdict_label"] == best["verdict_label"] else 0.0)
+
+    def _avg(vals):
+        return float(sum(vals) / len(vals)) if vals else None
+
+    return {
+        "claim_match_rate": _avg(claim_scores),
+        "rating_match_rate": _avg(rating_scores),
+        "verdict_match_rate": _avg(verdict_scores),
+    }
+
+
+def _default_benchmark_techniques():
+    return [
+        {
+            "name": "v3_per_diff_parallel",
+            "pass1_prompt_template_version": 4,
+            "pass2_prompt_template_version": 3,
+            "step4_execution_mode": "category_parallel",
+            "step5_execution_mode": "per_diff_parallel",
+            "step5_inline_fact_check": False,
+            "max_workers": 4,
+        },
+        {
+            "name": "v6_category_parallel",
+            "pass1_prompt_template_version": 4,
+            "pass2_prompt_template_version": 6,
+            "step4_execution_mode": "category_parallel",
+            "step5_execution_mode": "category_parallel",
+            "step5_inline_fact_check": False,
+            "max_workers": 4,
+        },
+        {
+            "name": "v7_category_parallel",
+            "pass1_prompt_template_version": 4,
+            "pass2_prompt_template_version": 7,
+            "step4_execution_mode": "category_parallel",
+            "step5_execution_mode": "category_parallel",
+            "step5_inline_fact_check": False,
+            "max_workers": 4,
+        },
+        {
+            "name": "v8_single_call_inline_fc",
+            "pass1_prompt_template_version": 4,
+            "pass2_prompt_template_version": 8,
+            "step4_execution_mode": "category_parallel",
+            "step5_execution_mode": "single_call",
+            "step5_inline_fact_check": True,
+            "max_workers": 4,
+        },
+    ]
+
+
+def _run_benchmark_matrix(run_id: str, config: dict):
+    from workflow_runner import WorkflowRunner
+
+    with ENGINE.begin() as conn:
+        conn.execute(
+            text("UPDATE eval_runs SET status = 'running', started_at = NOW(), error_message = NULL WHERE run_id::text = :rid"),
+            {"rid": run_id},
+        )
+
+    dataset_id = config.get("dataset_id")
+    competitor_name = config.get("competitor_name", "Microsoft Fabric")
+    product_area = config.get("product_area", "Data Platform")
+    models = config.get("models") or ["databricks-claude-sonnet-4-5", "databricks-claude-opus-4-6"]
+    scenarios = config.get("scenarios") or [
+        {"label": "2c_x_2d", "core_categories": 2, "diffs_per_category": 2},
+        {"label": "4c_x_5d", "core_categories": 4, "diffs_per_category": 5},
+        {"label": "8c_x_10d", "core_categories": 8, "diffs_per_category": 10},
+    ]
+    techniques = config.get("techniques") or _default_benchmark_techniques()
+
+    try:
+        for scenario in scenarios:
+            core_count = int(scenario.get("core_categories", 2))
+            diffs_per_category = int(scenario.get("diffs_per_category", 2))
+            scenario_label = scenario.get("label") or f"{core_count}c_x_{diffs_per_category}d"
+            core_categories = _select_core_categories(core_count)
+            if len(core_categories) < core_count:
+                raise RuntimeError(f"Only found {len(core_categories)} core categories, expected {core_count}")
+
+            for model_name in models:
+                for technique in techniques:
+                    t0 = time.time()
+                    session_id = None
+                    gen_id = None
+                    generated_diffs = 0
+                    tokens = {"total_tokens": 0, "input_tokens": 0, "output_tokens": 0}
+                    score = {"claim_match_rate": None, "rating_match_rate": None, "verdict_match_rate": None}
+                    notes = ""
+
+                    p1v = int(technique.get("pass1_prompt_template_version", 4))
+                    p2v = int(technique.get("pass2_prompt_template_version", 6))
+                    s4mode = technique.get("step4_execution_mode", "auto")
+                    s5mode = technique.get("step5_execution_mode", "auto")
+                    s5fc = bool(technique.get("step5_inline_fact_check", False))
+                    workers = int(technique.get("max_workers", 4))
+
+                    try:
+                        session_id, gen_id = _create_workflow_session_internal(
+                            competitor_name=competitor_name,
+                            product_area=product_area,
+                            model_name=model_name,
+                            diffs_per_category=diffs_per_category,
+                            max_workers=workers,
+                            pass1_prompt_template_version=p1v,
+                            pass2_prompt_template_version=p2v,
+                            step4_execution_mode=s4mode,
+                            step5_execution_mode=s5mode,
+                            step5_inline_fact_check=s5fc,
+                        )
+                        _seed_context_for_benchmark_session(session_id, core_categories)
+
+                        runner = WorkflowRunner(session_id, ENGINE)
+                        runner.run_pass1()
+                        runner.run_pass2()
+
+                        with ENGINE.begin() as conn:
+                            generated_diffs = int(
+                                conn.execute(
+                                    text("SELECT COUNT(*) FROM key_differentiators WHERE generation_id = :gid"),
+                                    {"gid": gen_id},
+                                ).scalar() or 0
+                            )
+
+                        tokens = _session_token_usage(session_id)
+                        if dataset_id:
+                            score = _score_generation_against_dataset(gen_id, int(dataset_id))
+                    except Exception as combo_err:
+                        notes = str(combo_err)
+                        logger.exception("Benchmark combo failed")
+
+                    duration = time.time() - t0
+                    with ENGINE.begin() as conn:
+                        conn.execute(
+                            text(
+                                "INSERT INTO eval_run_results ("
+                                "run_id, session_id, dataset_id, scenario_label, model_name, "
+                                "pass1_prompt_template_version, pass2_prompt_template_version, "
+                                "step4_execution_mode, step5_execution_mode, step5_inline_fact_check, "
+                                "core_categories, diffs_per_category, expected_diffs, generated_diffs, "
+                                "duration_seconds, total_tokens, input_tokens, output_tokens, "
+                                "eval_claim_match_rate, eval_rating_match_rate, eval_verdict_match_rate, notes"
+                                ") VALUES ("
+                                "CAST(:rid AS uuid), CAST(NULLIF(:sid, '') AS uuid), :did, :scenario, :model, "
+                                ":p1v, :p2v, :s4mode, :s5mode, :s5fc, :core, :diffs, :expected, :generated, "
+                                ":dur, :tot, :tin, :tout, :claim, :rating, :verdict, :notes"
+                                ")"
+                            ),
+                            {
+                                "rid": run_id,
+                                "sid": session_id or "",
+                                "did": dataset_id,
+                                "scenario": scenario_label,
+                                "model": model_name,
+                                "p1v": p1v,
+                                "p2v": p2v,
+                                "s4mode": s4mode,
+                                "s5mode": s5mode,
+                                "s5fc": s5fc,
+                                "core": core_count,
+                                "diffs": diffs_per_category,
+                                "expected": core_count * diffs_per_category,
+                                "generated": generated_diffs,
+                                "dur": round(duration, 3),
+                                "tot": tokens["total_tokens"],
+                                "tin": tokens["input_tokens"],
+                                "tout": tokens["output_tokens"],
+                                "claim": score["claim_match_rate"],
+                                "rating": score["rating_match_rate"],
+                                "verdict": score["verdict_match_rate"],
+                                "notes": notes or technique.get("name", ""),
+                            },
+                        )
+
+        with ENGINE.begin() as conn:
+            conn.execute(
+                text("UPDATE eval_runs SET status = 'completed', completed_at = NOW() WHERE run_id::text = :rid"),
+                {"rid": run_id},
+            )
+    except Exception as e:
+        logger.exception("Benchmark run failed")
+        with ENGINE.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE eval_runs SET status = 'failed', completed_at = NOW(), error_message = :err "
+                    "WHERE run_id::text = :rid"
+                ),
+                {"rid": run_id, "err": str(e)[:4000]},
+            )
+
+
+@app.route('/evals')
+def evals_page():
+    with ENGINE.begin() as conn:
+        datasets = conn.execute(
+            text(
+                "SELECT dataset_id, dataset_name, source_generation_id, source_battlecard_uuid::text AS source_battlecard_uuid, "
+                "notes, created_by, created_at FROM eval_datasets ORDER BY created_at DESC"
+            )
+        ).mappings().all()
+        runs = conn.execute(
+            text(
+                "SELECT run_id::text AS run_id, status, created_at, started_at, completed_at, error_message "
+                "FROM eval_runs ORDER BY created_at DESC LIMIT 20"
+            )
+        ).mappings().all()
+        recent_results = conn.execute(
+            text(
+                "SELECT result_id, run_id::text AS run_id, scenario_label, model_name, pass2_prompt_template_version, "
+                "step5_execution_mode, step5_inline_fact_check, duration_seconds, total_tokens, "
+                "eval_claim_match_rate, eval_rating_match_rate, eval_verdict_match_rate, notes "
+                "FROM eval_run_results ORDER BY created_at DESC LIMIT 200"
+            )
+        ).mappings().all()
+    return render_template(
+        'evals.html',
+        datasets=[dict(r) for r in datasets],
+        runs=[dict(r) for r in runs],
+        recent_results=[dict(r) for r in recent_results],
+        default_techniques=_default_benchmark_techniques(),
+    )
+
+
+@app.route('/api/evals/datasets', methods=['POST'])
+def create_eval_dataset():
+    data = request.json or {}
+    generation_id = data.get("generation_id")
+    battlecard_id = data.get("battlecard_id")
+    dataset_name = (data.get("dataset_name") or "").strip()
+    notes = (data.get("notes") or "").strip()
+
+    if not generation_id and not battlecard_id:
+        return jsonify({"error": "generation_id or battlecard_id is required"}), 400
+
+    if not generation_id and battlecard_id:
+        with ENGINE.begin() as conn:
+            generation_id = conn.execute(
+                text("SELECT generation_id FROM battlecard_generations WHERE generation_uuid::text = :bid"),
+                {"bid": battlecard_id},
+            ).scalar()
+    if not generation_id:
+        return jsonify({"error": "Could not resolve generation"}), 404
+
+    if not dataset_name:
+        dataset_name = f"gen_{generation_id}_eval"
+
+    result = _upsert_eval_dataset(dataset_name, int(generation_id), source_battlecard_uuid=battlecard_id or "", notes=notes)
+    return jsonify({"success": True, **result})
+
+
+@app.route('/api/evals/runs', methods=['POST'])
+def start_eval_run():
+    data = request.json or {}
+    config = {
+        "dataset_id": data.get("dataset_id"),
+        "competitor_name": data.get("competitor_name", "Microsoft Fabric"),
+        "product_area": data.get("product_area", "Data Platform"),
+        "models": data.get("models") or ["databricks-claude-sonnet-4-5", "databricks-claude-opus-4-6"],
+        "scenarios": data.get("scenarios") or [
+            {"label": "2c_x_2d", "core_categories": 2, "diffs_per_category": 2},
+            {"label": "4c_x_5d", "core_categories": 4, "diffs_per_category": 5},
+            {"label": "8c_x_10d", "core_categories": 8, "diffs_per_category": 10},
+        ],
+        "techniques": data.get("techniques") or _default_benchmark_techniques(),
+    }
+
+    run_id = str(uuid4())
+    with ENGINE.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO eval_runs (run_id, status, benchmark_config, requested_by) "
+                "VALUES (CAST(:rid AS uuid), 'queued', CAST(:cfg AS jsonb), 'user')"
+            ),
+            {"rid": run_id, "cfg": json.dumps(config)},
+        )
+
+    t = threading.Thread(target=_run_benchmark_matrix, args=(run_id, config), daemon=True)
+    t.start()
+    return jsonify({"success": True, "run_id": run_id})
+
+
+@app.route('/api/evals/runs/<run_id>')
+def eval_run_status(run_id):
+    with ENGINE.begin() as conn:
+        run = conn.execute(
+            text(
+                "SELECT run_id::text AS run_id, status, created_at, started_at, completed_at, error_message "
+                "FROM eval_runs WHERE run_id::text = :rid"
+            ),
+            {"rid": run_id},
+        ).mappings().first()
+        if not run:
+            return jsonify({"error": "Run not found"}), 404
+        results = conn.execute(
+            text(
+                "SELECT result_id, run_id::text AS run_id, session_id::text AS session_id, scenario_label, model_name, "
+                "pass1_prompt_template_version, pass2_prompt_template_version, step4_execution_mode, step5_execution_mode, "
+                "step5_inline_fact_check, core_categories, diffs_per_category, expected_diffs, generated_diffs, "
+                "duration_seconds, total_tokens, input_tokens, output_tokens, eval_claim_match_rate, "
+                "eval_rating_match_rate, eval_verdict_match_rate, notes "
+                "FROM eval_run_results WHERE run_id::text = :rid ORDER BY result_id"
+            ),
+            {"rid": run_id},
+        ).mappings().all()
+    return jsonify({"run": dict(run), "results": [dict(r) for r in results]})
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -5691,7 +7204,13 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description="Postgres Battlecard Review App")
-    parser.add_argument("--port", type=int, default=int(os.getenv("APP_PORT", "8000")), help="Port to run on")
+    default_port = int(
+        os.getenv("APP_PORT")
+        or os.getenv("PORT")
+        or os.getenv("DATABRICKS_APP_PORT")
+        or "8000"
+    )
+    parser.add_argument("--port", type=int, default=default_port, help="Port to run on")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     args = parser.parse_args()
 

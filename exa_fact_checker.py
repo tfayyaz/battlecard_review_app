@@ -49,6 +49,14 @@ class ExaFactChecker:
 
     def run_fact_checks(self):
         """Main orchestrator: load claims, search Exa, judge with LLM, save results."""
+        self._update_step(
+            6,
+            "in_progress",
+            progress_current=0,
+            progress_total=4,
+            progress_message="[1/4] Preparing fact check run...",
+        )
+
         # 1. Load generation_id from the workflow session
         with self.engine.begin() as conn:
             row = conn.execute(
@@ -60,6 +68,13 @@ class ExaFactChecker:
             return
 
         gen_id = row["generation_id"]
+        self._update_step(
+            6,
+            "in_progress",
+            progress_current=1,
+            progress_total=4,
+            progress_message="[2/4] Loading evidence rows for fact checking...",
+        )
 
         # 2. Load all evidence rows for this generation
         with self.engine.begin() as conn:
@@ -84,15 +99,22 @@ class ExaFactChecker:
 
         total = len(evidence_rows)
         logger.info("Fact checking %d evidence rows for session %s (gen %s)", total, self.session_id, gen_id)
+        self._update_step(
+            6,
+            "in_progress",
+            progress_current=2,
+            progress_total=total + 3,
+            progress_message=f"[3/4] Starting checks for {total} evidence rows...",
+        )
 
         # 3. Process each evidence row
         for idx, ev in enumerate(evidence_rows):
             claim_preview = (ev["traces_to_text"] or "")[:80]
             self._update_step(
-                7, "in_progress",
-                progress_current=idx + 1,
-                progress_total=total,
-                progress_message=f"Fact checking [{idx + 1}/{total}]: {claim_preview}..."
+                6, "in_progress",
+                progress_current=idx + 3,
+                progress_total=total + 3,
+                progress_message=f"[3/4] Fact checking [{idx + 1}/{total}]: {claim_preview}..."
             )
 
             try:
@@ -135,6 +157,13 @@ class ExaFactChecker:
                 )
 
         # 4. Build summary artifact
+        self._update_step(
+            6,
+            "in_progress",
+            progress_current=total + 2,
+            progress_total=total + 3,
+            progress_message="[4/4] Building fact check summary...",
+        )
         summary = self._build_summary(gen_id)
         with self.engine.begin() as conn:
             conn.execute(
@@ -147,7 +176,13 @@ class ExaFactChecker:
             )
 
         # 5. Set step 6 to waiting_human
-        self._update_step(6, "waiting_human", progress_message=f"Fact checked {total} claims. Review results below.")
+        self._update_step(
+            6,
+            "waiting_human",
+            progress_current=total + 3,
+            progress_total=total + 3,
+            progress_message=f"Fact checked {total} evidence rows. Review results below.",
+        )
         logger.info("Fact check complete for session %s: %s", self.session_id, summary)
 
     def _search_exa(self, claim_text, company_name):
@@ -378,7 +413,7 @@ Return ONLY the JSON object, no other text."""
                      progress_message=None, error_message=None):
         """Update workflow step status (mirrors app.py _update_step_status)."""
         with self.engine.begin() as conn:
-            sets = ["status = :status"]
+            sets = ["status = :status", "heartbeat_at = NOW()"]
             params = {"sid": self.session_id, "step": step_number, "status": status}
 
             if status == "in_progress":
@@ -397,6 +432,8 @@ Return ONLY the JSON object, no other text."""
             if error_message is not None:
                 sets.append("error_message = :em")
                 params["em"] = error_message
+            elif status in ("ready", "in_progress", "waiting_human", "completed"):
+                sets.append("error_message = NULL")
 
             conn.execute(
                 text(f"UPDATE workflow_steps SET {', '.join(sets)} WHERE session_id::text = :sid AND step_number = :step"),

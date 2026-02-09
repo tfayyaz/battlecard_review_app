@@ -1238,6 +1238,30 @@
             border-radius: 8px;
             border: 1px solid var(--border);
         }
+        .modal-json-block {
+            border-top: 1px solid var(--border);
+            background: #F9FAFB;
+            padding: 10px 20px;
+        }
+        .modal-json-label {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+        .modal-json-block pre {
+            margin: 0;
+            max-height: 220px;
+            overflow: auto;
+            font-size: 11px;
+            line-height: 1.5;
+            padding: 8px;
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
 
         /* Pass 2 Debug Logs Viewer */
         .debug-logs-panel {
@@ -1838,6 +1862,47 @@
             margin: 10px 0;
             background: #FAFBFC;
         }
+        .step-template-config {
+            margin: 10px 0;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: #FFFFFF;
+        }
+        .step-template-config label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+        .step-template-config-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .step-template-config select {
+            min-width: 260px;
+            max-width: 100%;
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 12px;
+            background: #fff;
+            color: var(--text);
+        }
+        .step-template-hint {
+            margin-top: 6px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .step-template-hint.saved {
+            color: #065F46;
+        }
+        .step-template-hint.error {
+            color: #991B1B;
+        }
         .context-sources-header {
             display: flex;
             align-items: center;
@@ -2274,6 +2339,18 @@
                         <!-- Step 4: Generate Key Differentiators -->
                         {% elif step.step_number == 4 %}
                             {% if step.status == 'ready' %}
+                            <div class="step-template-config">
+                                <label for="step4-pass1-template">Step 4 Prompt Template</label>
+                                <div class="step-template-config-row">
+                                    <select id="step4-pass1-template" onchange="syncStep4TemplateSelection(this.value)">
+                                        {% for ver, cfg in pass1_prompt_templates.items()|sort(reverse=true) %}
+                                        <option value="{{ ver }}" {% if session.pass1_prompt_template_version == ver %}selected{% endif %}>V{{ ver }} - {{ cfg.label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <button class="btn" onclick="saveStep4TemplateConfig()" id="btn-step4-save-template">Save</button>
+                                </div>
+                                <div class="step-template-hint" id="step4-template-hint"></div>
+                            </div>
                             <div class="context-sources-panel" id="context-sources-panel-4">
                                 <div class="context-sources-header" onclick="toggleContextSources(4)">
                                     <span>Context Sources <span class="context-sources-count" id="ctx-count-4">loading...</span></span>
@@ -2360,6 +2437,18 @@
                                 {% if battlecard_id %}&mdash; <a href="/battlecard/{{ battlecard_id }}" style="color: var(--teal); font-weight: 600;">View full review details</a>{% endif %}
                             </div>
                             {% endif %}
+                            <div class="step-template-config">
+                                <label for="step4-pass1-template-regen">Step 4 Prompt Template</label>
+                                <div class="step-template-config-row">
+                                    <select id="step4-pass1-template-regen" onchange="syncStep4TemplateSelection(this.value)">
+                                        {% for ver, cfg in pass1_prompt_templates.items()|sort(reverse=true) %}
+                                        <option value="{{ ver }}" {% if session.pass1_prompt_template_version == ver %}selected{% endif %}>V{{ ver }} - {{ cfg.label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <button class="btn" onclick="saveStep4TemplateConfig()" id="btn-step4-save-template-regen">Save</button>
+                                </div>
+                                <div class="step-template-hint" id="step4-template-hint-regen"></div>
+                            </div>
                             <div class="context-sources-panel" id="context-sources-panel-4-regen">
                                 <div class="context-sources-header" onclick="toggleContextSources('4-regen')">
                                     <span>Context Sources <span class="context-sources-count" id="ctx-count-4-regen">loading...</span></span>
@@ -2873,6 +2962,7 @@
 
     <script>
     const SESSION_ID = "{{ session.session_id }}";
+    const STEP4_TEMPLATE_OPTIONS = {{ pass1_prompt_templates | tojson }};
     const STEP3_PREVIOUS_SELECTIONS = {{ (previous_session_selections or {}) | tojson }};
     const STEP3_HAS_BASELINE = {{ 'true' if previous_selection_source and previous_selection_source.selection_count > 0 else 'false' }};
     let pollingInterval = null;
@@ -2880,6 +2970,62 @@
     // --- Context Sources ---
     // Cache of loaded sources (shared across all panels for this session)
     var _contextSourcesCache = null;
+    var _step4TemplateVersion = {{ session.pass1_prompt_template_version | int }};
+
+    function setStep4TemplateHint(message, stateClass) {
+        ['step4-template-hint', 'step4-template-hint-regen'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.classList.remove('saved', 'error');
+            if (stateClass) el.classList.add(stateClass);
+            el.textContent = message || '';
+        });
+    }
+
+    function refreshStep4TemplateHint() {
+        var cfg = STEP4_TEMPLATE_OPTIONS[String(_step4TemplateVersion)] || STEP4_TEMPLATE_OPTIONS[_step4TemplateVersion];
+        var label = cfg ? (cfg.label || ('V' + _step4TemplateVersion)) : ('V' + _step4TemplateVersion);
+        var desc = cfg ? (cfg.description || '') : '';
+        setStep4TemplateHint('Current: ' + label + (desc ? ' — ' + desc : ''));
+    }
+
+    function syncStep4TemplateSelection(value) {
+        var parsed = parseInt(value, 10);
+        if (!isNaN(parsed)) _step4TemplateVersion = parsed;
+        ['step4-pass1-template', 'step4-pass1-template-regen'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el && String(el.value) !== String(_step4TemplateVersion)) {
+                el.value = String(_step4TemplateVersion);
+            }
+        });
+        refreshStep4TemplateHint();
+    }
+
+    function getSelectedStep4TemplateVersion() {
+        return parseInt(_step4TemplateVersion, 10);
+    }
+
+    async function saveStep4TemplateConfig() {
+        var ver = getSelectedStep4TemplateVersion();
+        if (!ver) return;
+        try {
+            var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/4/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ pass1_prompt_template_version: ver }),
+            });
+            var data = await resp.json();
+            if (!resp.ok || !data.success) {
+                setStep4TemplateHint(data.error || 'Failed to save template selection', 'error');
+                return;
+            }
+            _step4TemplateVersion = parseInt(data.pass1_prompt_template_version, 10);
+            syncStep4TemplateSelection(_step4TemplateVersion);
+            setStep4TemplateHint('Saved template V' + _step4TemplateVersion, 'saved');
+        } catch (err) {
+            setStep4TemplateHint('Failed to save template selection: ' + err.message, 'error');
+        }
+    }
 
     async function loadContextSources(panelId) {
         var body = document.getElementById('ctx-body-' + panelId);
@@ -2982,12 +3128,26 @@
         return sources;
     }
 
-    function getPromptContextSources(stepNum) {
+    async function ensureContextSourcesLoaded(panelId) {
+        var body = document.getElementById('ctx-body-' + panelId);
+        if (!body) return;
+        var checkboxes = body.querySelectorAll('input[type="checkbox"]');
+        if (checkboxes.length === 0) {
+            await loadContextSources(panelId);
+        }
+    }
+
+    async function getContextSourcesAsync(panelId) {
+        await ensureContextSourcesLoaded(panelId);
+        return getContextSources(panelId);
+    }
+
+    async function getPromptContextSources(stepNum) {
         if (stepNum !== 4 && stepNum !== 5) return null;
         // When waiting_human, the active controls are usually in the regen panel.
-        var regen = getContextSources(stepNum + '-regen');
+        var regen = await getContextSourcesAsync(stepNum + '-regen');
         if (regen) return regen;
-        return getContextSources(stepNum);
+        return await getContextSourcesAsync(stepNum);
     }
 
     // Start polling if any step is in_progress
@@ -3340,8 +3500,11 @@
             var bodyObj = {};
             // Include context sources for steps 4 and 5 generate actions
             if ((stepNum === 4 || stepNum === 5) && action === 'generate') {
-                var cs = getContextSources(stepNum);
+                var cs = await getContextSourcesAsync(stepNum);
                 if (cs) bodyObj.context_sources = cs;
+            }
+            if (stepNum === 4 && action === 'generate') {
+                bodyObj.pass1_prompt_template_version = getSelectedStep4TemplateVersion();
             }
             const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/' + action, {
                 method: 'POST',
@@ -3620,8 +3783,11 @@
         try {
             var bodyObj = {feedback: feedback};
             // Include context sources from the regen panel
-            var cs = getContextSources(stepNum + '-regen');
+            var cs = await getContextSourcesAsync(stepNum + '-regen');
             if (cs) bodyObj.context_sources = cs;
+            if (stepNum === 4) {
+                bodyObj.pass1_prompt_template_version = getSelectedStep4TemplateVersion();
+            }
             const resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/regenerate', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -3640,6 +3806,8 @@
 
     // Start polling on page load
     checkAndStartPolling();
+    syncStep4TemplateSelection(_step4TemplateVersion);
+    refreshStep4TemplateHint();
 
     // --- Diff card expand/collapse ---
     function toggleDiffCard(id) {
@@ -4014,8 +4182,11 @@
     async function viewPrompt(stepNum) {
         try {
             var bodyObj = {};
-            var cs = getPromptContextSources(stepNum);
+            var cs = await getPromptContextSources(stepNum);
             if (cs) bodyObj.context_sources = cs;
+            if (stepNum === 4) {
+                bodyObj.pass1_prompt_template_version = getSelectedStep4TemplateVersion();
+            }
             var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/prompt', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -4034,6 +4205,27 @@
             if (data.note) metaHtml += '<span><strong>Note:</strong> ' + data.note + '</span>';
             if (data.description) metaHtml += '<span>' + data.description + '</span>';
             document.getElementById('prompt-modal-meta').innerHTML = metaHtml;
+
+            // Request + schema blocks
+            var reqBlock = document.getElementById('prompt-request-block');
+            var reqPre = document.getElementById('prompt-request-json');
+            var schemaBlock = document.getElementById('prompt-schema-block');
+            var schemaPre = document.getElementById('prompt-schema-json');
+            var reqObj = data.request_preview || data.request_config_json || null;
+            if (reqObj) {
+                reqPre.textContent = JSON.stringify(reqObj, null, 2);
+                reqBlock.style.display = '';
+            } else {
+                reqPre.textContent = '';
+                reqBlock.style.display = 'none';
+            }
+            if (data.response_schema_json) {
+                schemaPre.textContent = JSON.stringify(data.response_schema_json, null, 2);
+                schemaBlock.style.display = '';
+            } else {
+                schemaPre.textContent = '';
+                schemaBlock.style.display = 'none';
+            }
 
             // Variable pills
             var varsSection = document.getElementById('prompt-modal-variables');
@@ -4171,8 +4363,11 @@
         try {
             var bodyObj = {feedback: combined, include_review_feedback: true};
             // Include context sources from the regen panel
-            var cs = getContextSources(stepNum + '-regen');
+            var cs = await getContextSourcesAsync(stepNum + '-regen');
             if (cs) bodyObj.context_sources = cs;
+            if (stepNum === 4) {
+                bodyObj.pass1_prompt_template_version = getSelectedStep4TemplateVersion();
+            }
             var resp = await fetch('/api/workflow/' + SESSION_ID + '/step/' + stepNum + '/regenerate', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -4249,6 +4444,14 @@
             </div>
             <div class="modal-meta" id="prompt-modal-meta"></div>
             <div id="token-estimate-panel" style="display:none; padding: 10px 20px; background: #fff; border-bottom: 1px solid var(--border);"></div>
+            <div class="modal-json-block" id="prompt-request-block" style="display:none;">
+                <div class="modal-json-label">Request Config</div>
+                <pre id="prompt-request-json"></pre>
+            </div>
+            <div class="modal-json-block" id="prompt-schema-block" style="display:none;">
+                <div class="modal-json-label">Response JSON Schema</div>
+                <pre id="prompt-schema-json"></pre>
+            </div>
             <div class="modal-variables" id="prompt-modal-variables" style="display:none">
                 <div class="modal-variables-label">Template Variables</div>
                 <div class="variable-pills" id="prompt-modal-pills"></div>

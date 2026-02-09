@@ -5638,6 +5638,20 @@ def workflow_step4_generate(session_id):
     """Trigger Pass 1 - Generate Key Differentiators."""
     data = request.json or {}
     context_sources = data.get('context_sources')
+    pass1_template_version = data.get('pass1_prompt_template_version')
+    if pass1_template_version is not None:
+        try:
+            pass1_template_version = int(pass1_template_version)
+            with ENGINE.begin() as conn:
+                conn.execute(
+                    text(
+                        "UPDATE workflow_sessions SET pass1_prompt_template_version = :ver, updated_at = NOW() "
+                        "WHERE session_id::text = :sid"
+                    ),
+                    {"ver": pass1_template_version, "sid": session_id},
+                )
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "Invalid pass1_prompt_template_version"}), 400
     _update_step_status(session_id, 4, "in_progress", progress_message="Starting Pass 1 generation...")
 
     def _run():
@@ -5660,6 +5674,20 @@ def workflow_step4_regenerate(session_id):
     data = request.json or {}
     feedback_text = data.get('feedback', '')
     context_sources = data.get('context_sources')
+    pass1_template_version = data.get('pass1_prompt_template_version')
+    if pass1_template_version is not None:
+        try:
+            pass1_template_version = int(pass1_template_version)
+            with ENGINE.begin() as conn:
+                conn.execute(
+                    text(
+                        "UPDATE workflow_sessions SET pass1_prompt_template_version = :ver, updated_at = NOW() "
+                        "WHERE session_id::text = :sid"
+                    ),
+                    {"ver": pass1_template_version, "sid": session_id},
+                )
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "Invalid pass1_prompt_template_version"}), 400
 
     # Optionally prepend battlecard review feedback
     if data.get('include_review_feedback'):
@@ -5687,6 +5715,47 @@ def workflow_step4_regenerate(session_id):
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     return jsonify({"success": True, "message": "Regeneration started"})
+
+
+@app.route('/api/workflow/<session_id>/step/4/config', methods=['POST'])
+def workflow_step4_update_config(session_id):
+    """Update Step 4 runtime configuration (currently Pass 1 template version)."""
+    data = request.json or {}
+    if "pass1_prompt_template_version" not in data:
+        return jsonify({"success": False, "error": "pass1_prompt_template_version is required"}), 400
+    try:
+        pass1_ver = int(data.get("pass1_prompt_template_version"))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "Invalid pass1_prompt_template_version"}), 400
+
+    with ENGINE.begin() as conn:
+        session_exists = conn.execute(
+            text("SELECT 1 FROM workflow_sessions WHERE session_id::text = :sid"),
+            {"sid": session_id},
+        ).scalar()
+        if not session_exists:
+            return jsonify({"success": False, "error": "Session not found"}), 404
+
+        pass1_exists = conn.execute(
+            text(
+                "SELECT 1 FROM prompt_templates "
+                "WHERE template_type = 'pass1' AND display_order = :ver "
+                "LIMIT 1"
+            ),
+            {"ver": pass1_ver},
+        ).scalar()
+        if not pass1_exists and pass1_ver not in PASS1_PROMPT_TEMPLATES:
+            return jsonify({"success": False, "error": f"Pass 1 template V{pass1_ver} not found"}), 404
+
+        conn.execute(
+            text(
+                "UPDATE workflow_sessions SET pass1_prompt_template_version = :ver, updated_at = NOW() "
+                "WHERE session_id::text = :sid"
+            ),
+            {"ver": pass1_ver, "sid": session_id},
+        )
+
+    return jsonify({"success": True, "pass1_prompt_template_version": pass1_ver})
 
 
 @app.route('/api/workflow/<session_id>/step/5/generate', methods=['POST'])
@@ -6077,6 +6146,7 @@ def workflow_step_prompt_preview(session_id, step_number):
         load_prompt_template, render_template as render_prompt,
         format_context_xml, load_pass1_template, load_pass2_template,
         load_directive_template,
+        get_pass1_request_spec,
         get_pass2_request_spec,
         resolve_context_source_flags,
     )
@@ -6094,6 +6164,11 @@ def workflow_step_prompt_preview(session_id, step_number):
         except (json.JSONDecodeError, TypeError):
             context_sources = None
     context_flags = resolve_context_source_flags(context_sources)
+    pass1_override = payload.get("pass1_prompt_template_version") if isinstance(payload, dict) else None
+    try:
+        pass1_override = int(pass1_override) if pass1_override is not None else None
+    except (TypeError, ValueError):
+        pass1_override = None
 
     # Load session config
     with ENGINE.begin() as conn:
@@ -6231,7 +6306,7 @@ def workflow_step_prompt_preview(session_id, step_number):
 
     elif step_number == 4:
         # Step 4: Pass 1 prompt
-        p1_ver = session["pass1_prompt_template_version"]
+        p1_ver = pass1_override if pass1_override is not None else session["pass1_prompt_template_version"]
 
         directive = (_get_artifact("directive_generated") or "[Directive not yet generated]") if context_flags["directive"] else ""
         context = _build_preview_context()
@@ -6305,6 +6380,7 @@ def workflow_step_prompt_preview(session_id, step_number):
 
         rendered = render_prompt(template_text, **variables)
 
+        pass1_req = get_pass1_request_spec(effective_p1_ver, engine=ENGINE)
         return jsonify({
             "step": 4,
             "title": f"Pass 1: Generate Key Differentiators (V{effective_p1_ver})",
@@ -6315,6 +6391,8 @@ def workflow_step_prompt_preview(session_id, step_number):
             "prompt": rendered,
             "selected_prompt_version": p1_ver,
             "effective_prompt_version": effective_p1_ver,
+            "request_preview": pass1_req.get("request_preview"),
+            "response_schema_json": pass1_req.get("schema"),
             "note": f"Preview uses runtime execution mode `{step4_exec['runtime_mode']}`.",
             "context_sources": context_flags,
         })

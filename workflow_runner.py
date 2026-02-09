@@ -837,6 +837,69 @@ def resolve_context_source_flags(context_sources=None) -> dict:
     }
 
 
+def get_pass1_request_spec(version: int, engine=None) -> Dict[str, Any]:
+    """Return request behavior and JSON schema for a Pass 1 template version.
+
+    Defaults to structured output with the legacy Pass 1 schema. If a DB prompt
+    template provides request/schema config, use that instead.
+    """
+    default = {
+        "use_structured_output": True,
+        "response_format_type": "json_schema",
+        "schema": L200_PASS1_JSON_SCHEMA,
+        "request_preview": {"response_format": {"type": "json_schema", "json_schema": L200_PASS1_JSON_SCHEMA}},
+    }
+    if engine is None:
+        return default
+    try:
+        with engine.begin() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT response_schema_json, request_config_json "
+                    "FROM prompt_templates "
+                    "WHERE template_type = 'pass1' AND display_order = :ver "
+                    "LIMIT 1"
+                ),
+                {"ver": int(version or 0)},
+            ).mappings().first()
+        if not row:
+            return default
+
+        request_cfg = row.get("request_config_json") or {}
+        if isinstance(request_cfg, str):
+            try:
+                request_cfg = json.loads(request_cfg)
+            except Exception:
+                request_cfg = {}
+        response_schema = row.get("response_schema_json")
+        if isinstance(response_schema, str):
+            try:
+                response_schema = json.loads(response_schema)
+            except Exception:
+                response_schema = None
+
+        structured = bool(request_cfg.get("structured_output", True))
+        response_format_type = str(request_cfg.get("response_format_type") or ("json_schema" if structured else "none"))
+        if not structured or response_format_type == "none":
+            return {
+                "use_structured_output": False,
+                "response_format_type": "none",
+                "schema": None,
+                "request_preview": {"response_format": None},
+            }
+
+        schema = response_schema if isinstance(response_schema, dict) and response_schema else L200_PASS1_JSON_SCHEMA
+        return {
+            "use_structured_output": True,
+            "response_format_type": "json_schema",
+            "schema": schema,
+            "request_preview": {"response_format": {"type": "json_schema", "json_schema": schema}},
+        }
+    except Exception as e:
+        logger.warning("Failed to load Pass 1 request spec from DB (v%s): %s", version, e)
+        return default
+
+
 def get_pass2_request_spec(version: int) -> Dict[str, Any]:
     """Return request behavior and JSON schema for a Pass 2 template version."""
     ver = int(version or 0)
@@ -1527,7 +1590,7 @@ class WorkflowRunner:
     # ------------------------------------------------------------------
 
     def _process_single_category(self, category_info, all_core_cats, cross_cats,
-                                  template_text, directive, context, feedback=None):
+                                  template_text, directive, context, pass1_json_schema, feedback=None):
         """Generate Pass 1 skeletons for ONE core product category. Returns list[dict].
 
         Args:
@@ -1578,7 +1641,7 @@ class WorkflowRunner:
             client=self.client,
             model_name=self.model_name,
             rendered_prompt=rendered,
-            json_schema=L200_PASS1_JSON_SCHEMA,
+            json_schema=pass1_json_schema,
         )
         skeletons = json.loads(raw).get("slides", [])
 
@@ -1761,6 +1824,9 @@ class WorkflowRunner:
                 template_text, template_file = load_pass1_template(ver, engine=self.engine)
                 prompt_label = f"V{ver}"
 
+            pass1_req_spec = get_pass1_request_spec((4 if use_parallel_pass1 else ver), engine=self.engine)
+            pass1_json_schema = pass1_req_spec.get("schema") if pass1_req_spec.get("use_structured_output") else None
+
             self._update_step(4, "in_progress",
                               progress_message=f"[2/6] Loading Pass 1 prompt template {prompt_label} ({total_diffs} diffs across {len(core_cats) if ver >= 3 else len(categories)} categories)...",
                               progress_current=1, progress_total=6)
@@ -1836,7 +1902,7 @@ class WorkflowRunner:
                         future = executor.submit(
                             self._process_single_category,
                             cat_info, core_cats_with_ids, cross_cats,
-                            template_text, directive, context, feedback,
+                            template_text, directive, context, pass1_json_schema, feedback,
                         )
                         # Use catalog_id as key (or category_name as fallback)
                         key = cat_info["catalog_id"] if cat_info["catalog_id"] is not None else cat_info["category_name"]
@@ -2029,7 +2095,7 @@ class WorkflowRunner:
                 client=self.client,
                 model_name=self.model_name,
                 rendered_prompt=rendered,
-                json_schema=L200_PASS1_JSON_SCHEMA,
+                json_schema=pass1_json_schema,
             )
 
             # Stage 5: Parse and save

@@ -3272,7 +3272,7 @@ def load_battlecard_reviews(battlecard_id):
     with ENGINE.begin() as conn:
         rows = conn.execute(
             text(
-                "SELECT * FROM human_reviews WHERE generation_id = :gid ORDER BY reviewed_at DESC"
+                "SELECT * FROM human_reviews WHERE generation_id = :gid ORDER BY review_id DESC, reviewed_at DESC"
             ),
             {"gid": gen_id},
         ).mappings().all()
@@ -4606,6 +4606,10 @@ def submit_uc_feedback():
         logger.warning("FEEDBACK SAVE REJECTED: missing required fields – battlecard=%s diff_id=%s level=%s", battlecard_id, diff_id, level)
         return jsonify({"error": "Missing required fields"}), 400
 
+    gen = _fetch_generation_by_uuid(battlecard_id)
+    if not gen:
+        return jsonify({"error": "Battlecard generation not found"}), 404
+
     review_id = save_review_to_db(
         battlecard_id=battlecard_id,
         diff_id=diff_id,
@@ -4615,13 +4619,29 @@ def submit_uc_feedback():
         reviewer_email="anonymous",
     )
 
+    if not review_id:
+        logger.error(
+            "FEEDBACK SAVE FAILED: no review_id returned for battlecard=%s diff_id=%s level=%s status=%s",
+            battlecard_id, diff_id, level, status,
+        )
+        return jsonify({"error": "Failed to persist feedback"}), 500
+
     logger.info("FEEDBACK SAVED: review_id=%s battlecard=%s diff_id=%s level=%s status=%s", review_id, battlecard_id, diff_id, level, status)
 
     slides, _ = load_battlecard_slides(battlecard_id)
     feedback = load_battlecard_reviews(battlecard_id)
     scores = calculate_trial_score(battlecard_id, slides, feedback)
 
-    return jsonify({"success": True, "scores": scores, "human_review_id": review_id})
+    return jsonify({
+        "success": True,
+        "scores": scores,
+        "human_review_id": review_id,
+        "generation_id": gen["generation_id"],
+        "diff_id": diff_id,
+        "scope": level,
+        "status": status,
+        "table": "human_reviews",
+    })
 
 
 @app.route('/api/uc/citation-feedback', methods=['POST'])

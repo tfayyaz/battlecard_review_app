@@ -4243,6 +4243,7 @@
             categories: {{ categories | tojson }},
             scores: {{ scores | tojson }}
         };
+        const REVIEW_SAVE_DEBUG_MODE = localStorage.getItem('reviewSaveDebugMode') !== 'false';
 
         function showSaveStatus(message, kind) {
             const el = document.getElementById('reviewSaveStatus');
@@ -4633,15 +4634,15 @@
             // Handle both regular score-btn and review-statement buttons
             const parent = btn.parentElement;
             const isReviewStatement = parent.classList.contains('review-statement-buttons');
+            const selectionButtons = isReviewStatement
+                ? Array.from(parent.querySelectorAll('.btn-approve-all, .btn-needs-work, .btn-reject-all'))
+                : Array.from(parent.querySelectorAll('.score-btn'));
+            const previousSelected = selectionButtons.find(b => b.classList.contains('selected')) || null;
 
-            if (isReviewStatement) {
-                // Clear selected from all review-statement buttons (except comment)
-                parent.querySelectorAll('.btn-approve-all, .btn-needs-work, .btn-reject-all').forEach(b => b.classList.remove('selected'));
-            } else {
-                // Regular score buttons
-                parent.querySelectorAll('.score-btn').forEach(b => b.classList.remove('selected'));
-            }
+            // Optimistically select the clicked button while request is in-flight
+            selectionButtons.forEach(b => b.classList.remove('selected'));
             btn.classList.add('selected');
+            btn.disabled = true;
 
             const comment = document.getElementById(`comment-${diffId}-${level}`)?.value || '';
 
@@ -4659,15 +4660,29 @@
                 });
 
                 const data = await response.json();
-                if (data.success) {
+                if (data.success && data.human_review_id) {
                     updateScores(data.scores);
-                    showSaveStatus('Review saved', 'saved');
+                    if (REVIEW_SAVE_DEBUG_MODE && isUcBattlecard) {
+                        const tbl = data.table || 'human_reviews';
+                        const msg =
+                            `Saved ${tbl}#${data.human_review_id} ` +
+                            `(gen=${data.generation_id}, diff=${data.diff_id || diffId}, scope=${data.scope || level}, status=${data.status || status})`;
+                        showSaveStatus(msg, 'saved');
+                    } else {
+                        showSaveStatus('Review saved', 'saved');
+                    }
                 } else {
+                    selectionButtons.forEach(b => b.classList.remove('selected'));
+                    if (previousSelected) previousSelected.classList.add('selected');
                     showSaveStatus(data.error || 'Failed to save review', 'error');
                 }
             } catch (error) {
                 console.error('Failed to save:', error);
+                selectionButtons.forEach(b => b.classList.remove('selected'));
+                if (previousSelected) previousSelected.classList.add('selected');
                 showSaveStatus('Failed to save review', 'error');
+            } finally {
+                btn.disabled = false;
             }
         }
 

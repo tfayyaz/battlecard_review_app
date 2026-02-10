@@ -3385,6 +3385,8 @@ class WorkflowRunner:
         ctx_flags = resolve_context_source_flags(context_sources)
         directive = (self._get_artifact_content("directive_generated") or "") if ctx_flags["directive"] else ""
         context = self._build_context(ctx_flags)
+        errors = []
+        warnings = []
 
         try:
             # Stage 2: Load template (version-aware)
@@ -3843,6 +3845,7 @@ class WorkflowRunner:
                         "execution_mode": runtime_mode if "runtime_mode" in locals() else "unknown",
                         "step5_inline_fact_check": bool(self.step5_inline_fact_check),
                         "errors": errors,
+                        "warnings": warnings,
                         "batch_timeline": batch_timeline,
                         "token_usage": self._usage_summary(),
                         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -3891,6 +3894,7 @@ class WorkflowRunner:
                         [all_claims[idx] for idx in valid_indexes],
                         inline_fact_check=bool(self.step5_inline_fact_check),
                         append=True,
+                        skeleton_indexes=valid_indexes,
                     )
                     write_finished_ts = time.time()
                     event["write_finished_at"] = _iso_from_ts(write_finished_ts)
@@ -4093,7 +4097,7 @@ class WorkflowRunner:
             runtime_mode = step5_exec["runtime_mode"]
             if step5_exec.get("fallback_reason"):
                 logger.warning("Step 5 execution fallback: %s", step5_exec["fallback_reason"])
-                errors.append({"index": -1, "key_differentiator": "execution_mode", "error": step5_exec["fallback_reason"]})
+                warnings.append({"code": "execution_mode_fallback", "message": step5_exec["fallback_reason"]})
 
             if runtime_mode in ("category_parallel", "category_sequential"):
                 category_to_indexes = {}
@@ -4623,6 +4627,7 @@ class WorkflowRunner:
                     "execution_mode": runtime_mode,
                     "step5_inline_fact_check": bool(self.step5_inline_fact_check),
                     "errors": errors,
+                    "warnings": warnings,
                     "partial": False,
                     "generated_count": len(all_claims),
                     "written_count": len(written_indexes),
@@ -4643,18 +4648,28 @@ class WorkflowRunner:
                               ),
                               progress_current=total, progress_total=total)
 
+            final_details = {}
+            if errors:
+                final_details["errors"] = errors
+            if warnings:
+                final_details["warnings"] = warnings
             self._update_step(5, "waiting_human",
                               progress_message=(
                                   f"Generated {len(all_claims)} claim pairs. Saved {len(written_indexes)} claim pairs to Lakebase. Review and approve or provide feedback."
                                   f"{self._tpm_status_suffix()}"
                               ),
                               progress_current=total, progress_total=total,
-                              error_details={"errors": errors} if errors else None)
+                              error_details=final_details or None)
 
         except Exception as e:
             logger.exception("Pass 2 generation failed")
+            failed_details = {}
+            if errors:
+                failed_details["errors"] = errors
+            if warnings:
+                failed_details["warnings"] = warnings
             self._update_step(5, "failed", error_message=f"Pass 2 failed: {e}",
-                              error_details={"errors": errors} if errors else None)
+                              error_details=failed_details or None)
 
     def _clear_generation_claim_rows(self, conn, gen_id: int):
         """Delete all claim-side rows for a generation."""
@@ -4684,7 +4699,14 @@ class WorkflowRunner:
             {"gid": gen_id},
         )
 
-    def _save_claims_to_lakebase(self, skeletons, claims, inline_fact_check: bool = False, append: bool = False):
+    def _save_claims_to_lakebase(
+        self,
+        skeletons,
+        claims,
+        inline_fact_check: bool = False,
+        append: bool = False,
+        skeleton_indexes: Optional[list[int]] = None,
+    ):
         """Save Pass 2 claims into the Lakebase claims/evidence/fact_checks tables."""
         with self.engine.begin() as conn:
             # Reuse the generation created at workflow creation.
@@ -4727,6 +4749,12 @@ class WorkflowRunner:
                 ).scalar() or 0
             total_claims = int(existing_total)
             for idx, (sk, claim) in enumerate(zip(skeletons, claims)):
+                debug_idx = idx
+                if isinstance(skeleton_indexes, list) and idx < len(skeleton_indexes):
+                    try:
+                        debug_idx = int(skeleton_indexes[idx])
+                    except (TypeError, ValueError):
+                        debug_idx = idx
                 kd_name = sk.get("key_differentiator", "")
                 category_name = sk.get("category", "")
                 kd_id = sk.get("key_diff_id")
@@ -4780,7 +4808,7 @@ class WorkflowRunner:
                     ).scalar()
                 if not kd_id:
                     self._update_pass2_debug_log_lakebase(
-                        idx,
+                        debug_idx,
                         False,
                         f"key_diff_id not found for '{kd_name}' in category '{category_name}'",
                     )
@@ -5002,12 +5030,12 @@ class WorkflowRunner:
                     )
 
                     # Mark as successfully saved to Lakebase
-                    self._update_pass2_debug_log_lakebase(idx, True, None)
+                    self._update_pass2_debug_log_lakebase(debug_idx, True, None)
 
                 except Exception as e:
                     lakebase_error = str(e)[:500]
-                    logger.error("Lakebase save failed for skeleton %d: %s", idx, lakebase_error)
-                    self._update_pass2_debug_log_lakebase(idx, False, lakebase_error)
+                    logger.error("Lakebase save failed for skeleton %d: %s", debug_idx, lakebase_error)
+                    self._update_pass2_debug_log_lakebase(debug_idx, False, lakebase_error)
                     raise
 
             conn.execute(

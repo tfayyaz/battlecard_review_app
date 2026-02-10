@@ -32,36 +32,93 @@
         .header {
             background: var(--card-bg);
             border-bottom: 1px solid var(--border);
-            padding: 12px 20px;
+            padding: 12px 20px 10px;
             position: sticky;
             top: 0;
-            z-index: 100;
+            z-index: 200;
         }
 
         .header-content {
             max-width: 1400px;
             margin: 0 auto;
             display: flex;
-            justify-content: space-between;
-            align-items: center;
+            flex-direction: column;
+            gap: 10px;
         }
 
-        .header-left {
-            display: flex;
+        .header-row {
+            width: 100%;
+            display: grid;
             align-items: center;
-            gap: 16px;
+            gap: 12px;
+        }
+
+        .header-row-top {
+            grid-template-columns: minmax(0, 1fr) auto;
+        }
+
+        .header-row-middle {
+            grid-template-columns: 1fr;
+            gap: 12px;
+        }
+
+        .header-row-nav {
+            grid-template-columns: 1fr;
+        }
+
+        .header-main {
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            min-width: 0;
+        }
+
+        .header-title-wrap {
+            min-width: 0;
         }
 
         .back-btn {
             color: var(--teal);
             text-decoration: none;
             font-size: 14px;
+            font-weight: 600;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 10px;
+            background: #fff;
+            line-height: 1;
+            height: fit-content;
+            margin-top: 2px;
         }
 
         .header-title {
             font-size: 18px;
             font-weight: 700;
             color: var(--text);
+            line-height: 1.2;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .header-subtitle {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .workflow-link {
+            color: var(--teal);
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .workflow-link:hover {
+            text-decoration: underline;
         }
 
         .mode-badge {
@@ -84,6 +141,7 @@
             display: flex;
             gap: 12px;
             align-items: center;
+            justify-self: end;
         }
 
         .stat-item {
@@ -105,6 +163,26 @@
             text-transform: uppercase;
         }
 
+        .toggle-row-left {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            justify-content: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .toggle-row-right {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+        }
+
+        .toggle-row-right.hidden {
+            display: none;
+        }
+
         .toggle-container {
             display: flex;
             align-items: center;
@@ -112,7 +190,6 @@
             padding: 4px 12px;
             background: var(--bg);
             border-radius: 6px;
-            margin-right: 12px;
         }
 
         .toggle-label {
@@ -173,7 +250,7 @@
 
         .review-save-status {
             position: fixed;
-            top: 74px;
+            top: 138px;
             right: 16px;
             z-index: 1400;
             font-size: 12px;
@@ -212,11 +289,11 @@
             display: flex;
             flex-wrap: wrap;
             gap: 8px;
-            margin-bottom: 12px;
-            padding: 10px;
-            background: #fff;
-            border: 1px solid var(--border);
-            border-radius: 10px;
+            margin-bottom: 0;
+            padding: 8px 0 0;
+            background: transparent;
+            border: none;
+            border-radius: 0;
         }
         .category-nav-title {
             font-size: 11px;
@@ -227,7 +304,7 @@
             text-transform: uppercase;
             letter-spacing: 0.4px;
         }
-        .category-nav a {
+        .category-nav button {
             text-decoration: none;
             font-size: 12px;
             font-weight: 600;
@@ -236,8 +313,10 @@
             border-radius: 999px;
             padding: 4px 10px;
             background: #f8fafc;
+            cursor: pointer;
+            font-family: inherit;
         }
-        .category-nav a:hover {
+        .category-nav button:hover {
             background: #e2e8f0;
         }
 
@@ -247,6 +326,7 @@
             border-radius: 12px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
             overflow: hidden;
+            scroll-margin-top: 190px;
         }
 
         .category-header {
@@ -600,13 +680,14 @@
         body.hide-rating-eval td:nth-child(3) .score-buttons { display: none !important; }
         body.hide-rating-eval td:nth-child(3) .review-details { display: none !important; }
 
-        /* View-only mode: keep evidence visibility, disable editing controls */
+        /* View-only mode: hide review controls, keep evidence/info controls */
         body.view-only .add-diff-btn,
         body.view-only .drag-handle {
             display: none !important;
         }
         body.view-only .score-btn,
         body.view-only .expand-btn,
+        body.view-only .info-btn,
         body.view-only .btn-approve-all,
         body.view-only .btn-needs-work,
         body.view-only .btn-reject-all,
@@ -614,8 +695,12 @@
         body.view-only .save-btn,
         body.view-only .fc-action-btn,
         body.view-only .citation-eval-btn {
-            pointer-events: none;
-            opacity: 0.55;
+            display: none !important;
+        }
+        body.view-only .review-details,
+        body.view-only .comment-row,
+        body.view-only .inline-comment-box {
+            display: none !important;
         }
         body.view-only .comment-input,
         body.view-only .inline-comment-box textarea,
@@ -632,12 +717,16 @@
         /* Hidden details state - hide description, headline details */
         body.hide-details .diff-desc { display: none !important; }
         body.hide-details .review-text { display: none !important; }
+        body.hide-details .detail-section-header { display: none !important; }
         body.hide-details .vendor-details-text { display: none !important; }
         body.hide-details .vendor-detail-items { display: none !important; }
         body.hide-details .evidence-dropdown-toggle { display: none !important; }
         body.hide-details .evidence-dropdown-content { display: none !important; }
         body.hide-details td:nth-child(2) .review-cell > span:not(.rating-icon):not(.review-headline),
         body.hide-details td:nth-child(3) .review-cell > span:not(.rating-icon):not(.review-headline) { display: none !important; }
+
+        /* View mode: hide full-statement review block */
+        body.view-only .review-statement-section { display: none !important; }
 
         /* JSON view */
         .json-view {
@@ -2694,6 +2783,23 @@
             line-height: 1.5;
         }
 
+        .headline-summary-row {
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .headline-summary-main {
+            display: flex;
+            align-items: flex-start;
+            gap: 4px;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .headline-summary-actions {
+            flex-shrink: 0;
+        }
+
         .rating-prefix {
             font-weight: 700;
             font-size: 13px;
@@ -2718,7 +2824,7 @@
             background: rgba(59, 130, 246, 0.10);
         }
 
-        /* Headline review row - buttons below headline */
+        /* Legacy headline review row (kept for compatibility) */
         .headline-review-row {
             margin-top: 4px;
             margin-bottom: 6px;
@@ -3054,6 +3160,14 @@
 
         @media (max-width: 768px) {
             .header-stats { display: none; }
+            .header { padding: 10px 12px 8px; }
+            .header-row-top,
+            .header-row-middle { grid-template-columns: 1fr; }
+            .header-main { gap: 10px; }
+            .header-title { font-size: 16px; white-space: normal; }
+            .toggle-row-left,
+            .toggle-row-right { justify-content: flex-start; }
+            .review-save-status { top: 132px; right: 10px; }
             .battlecard-layout {
                 grid-template-columns: 1fr;
             }
@@ -3074,74 +3188,89 @@
 <body{% if trial.embedded %} class="embedded-mode"{% endif %}>
     <div class="header">
         <div class="header-content">
-            <div class="header-left">
-                <a href="{% if trial.is_uc_battlecard %}/battlecards{% elif trial.task %}/task/{{ trial.task }}{% else %}/{% endif %}" class="back-btn">&#8592; Back</a>
-                <h1 class="header-title">{{ trial.name }}{% if trial.session_id %}<span class="session-id-display" onclick="copySessionId('{{ trial.session_id }}')" title="Click to copy session ID"><code>{{ trial.session_id }}</code><span class="copy-icon">&#128203;</span></span>{% endif %}</h1>
-                {% if trial.session_id %}<a href="/workflow/{{ trial.session_id }}" style="margin-left: 12px; font-size: 12px; font-weight: 600; color: var(--teal); text-decoration: none; padding: 4px 10px; border: 1px solid var(--border); border-radius: 5px;">&larr; Return to Workflow</a>{% endif %}
-                <span class="mode-badge" id="reviewModeBadge">Mode: Review</span>
-            </div>
-            <div class="toggle-container">
-                <span class="toggle-label">Review Mode</span>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="review-mode-toggle" checked onchange="toggleReviewMode()">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div class="toggle-container">
-                <span class="toggle-label">Key Diff Eval</span>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="keydiff-eval-toggle" checked onchange="toggleKeyDiffEval()">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div class="toggle-container">
-                <span class="toggle-label">Rating Eval</span>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="rating-eval-toggle" checked onchange="toggleRatingEval()">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div class="toggle-container">
-                <span class="toggle-label">Show Details</span>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="details-toggle" checked onchange="toggleDetails()">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div class="toggle-container">
-                <span class="toggle-label">Raw JSON</span>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="json-toggle" onchange="toggleJsonView()">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div class="toggle-container">
-                <span class="toggle-label">Themes</span>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="theme-toggle" onchange="toggleThemes()">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div class="header-stats">
-                <div class="stat-item">
-                    <div class="stat-number score" id="score-display">{{ scores.score }}%</div>
-                    <div class="stat-text">Overall</div>
+            <div class="header-row header-row-top">
+                <div class="header-main">
+                    <a href="{% if trial.is_uc_battlecard %}/battlecards{% elif trial.task %}/task/{{ trial.task }}{% else %}/{% endif %}" class="back-btn">&#8592; Back</a>
+                    <div class="header-title-wrap">
+                        <h1 class="header-title">{{ trial.name }}</h1>
+                        <div class="header-subtitle">
+                            {% if trial.battlecard_id %}
+                            <span>Battlecard ID: <code>{{ trial.battlecard_id }}</code></span>
+                            {% endif %}
+                            {% if trial.session_id %}
+                            <span class="session-id-display" onclick="copySessionId('{{ trial.session_id }}')" title="Click to copy workflow session ID">Workflow ID: <code>{{ trial.session_id }}</code><span class="copy-icon">&#128203;</span></span>
+                            <a class="workflow-link" href="/workflow/{{ trial.session_id }}">Open Workflow</a>
+                            {% endif %}
+                        </div>
+                    </div>
                 </div>
-                <div class="stat-item">
-                    <div class="stat-number" id="keydiff-score">{{ scores.keydiff_score }}%</div>
-                    <div class="stat-text">Key Diffs</div>
+                <div class="header-stats">
+                    <div class="stat-item">
+                        <div class="stat-number score" id="score-display">{{ scores.score }}%</div>
+                        <div class="stat-text">Overall</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="keydiff-score">{{ scores.keydiff_score }}%</div>
+                        <div class="stat-text">Key Diffs</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="databricks-score">{{ scores.databricks_score }}%</div>
+                        <div class="stat-text">Databricks</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="fabric-score">{{ scores.fabric_score }}%</div>
+                        <div class="stat-text">Fabric</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="reorder-count">{{ scores.reordered }}</div>
+                        <div class="stat-text">Reordered</div>
+                    </div>
                 </div>
-                <div class="stat-item">
-                    <div class="stat-number" id="databricks-score">{{ scores.databricks_score }}%</div>
-                    <div class="stat-text">Databricks</div>
+            </div>
+            <div class="header-row header-row-middle">
+                <div class="toggle-row-left">
+                    <span class="mode-badge view" id="reviewModeBadge">Mode: View</span>
+                    <div class="toggle-container">
+                        <span class="toggle-label">Show Details</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="details-toggle" checked onchange="toggleDetails()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="toggle-container">
+                        <span class="toggle-label">Review Mode</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="review-mode-toggle" onchange="toggleReviewMode()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="toggle-row-right" id="reviewEvalControls">
+                        <div class="toggle-container">
+                            <span class="toggle-label">Key Diff Review</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="keydiff-eval-toggle" checked onchange="toggleKeyDiffEval()">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="toggle-container">
+                            <span class="toggle-label">Claims Review</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="rating-eval-toggle" checked onchange="toggleRatingEval()">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
                 </div>
-                <div class="stat-item">
-                    <div class="stat-number" id="fabric-score">{{ scores.fabric_score }}%</div>
-                    <div class="stat-text">Fabric</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-number" id="reorder-count">{{ scores.reordered }}</div>
-                    <div class="stat-text">Reordered</div>
+            </div>
+            <div class="header-row header-row-nav">
+                <div class="category-nav">
+                    <span class="category-nav-title">Jump To Category</span>
+                    {% for category in category_order %}
+                        {% if category in categories %}
+                        {% set category_anchor = category|lower|replace(' ', '-')|replace('&', 'and')|replace('/', '-')|replace('(', '')|replace(')', '')|replace(',', '') %}
+                        <button type="button" onclick="scrollToCategory('cat-{{ category_anchor }}')">{{ category }}</button>
+                        {% endif %}
+                    {% endfor %}
                 </div>
             </div>
         </div>
@@ -3149,16 +3278,6 @@
 
     <div class="container">
         <div id="reviewSaveStatus" class="review-save-status"></div>
-
-        <div class="category-nav">
-            <span class="category-nav-title">Jump To Category</span>
-            {% for category in category_order %}
-                {% if category in categories %}
-                {% set category_anchor = category|lower|replace(' ', '-')|replace('&', 'and')|replace('/', '-')|replace('(', '')|replace(')', '')|replace(',', '') %}
-                <a href="#cat-{{ category_anchor }}">{{ category }}</a>
-                {% endif %}
-            {% endfor %}
-        </div>
 
         <!-- Fact-check summary bar (UC battlecards only) -->
         {% if trial.is_uc_battlecard and fact_check_summary and fact_check_summary.total_claims %}
@@ -3357,22 +3476,21 @@
                                 {% else %}
                                 {# Complete — show full content #}
                                 <div class="vendor-cell-content">
-                                    <div class="vendor-cell-summary">
-                                        {% if diff.databricks_rating in ['strong_advantage', 'advantage'] %}
-                                        <span class="rating-prefix positive">(+)</span>
-                                        {% elif diff.databricks_rating == 'partial' %}
-                                        <span class="rating-prefix neutral">(&ndash;)</span>
-                                        {% elif diff.databricks_rating == 'disadvantage' %}
-                                        <span class="rating-prefix negative">(&ndash;)</span>
-                                        {% endif %}
-                                        <span>
-                                            <span class="vendor-headline-link" onclick="clickEvidenceText('{{ diff.id }}', 'databricks', 'headline')">{{ diff.databricks_headline }}</span>
-                                        </span>
-                                    </div>
-                                    {# Headline review buttons #}
                                     {% set headline_scope = 'databricks_headline' %}
-                                    <div class="headline-review-row">
-                                        <div class="score-buttons detail-item-buttons" onclick="event.stopPropagation()">
+                                    <div class="vendor-cell-summary headline-summary-row">
+                                        <div class="headline-summary-main">
+                                            {% if diff.databricks_rating in ['strong_advantage', 'advantage'] %}
+                                            <span class="rating-prefix positive">(+)</span>
+                                            {% elif diff.databricks_rating == 'partial' %}
+                                            <span class="rating-prefix neutral">(&ndash;)</span>
+                                            {% elif diff.databricks_rating == 'disadvantage' %}
+                                            <span class="rating-prefix negative">(&ndash;)</span>
+                                            {% endif %}
+                                            <span>
+                                                <span class="vendor-headline-link" onclick="clickEvidenceText('{{ diff.id }}', 'databricks', 'headline')">{{ diff.databricks_headline }}</span>
+                                            </span>
+                                        </div>
+                                        <div class="score-buttons detail-item-buttons headline-summary-actions" onclick="event.stopPropagation()">
                                             <button class="score-btn approve {% if diff.feedback[headline_scope] and diff.feedback[headline_scope].status == 'approved' %}selected{% endif %}"
                                                     onclick="saveFeedback('{{ diff.id }}', '{{ headline_scope }}', 'approved', this)" title="Approve">&#10003;</button>
                                             <button class="score-btn revision {% if diff.feedback[headline_scope] and diff.feedback[headline_scope].status == 'needs_revision' %}selected{% endif %}"
@@ -3380,6 +3498,7 @@
                                             <button class="score-btn reject {% if diff.feedback[headline_scope] and diff.feedback[headline_scope].status == 'rejected' %}selected{% endif %}"
                                                     onclick="saveFeedback('{{ diff.id }}', '{{ headline_scope }}', 'rejected', this)" title="Reject">&#10007;</button>
                                             <button class="expand-btn {% if diff.feedback[headline_scope] and diff.feedback[headline_scope].comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', '{{ headline_scope }}')" title="{% if diff.feedback[headline_scope] and diff.feedback[headline_scope].comment %}View comment{% else %}Add comment{% endif %}">&#128172;{% if diff.feedback[headline_scope] and diff.feedback[headline_scope].comment %}<span class="comment-dot"></span>{% endif %}</button>
+                                            <button class="info-btn" onclick="toggleInlineEvidence('{{ diff.id }}', '{{ headline_scope }}')" title="Show evidence">&#8505;</button>
                                         </div>
                                     </div>
                                     <div class="review-details" id="details-{{ diff.id }}-{{ headline_scope }}">
@@ -3394,6 +3513,7 @@
                                                 {% if diff.feedback[headline_scope] and diff.feedback[headline_scope].comment %}Edit{% else %}Save{% endif %}</button>
                                         </div>
                                     </div>
+                                    <div class="inline-evidence-block" id="inline-evidence-{{ diff.id }}-{{ headline_scope }}"></div>
 
                                     {# L200 Detail Section (concise) #}
                                     {% if diff.databricks_detail_items %}
@@ -3578,22 +3698,21 @@
                                 {% else %}
                                 {# Complete — show full content #}
                                 <div class="vendor-cell-content">
-                                    <div class="vendor-cell-summary">
-                                        {% if diff.fabric_rating in ['strong_advantage', 'advantage'] %}
-                                        <span class="rating-prefix positive">(+)</span>
-                                        {% elif diff.fabric_rating == 'partial' %}
-                                        <span class="rating-prefix neutral">(&ndash;)</span>
-                                        {% elif diff.fabric_rating == 'disadvantage' %}
-                                        <span class="rating-prefix negative">(&ndash;)</span>
-                                        {% endif %}
-                                        <span>
-                                            <span class="vendor-headline-link" onclick="clickEvidenceText('{{ diff.id }}', 'fabric', 'headline')">{{ diff.fabric_headline }}</span>
-                                        </span>
-                                    </div>
-                                    {# Headline review buttons #}
                                     {% set headline_scope_fab = 'fabric_headline' %}
-                                    <div class="headline-review-row">
-                                        <div class="score-buttons detail-item-buttons" onclick="event.stopPropagation()">
+                                    <div class="vendor-cell-summary headline-summary-row">
+                                        <div class="headline-summary-main">
+                                            {% if diff.fabric_rating in ['strong_advantage', 'advantage'] %}
+                                            <span class="rating-prefix positive">(+)</span>
+                                            {% elif diff.fabric_rating == 'partial' %}
+                                            <span class="rating-prefix neutral">(&ndash;)</span>
+                                            {% elif diff.fabric_rating == 'disadvantage' %}
+                                            <span class="rating-prefix negative">(&ndash;)</span>
+                                            {% endif %}
+                                            <span>
+                                                <span class="vendor-headline-link" onclick="clickEvidenceText('{{ diff.id }}', 'fabric', 'headline')">{{ diff.fabric_headline }}</span>
+                                            </span>
+                                        </div>
+                                        <div class="score-buttons detail-item-buttons headline-summary-actions" onclick="event.stopPropagation()">
                                             <button class="score-btn approve {% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].status == 'approved' %}selected{% endif %}"
                                                     onclick="saveFeedback('{{ diff.id }}', '{{ headline_scope_fab }}', 'approved', this)" title="Approve">&#10003;</button>
                                             <button class="score-btn revision {% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].status == 'needs_revision' %}selected{% endif %}"
@@ -3601,6 +3720,7 @@
                                             <button class="score-btn reject {% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].status == 'rejected' %}selected{% endif %}"
                                                     onclick="saveFeedback('{{ diff.id }}', '{{ headline_scope_fab }}', 'rejected', this)" title="Reject">&#10007;</button>
                                             <button class="expand-btn {% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].comment %}has-comment{% endif %}" onclick="toggleCommentDetails('{{ diff.id }}', '{{ headline_scope_fab }}')" title="{% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].comment %}View comment{% else %}Add comment{% endif %}">&#128172;{% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].comment %}<span class="comment-dot"></span>{% endif %}</button>
+                                            <button class="info-btn" onclick="toggleInlineEvidence('{{ diff.id }}', '{{ headline_scope_fab }}')" title="Show evidence">&#8505;</button>
                                         </div>
                                     </div>
                                     <div class="review-details" id="details-{{ diff.id }}-{{ headline_scope_fab }}">
@@ -3615,6 +3735,7 @@
                                                 {% if diff.feedback[headline_scope_fab] and diff.feedback[headline_scope_fab].comment %}Edit{% else %}Save{% endif %}</button>
                                         </div>
                                     </div>
+                                    <div class="inline-evidence-block" id="inline-evidence-{{ diff.id }}-{{ headline_scope_fab }}"></div>
 
                                     {# L200 Detail Section (concise) #}
                                     {% if diff.fabric_detail_items %}
@@ -4038,7 +4159,7 @@
         const isUcBattlecard = {{ (trial.is_uc_battlecard or False) | tojson }};
         const battlecardId = "{{ trial.battlecard_id | default('', true) }}";
         let draggedRow = null;
-        let isReviewMode = true;
+        let isReviewMode = false;
         let saveStatusTimer = null;
 
         // Raw JSON data for the trial
@@ -4063,9 +4184,18 @@
             }
         }
 
+        function updateSaveStatusOffset() {
+            const el = document.getElementById('reviewSaveStatus');
+            const header = document.querySelector('.header');
+            if (!el || !header) return;
+            const topPx = Math.ceil(header.getBoundingClientRect().height + 10);
+            el.style.top = topPx + 'px';
+        }
+
         function toggleReviewMode() {
             const checkbox = document.getElementById('review-mode-toggle');
             isReviewMode = !!checkbox.checked;
+            const reviewEvalControls = document.getElementById('reviewEvalControls');
             if (isReviewMode) {
                 document.body.classList.remove('view-only');
                 localStorage.setItem('reviewModeEnabled', 'true');
@@ -4074,6 +4204,9 @@
                     badge.textContent = 'Mode: Review';
                     badge.classList.remove('view');
                 }
+                if (reviewEvalControls) {
+                    reviewEvalControls.classList.remove('hidden');
+                }
             } else {
                 document.body.classList.add('view-only');
                 localStorage.setItem('reviewModeEnabled', 'false');
@@ -4081,6 +4214,9 @@
                 if (badge) {
                     badge.textContent = 'Mode: View';
                     badge.classList.add('view');
+                }
+                if (reviewEvalControls) {
+                    reviewEvalControls.classList.add('hidden');
                 }
             }
         }
@@ -4174,42 +4310,71 @@
         // Restore toggle states from localStorage on page load
         (function() {
             const reviewModeState = localStorage.getItem('reviewModeEnabled');
-            if (reviewModeState === 'false') {
-                const reviewToggle = document.getElementById('review-mode-toggle');
-                if (reviewToggle) reviewToggle.checked = false;
+            const reviewToggle = document.getElementById('review-mode-toggle');
+            if (reviewToggle) {
+                if (reviewModeState === 'true') reviewToggle.checked = true;
+                if (reviewModeState === 'false') reviewToggle.checked = false;
             }
             toggleReviewMode();
 
             const keydiffState = localStorage.getItem('keydiffEvalVisible');
             if (keydiffState === 'false') {
                 document.body.classList.add('hide-keydiff-eval');
-                document.getElementById('keydiff-eval-toggle').checked = false;
+                const keyDiffToggle = document.getElementById('keydiff-eval-toggle');
+                if (keyDiffToggle) keyDiffToggle.checked = false;
             }
 
             const ratingState = localStorage.getItem('ratingEvalVisible');
             if (ratingState === 'false') {
                 document.body.classList.add('hide-rating-eval');
-                document.getElementById('rating-eval-toggle').checked = false;
+                const ratingToggle = document.getElementById('rating-eval-toggle');
+                if (ratingToggle) ratingToggle.checked = false;
             }
 
             const detailsState = localStorage.getItem('detailsVisible');
             if (detailsState === 'false') {
                 document.body.classList.add('hide-details');
-                document.getElementById('details-toggle').checked = false;
+                const detailsToggle = document.getElementById('details-toggle');
+                if (detailsToggle) detailsToggle.checked = false;
             }
 
             const jsonState = localStorage.getItem('jsonViewVisible');
             if (jsonState === 'true') {
-                document.getElementById('json-toggle').checked = true;
-                toggleJsonView();
+                const jsonToggle = document.getElementById('json-toggle');
+                if (jsonToggle) {
+                    jsonToggle.checked = true;
+                    toggleJsonView();
+                }
             }
 
             const themesState = localStorage.getItem('themesVisible');
             if (themesState === 'true') {
                 document.body.classList.add('show-themes');
-                document.getElementById('theme-toggle').checked = true;
+                const themeToggle = document.getElementById('theme-toggle');
+                if (themeToggle) themeToggle.checked = true;
             }
         })();
+
+        function scrollToCategory(categoryId) {
+            const target = document.getElementById(categoryId);
+            if (!target) return;
+            const header = document.querySelector('.header');
+            const offset = (header ? header.getBoundingClientRect().height : 0) + 10;
+            const y = window.scrollY + target.getBoundingClientRect().top - offset;
+            window.scrollTo({ top: Math.max(y, 0), behavior: 'smooth' });
+            if (window.history && window.history.replaceState) {
+                window.history.replaceState(null, '', '#' + categoryId);
+            }
+        }
+
+        window.addEventListener('load', function() {
+            updateSaveStatusOffset();
+            if (!window.location.hash) return;
+            const id = window.location.hash.replace('#', '');
+            if (!id) return;
+            setTimeout(function() { scrollToCategory(id); }, 80);
+        });
+        window.addEventListener('resize', updateSaveStatusOffset);
 
         function toggleCommentDetails(diffId, level) {
             if (!isReviewMode) return;
@@ -4652,19 +4817,29 @@
                     let html = '';
 
                     const parsed = scope.match(/^(databricks|fabric)_detail(_l300)?_(\d+)(?:_(\d+))?$/);
+                    const isHeadlineScope = /^(databricks|fabric)_headline$/.test(scope);
                     const vendor = scope.startsWith('databricks') ? 'databricks' : 'fabric';
                     const isL300 = !!(parsed && parsed[2]);
                     const detailItemId = parsed ? parseInt(parsed[3], 10) : null;
                     const verboseItemId = parsed && parsed[4] ? parseInt(parsed[4], 10) : null;
 
                     const citations = diffData.citations || {};
-                    const citeField = isL300 ? `${vendor}_detail_verbose` : `${vendor}_details`;
-                    let detailsCitations = citations[citeField] || [];
-                    if (detailItemId !== null && !Number.isNaN(detailItemId)) {
-                        detailsCitations = detailsCitations.filter(c => parseInt(c.detail_item_id, 10) === detailItemId);
-                    }
-                    if (isL300 && verboseItemId !== null && !Number.isNaN(verboseItemId)) {
-                        detailsCitations = detailsCitations.filter(c => parseInt(c.verbose_item_id, 10) === verboseItemId);
+                    let detailsCitations = [];
+                    if (isHeadlineScope) {
+                        if (vendor === 'databricks') {
+                            detailsCitations = citations.databricks_headline || [];
+                        } else {
+                            detailsCitations = citations.fabric_headline || citations.competitor_headline || [];
+                        }
+                    } else {
+                        const citeField = isL300 ? `${vendor}_detail_verbose` : `${vendor}_details`;
+                        detailsCitations = citations[citeField] || [];
+                        if (detailItemId !== null && !Number.isNaN(detailItemId)) {
+                            detailsCitations = detailsCitations.filter(c => parseInt(c.detail_item_id, 10) === detailItemId);
+                        }
+                        if (isL300 && verboseItemId !== null && !Number.isNaN(verboseItemId)) {
+                            detailsCitations = detailsCitations.filter(c => parseInt(c.verbose_item_id, 10) === verboseItemId);
+                        }
                     }
 
                     if (detailsCitations.length > 0) {
@@ -4692,14 +4867,23 @@
                     }
 
                     // Fact-Check card
-                    let factChecks = (diffData.fact_checks || []).filter(fc => fc.claim_field && fc.claim_field.includes(vendor));
+                    let factChecks = (diffData.fact_checks || []).filter(fc => {
+                        const field = String(fc.claim_field || '');
+                        if (isHeadlineScope) {
+                            if (vendor === 'databricks') return field === 'databricks_headline';
+                            return field === 'fabric_headline' || field === 'competitor_headline';
+                        }
+                        return field.includes(vendor);
+                    });
                     factChecks = factChecks.filter(fc => {
+                        const field = String(fc.claim_field || '');
                         const fcDetail = fc.detail_item_id != null ? parseInt(fc.detail_item_id, 10) : null;
                         const fcVerbose = fc.verbose_item_id != null ? parseInt(fc.verbose_item_id, 10) : null;
                         if (detailItemId !== null && !Number.isNaN(detailItemId) && fcDetail !== detailItemId) return false;
                         if (isL300 && verboseItemId !== null && !Number.isNaN(verboseItemId) && fcVerbose !== verboseItemId) return false;
-                        if (!isL300 && fc.claim_field && fc.claim_field.endsWith('detail_verbose')) return false;
-                        if (isL300 && fc.claim_field && !fc.claim_field.endsWith('detail_verbose')) return false;
+                        if (!isHeadlineScope && !isL300 && field && field.endsWith('detail_verbose')) return false;
+                        if (!isHeadlineScope && isL300 && field && !field.endsWith('detail_verbose')) return false;
+                        if (!isHeadlineScope && field && field.includes('headline')) return false;
                         return true;
                     });
                     if (factChecks.length > 0) {

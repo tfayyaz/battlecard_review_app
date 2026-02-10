@@ -3311,25 +3311,39 @@ def load_battlecard_reviews(battlecard_id):
 
         feedback.setdefault(slide_id, {})
 
-        fb_entry = {
-            "status": status,
-            "comment": comment,
-            "timestamp": r.get("reviewed_at") or "",
-            "human_review_id": r.get("review_id"),
-        }
-
         if scope == "reorder" and reorder:
             # Only keep the newest reorder (first seen since rows are DESC)
             if "reorder" not in feedback[slide_id]:
                 feedback[slide_id]["reorder"] = {
                     "original_rank": reorder.get("original_rank"),
                     "new_rank": reorder.get("new_rank"),
-                    "timestamp": fb_entry["timestamp"],
+                    "timestamp": r.get("reviewed_at") or "",
                 }
         elif scope:
-            # Only keep the newest review per scope (first seen since rows are DESC)
-            if scope not in feedback[slide_id]:
-                feedback[slide_id][scope] = fb_entry
+            # Merge review rows per scope:
+            # - Keep latest non-empty status row (approve/request_edit/reject)
+            # - Keep latest non-empty comment row
+            # This prevents a newer comment-only row (provide_feedback) from wiping the prior rating.
+            scope_entry = feedback[slide_id].setdefault(
+                scope,
+                {
+                    "status": "",
+                    "comment": "",
+                    "timestamp": r.get("reviewed_at") or "",
+                    "human_review_id": r.get("review_id"),
+                },
+            )
+
+            # Preserve most-recent row metadata for debug display.
+            if not scope_entry.get("timestamp"):
+                scope_entry["timestamp"] = r.get("reviewed_at") or ""
+            if not scope_entry.get("human_review_id"):
+                scope_entry["human_review_id"] = r.get("review_id")
+
+            if status and not scope_entry.get("status"):
+                scope_entry["status"] = status
+            if comment and not scope_entry.get("comment"):
+                scope_entry["comment"] = comment
 
     return feedback
 

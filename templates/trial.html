@@ -4662,6 +4662,15 @@
                 const data = await response.json();
                 if (data.success && data.human_review_id) {
                     updateScores(data.scores);
+                    const scopeState = getOrInitScopeFeedback(diffId, level);
+                    if (scopeState) {
+                        scopeState.status = status;
+                        if (comment && comment.trim()) {
+                            scopeState.comment = comment;
+                        }
+                        scopeState.human_review_id = data.human_review_id;
+                        scopeState.timestamp = new Date().toISOString();
+                    }
                     if (REVIEW_SAVE_DEBUG_MODE && isUcBattlecard) {
                         const tbl = data.table || 'human_reviews';
                         const msg =
@@ -4705,16 +4714,14 @@
             btn.textContent = 'Saving...';
             btn.disabled = true;
 
-            // Find the currently selected status button so we preserve it
-            const reviewActions = btn.closest('.review-details')?.previousElementSibling ||
-                                  btn.closest('.review-row')?.querySelector('.review-actions') ||
-                                  btn.closest('.diff-row')?.querySelector(`[data-diff-id="${diffId}"][data-vendor="${level === 'key_diff' ? '' : level}"] .review-actions, .review-actions`);
+            // Preserve current status for this scope when saving comment.
             let currentStatus = null;
-            const selectedBtn = btn.closest('.diff-row')?.querySelector(
-                level === 'key_diff'
-                    ? `.keydiff-cell .score-btn.selected`
-                    : `[data-vendor="${level}"] .score-btn.selected`
-            );
+            const scopeState = getOrInitScopeFeedback(diffId, level);
+            if (scopeState && scopeState.status) {
+                currentStatus = scopeState.status;
+            }
+
+            const selectedBtn = btn.closest('.diff-row')?.querySelector(`[onclick*="saveFeedback('${diffId}', '${level}',"][class*="selected"]`);
             if (selectedBtn) {
                 // Determine status from the button's onclick attribute
                 const onclickAttr = selectedBtn.getAttribute('onclick') || '';
@@ -4743,6 +4750,16 @@
                 const data = await response.json();
                 if (data.success) {
                     updateScores(data.scores);
+                    if (scopeState) {
+                        if (currentStatus && currentStatus !== 'provide_feedback') {
+                            scopeState.status = currentStatus;
+                        }
+                        scopeState.comment = comment || '';
+                        if (data.human_review_id) {
+                            scopeState.human_review_id = data.human_review_id;
+                        }
+                        scopeState.timestamp = new Date().toISOString();
+                    }
                     btn.textContent = 'Edit';
                     btn.classList.add('saved');
                     btn.disabled = false;
@@ -4763,7 +4780,15 @@
                     if (btnComment && comment) {
                         btnComment.classList.add('has-comment');
                     }
-                    showSaveStatus('Comment saved', 'saved');
+                    if (REVIEW_SAVE_DEBUG_MODE && isUcBattlecard && data.human_review_id) {
+                        const tbl = data.table || 'human_reviews';
+                        const msg =
+                            `Saved ${tbl}#${data.human_review_id} ` +
+                            `(gen=${data.generation_id}, diff=${data.diff_id || diffId}, scope=${data.scope || level}, status=${data.status || (currentStatus || 'provide_feedback')})`;
+                        showSaveStatus(msg, 'saved');
+                    } else {
+                        showSaveStatus('Comment saved', 'saved');
+                    }
                 } else {
                     showSaveStatus(data.error || 'Failed to save comment', 'error');
                 }
@@ -4776,6 +4801,14 @@
                     btn.disabled = false;
                 }, 1500);
             }
+        }
+
+        function getOrInitScopeFeedback(diffId, level) {
+            const diffData = findDiffData(diffId);
+            if (!diffData) return null;
+            diffData.feedback = diffData.feedback || {};
+            diffData.feedback[level] = diffData.feedback[level] || {};
+            return diffData.feedback[level];
         }
 
         function updateScores(scores) {

@@ -190,6 +190,8 @@ DEFAULT_PASS1_PROMPT_V3 = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass1_planning
 DEFAULT_PASS1_PROMPT_V4 = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass1_planning_v4_per_category.md")
 DEFAULT_PASS2_PROMPT = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass2_detail_v3_factcheck.md")
 DEFAULT_PASS2_PROMPT_V10 = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass2_detail_v10_granular.md")
+DEFAULT_PASS2_PROMPT_V11 = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass2_detail_v11_l200_cached.md")
+DEFAULT_PASS2_PROMPT_V12 = os.path.join(DEFAULT_PROMPTS_DIR, "l200_pass2_detail_v12_batch10_cached.md")
 DEFAULT_DIRECTIVE_PROMPT = os.path.join(
     os.path.expanduser("~"), "databricks-dev", "compete_automation",
     "battlecard-skill", "battlecards", "fabric-platform",
@@ -397,6 +399,16 @@ Return ONLY the JSON object. No markdown fences, no explanation text.
         "label": "V10 — Granular L200/L300 + Per-Item Citations",
         "description": "Category-batched strict JSON. Each L200 bullet and each nested L300 bullet carries explicit citations.",
         "file": DEFAULT_PASS2_PROMPT_V10,
+    },
+    11: {
+        "label": "V11 — Headline + L200 Only (Cached)",
+        "description": "Category-batched strict JSON for headline + L200 only, shorter citations, prompt-caching enabled.",
+        "file": DEFAULT_PASS2_PROMPT_V11,
+    },
+    12: {
+        "label": "V12 — Batch-10 Headline + L200 (Segmented Cache)",
+        "description": "Category-batched strict JSON for up to 10 diffs per call. Segmented prompt caching for static context reuse.",
+        "file": DEFAULT_PASS2_PROMPT_V12,
     },
 }
 
@@ -867,6 +879,14 @@ CREATE TABLE IF NOT EXISTS pass2_debug_logs (
     lakebase_error TEXT,
     error_message TEXT,
     processing_time_ms INT,
+    input_tokens INT DEFAULT 0,
+    output_tokens INT DEFAULT 0,
+    total_tokens INT DEFAULT 0,
+    input_tpm INT DEFAULT 0,
+    output_tpm INT DEFAULT 0,
+    total_tpm INT DEFAULT 0,
+    cache_applied BOOLEAN DEFAULT FALSE,
+    cached_input_tokens INT DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(session_id, skeleton_index)
 );
@@ -1071,10 +1091,26 @@ def init_db():
             lakebase_error TEXT,
             error_message TEXT,
             processing_time_ms INT,
+            input_tokens INT DEFAULT 0,
+            output_tokens INT DEFAULT 0,
+            total_tokens INT DEFAULT 0,
+            input_tpm INT DEFAULT 0,
+            output_tpm INT DEFAULT 0,
+            total_tpm INT DEFAULT 0,
+            cache_applied BOOLEAN DEFAULT FALSE,
+            cached_input_tokens INT DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(session_id, skeleton_index)
         )""",
         "CREATE INDEX IF NOT EXISTS idx_pass2_debug_session ON pass2_debug_logs(session_id)",
+        "ALTER TABLE pass2_debug_logs ADD COLUMN IF NOT EXISTS input_tokens INT DEFAULT 0",
+        "ALTER TABLE pass2_debug_logs ADD COLUMN IF NOT EXISTS output_tokens INT DEFAULT 0",
+        "ALTER TABLE pass2_debug_logs ADD COLUMN IF NOT EXISTS total_tokens INT DEFAULT 0",
+        "ALTER TABLE pass2_debug_logs ADD COLUMN IF NOT EXISTS input_tpm INT DEFAULT 0",
+        "ALTER TABLE pass2_debug_logs ADD COLUMN IF NOT EXISTS output_tpm INT DEFAULT 0",
+        "ALTER TABLE pass2_debug_logs ADD COLUMN IF NOT EXISTS total_tpm INT DEFAULT 0",
+        "ALTER TABLE pass2_debug_logs ADD COLUMN IF NOT EXISTS cache_applied BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE pass2_debug_logs ADD COLUMN IF NOT EXISTS cached_input_tokens INT DEFAULT 0",
         """CREATE TABLE IF NOT EXISTS eval_datasets (
             dataset_id SERIAL PRIMARY KEY,
             dataset_name VARCHAR(255) NOT NULL UNIQUE,
@@ -1844,6 +1880,108 @@ Return ONLY a JSON object:
 }
 """
 
+    _PASS2_V11_INLINE = """\
+You generate concise headline + L200 claims for key differentiators in one category for a Databricks competitive battlecard.
+
+## Execution Mode
+Category-batched structured generation. Process all differentiators for one category in one call.
+
+## Critical Rules
+1. Headline: 3-8 words.
+2. L200 bullets: 6-8 words, max 10 words, outcome-first.
+3. Return 1-2 L200 bullets per side.
+4. Keep citations short: one short quote per bullet.
+5. Keep ids stable and return one object for each input id.
+
+## Output Format
+Return ONLY a JSON object:
+{
+  "claims": [
+    {
+      "id": "<same id from input>",
+      "databricks": {
+        "headline": {"text": "<3-8 words>", "citations": [{"source_index": 1, "source_quote": "<short quote>"}]},
+        "l200": [
+          {"text": "<6-8 words, max 10>", "citations": [{"source_index": 1, "source_quote": "<short quote>"}]}
+        ]
+      },
+      "competitor": {
+        "headline": {"text": "<3-8 words>", "citations": [{"source_index": 1, "source_quote": "<short quote>"}]},
+        "l200": [
+          {"text": "<6-8 words, max 10>", "citations": [{"source_index": 1, "source_quote": "<short quote>"}]}
+        ]
+      },
+      "sources": [
+        {"index": 1, "title": "<source>", "url": "<url>", "type": "documentation", "accessed_at": "<ISO timestamp>"}
+      ],
+      "research_sources": []
+    }
+  ]
+}
+
+## Additional Context
+{{context}}
+
+## Batch Inputs (changes per run)
+Competitor: {{competitor}}
+Category: {{category}}
+Expected differentiators in this batch: {{num_diffs}}
+
+### Key Differentiators to Process
+{{key_diffs_json}}
+"""
+
+    _PASS2_V12_INLINE = """\
+You generate concise headline + L200 claims for a batch of key differentiators in one category for a Databricks competitive battlecard.
+
+## Execution Mode
+Category-batched structured generation. Process up to 10 differentiators in one call.
+
+## Critical Rules
+1. Headline: 3-8 words.
+2. L200 bullets: 6-8 words, max 10 words, outcome-first.
+3. Return 1-2 L200 bullets per side.
+4. Keep citations short: one short quote per bullet.
+5. Keep ids stable and return one object for each input id.
+
+## Output Format
+Return ONLY a JSON object:
+{
+  "claims": [
+    {
+      "id": "<same id from input>",
+      "databricks": {
+        "headline": {"text": "<3-8 words>", "citations": [{"source_index": 1, "source_quote": "<short quote>"}]},
+        "l200": [
+          {"text": "<6-8 words, max 10>", "citations": [{"source_index": 1, "source_quote": "<short quote>"}]}
+        ]
+      },
+      "competitor": {
+        "headline": {"text": "<3-8 words>", "citations": [{"source_index": 1, "source_quote": "<short quote>"}]},
+        "l200": [
+          {"text": "<6-8 words, max 10>", "citations": [{"source_index": 1, "source_quote": "<short quote>"}]}
+        ]
+      },
+      "sources": [
+        {"index": 1, "title": "<source>", "url": "<url>", "type": "documentation", "accessed_at": "<ISO timestamp>"}
+      ],
+      "research_sources": []
+    }
+  ]
+}
+
+## Additional Context
+{{context}}
+
+## Batch Inputs (changes per run)
+Competitor: {{competitor}}
+Category: {{category}}
+Expected differentiators in this batch: {{num_diffs}} (max 10)
+
+### Key Differentiators to Process
+{{key_diffs_json}}
+"""
+
     _PASS2_INLINE_FALLBACKS = {
         1: _PASS2_V1_INLINE,
         5: _PASS2_V5_INLINE,
@@ -1852,6 +1990,8 @@ Return ONLY a JSON object:
         8: _PASS2_V8_INLINE,
         9: _PASS2_V9_INLINE,
         10: _PASS2_V10_INLINE,
+        11: _PASS2_V11_INLINE,
+        12: _PASS2_V12_INLINE,
     }
 
     def _pass2_schema_config(version_num: int):
@@ -1865,8 +2005,10 @@ Return ONLY a JSON object:
         return {
             "structured_output": bool(spec.get("use_structured_output", False)),
             "response_format_type": spec.get("response_format_type"),
-            "supports_category_batch": bool(cfg.get("supports_category_batch", version_num in (5, 6, 7, 8, 9, 10))),
+            "supports_category_batch": bool(cfg.get("supports_category_batch", version_num in (5, 6, 7, 8, 9, 10, 11, 12))),
             "supports_single_call": bool(cfg.get("supports_single_call", version_num in (8,))),
+            "prompt_caching": bool(cfg.get("prompt_caching", version_num >= 10)),
+            "segmented_prompt_caching": bool(cfg.get("segmented_prompt_caching", version_num >= 12)),
         }
 
     _DIRECTIVE_INLINE = (
@@ -1977,7 +2119,7 @@ Return ONLY a JSON object:
                             "template_text LIKE '[Placeholder%' "
                             "OR template_text = 'inline' "
                             "OR LENGTH(template_text) < 100 "
-                            "OR template_name IN ('pass2_v1', 'pass2_v2', 'pass2_v3', 'pass2_v5', 'pass2_v6', 'pass2_v7', 'pass2_v8', 'pass2_v9', 'pass2_v10')"
+                            "OR template_name IN ('pass2_v1', 'pass2_v2', 'pass2_v3', 'pass2_v5', 'pass2_v6', 'pass2_v7', 'pass2_v8', 'pass2_v9', 'pass2_v10', 'pass2_v11', 'pass2_v12')"
                             ")"
                         ),
                         {
@@ -2496,7 +2638,7 @@ def estimate_prompt_tokens(session_id: str, step_number: int) -> dict:
                     databricks_rating=sk.get("databricks_rating", ""),
                     competitor_rating=sk.get("competitor_rating", ""),
                     selection_reasoning=sk.get("selection_reasoning", ""),
-                    directives="" if p2_ver in (5, 6, 7, 8, 9, 10) else directive,
+                    directives="" if p2_ver in (5, 6, 7, 8, 9, 10, 11, 12) else directive,
                     context=context,
                 )
 
@@ -2746,6 +2888,7 @@ def load_battlecard_slides(battlecard_id):
     gen_id = gen["generation_id"]
     selected_core_categories = set()
 
+    latest_pass1_skeletons_content = None
     with ENGINE.begin() as conn:
         selected_rows = conn.execute(
             text(
@@ -2832,6 +2975,19 @@ def load_battlecard_slides(battlecard_id):
             {"gid": gen_id},
         ).mappings().all()
 
+        latest_pass1_skeletons_content = conn.execute(
+            text(
+                "SELECT wa.artifact_content "
+                "FROM workflow_artifacts wa "
+                "JOIN workflow_sessions ws ON ws.session_id = wa.session_id "
+                "WHERE ws.generation_id = :gid "
+                "AND wa.artifact_type = 'pass1_skeletons' "
+                "ORDER BY wa.created_at DESC "
+                "LIMIT 1"
+            ),
+            {"gid": gen_id},
+        ).scalar()
+
     # Build detail_items lookup by claim_id
     detail_items_by_claim = {}
     for di in detail_items:
@@ -2857,6 +3013,33 @@ def load_battlecard_slides(battlecard_id):
     fact_checks_by_claim = {}
     for fc in fact_checks:
         fact_checks_by_claim.setdefault(fc["claim_id"], []).append(fc)
+
+    keydiff_reasoning_by_id = {}
+    keydiff_reasoning_by_name = {}
+    if latest_pass1_skeletons_content:
+        try:
+            parsed = json.loads(latest_pass1_skeletons_content)
+            if isinstance(parsed, list):
+                for sk in parsed:
+                    if not isinstance(sk, dict):
+                        continue
+                    reason_payload = {
+                        "selection_reasoning": sk.get("selection_reasoning", "") or "",
+                        "rank_reasoning": sk.get("rank_reasoning", "") or "",
+                        "directive_alignment": sk.get("directive_alignment", "") or "",
+                    }
+                    sk_key_diff_id = sk.get("key_diff_id")
+                    if sk_key_diff_id is not None:
+                        try:
+                            keydiff_reasoning_by_id[int(sk_key_diff_id)] = reason_payload
+                        except (TypeError, ValueError):
+                            pass
+                    cat = (sk.get("category") or "").strip().lower()
+                    name = (sk.get("key_differentiator") or "").strip().lower()
+                    if cat and name:
+                        keydiff_reasoning_by_name[(cat, name)] = reason_payload
+        except (TypeError, json.JSONDecodeError):
+            pass
 
     slides = []
     for d in diffs:
@@ -2999,6 +3182,13 @@ def load_battlecard_slides(battlecard_id):
         db_details_flat = " ".join(it["text"] for it in db_detail_items) if db_detail_items else ""
         fab_details_flat = " ".join(it["text"] for it in fab_detail_items) if fab_detail_items else ""
 
+        reasoning_payload = keydiff_reasoning_by_id.get(int(key_diff_id)) or keydiff_reasoning_by_name.get(
+            (
+                (d.get("category_name") or "").strip().lower(),
+                (d.get("key_diff_name") or "").strip().lower(),
+            )
+        ) or {}
+
         diff = {
             "id": diff_id,
             "slide_type": "L200",
@@ -3021,9 +3211,9 @@ def load_battlecard_slides(battlecard_id):
             "fabric_detail_items": fab_detail_items,
             "fabric_rating": (map_rating(fab_claim.get("rating")) if fab_claim else ""),
             "fabric_reasoning": "",
-            "selection_reasoning": "",
-            "rank_reasoning": "",
-            "directive_alignment": "",
+            "selection_reasoning": reasoning_payload.get("selection_reasoning", ""),
+            "rank_reasoning": reasoning_payload.get("rank_reasoning", ""),
+            "directive_alignment": reasoning_payload.get("directive_alignment", ""),
             "citations": citations,
             "sources": sources,
             "competitor": "Microsoft Fabric",
@@ -3698,7 +3888,7 @@ def _load_prompt_templates_for_ui():
 
 
 def _pass2_supports_category_batch(version: int) -> bool:
-    return int(version or 0) in (5, 6, 7, 8, 9, 10)
+    return int(version or 0) in (5, 6, 7, 8, 9, 10, 11, 12)
 
 
 def _pass2_supports_single_call(version: int) -> bool:
@@ -3738,18 +3928,27 @@ def _resolve_step4_execution(pass1_ver: int, mode: str, workers: int, core_count
 
     # auto
     pass1_parallel = bool(pass1_ver >= 3 and workers > 1 and core_count > 1)
-    pass1_effective_ver = 4 if pass1_parallel else pass1_ver
-    pass1_batches = core_count if pass1_parallel else (1 if core_count > 0 else 0)
+    pass1_sequential_batches = bool(pass1_ver >= 3 and core_count > 1 and workers <= 1)
+    pass1_effective_ver = 4 if (pass1_parallel or pass1_sequential_batches) else pass1_ver
+    pass1_batches = core_count if (pass1_parallel or pass1_sequential_batches) else (1 if core_count > 0 else 0)
     pass1_workers = min(workers, pass1_batches, 6) if pass1_parallel else 1
     return {
         "mode": "parallel" if pass1_parallel else "sequential",
         "summary": (
             f"Parallel by category ({pass1_batches} calls, up to {pass1_workers} workers)"
             if pass1_parallel
-            else "Sequential single-call planning"
+            else (
+                f"Sequential by category ({pass1_batches} calls)"
+                if pass1_sequential_batches
+                else "Sequential single-call planning"
+            )
         ),
         "details": f"Prompt V{pass1_effective_ver} runtime behavior (auto)",
-        "runtime_mode": "category_parallel" if pass1_parallel else "single_call",
+        "runtime_mode": (
+            "category_parallel"
+            if pass1_parallel
+            else ("category_sequential" if pass1_sequential_batches else "single_call")
+        ),
         "workers": pass1_workers,
         "batches": pass1_batches,
     }
@@ -3826,7 +4025,7 @@ def _resolve_step5_execution(pass2_ver: int, mode: str, workers: int, core_count
         return _category(parallel=False, explicit=True)
 
     # auto
-    if pass2_ver in (5, 6, 7, 8, 9, 10):
+    if pass2_ver in (5, 6, 7, 8, 9, 10, 11, 12):
         return _category(parallel=True, explicit=False)
     return _per_diff(parallel=True, explicit=False)
 
@@ -4978,7 +5177,11 @@ def workflow_pass2_debug_logs(session_id):
                     rendered_prompt, api_request_json, api_response_raw,
                     structured_output, response_type, was_list_fixed,
                     lakebase_saved, lakebase_error, error_message,
-                    processing_time_ms, created_at
+                    processing_time_ms,
+                    input_tokens, output_tokens, total_tokens,
+                    input_tpm, output_tpm, total_tpm,
+                    cache_applied, cached_input_tokens,
+                    created_at
                 FROM pass2_debug_logs
                 WHERE session_id::text = :sid
                 ORDER BY skeleton_index
@@ -5010,7 +5213,11 @@ def workflow_pass2_debug_log_single(session_id, skeleton_index):
                     rendered_prompt, api_request_json, api_response_raw,
                     structured_output, response_type, was_list_fixed,
                     lakebase_saved, lakebase_error, error_message,
-                    processing_time_ms, created_at
+                    processing_time_ms,
+                    input_tokens, output_tokens, total_tokens,
+                    input_tpm, output_tpm, total_tpm,
+                    cache_applied, cached_input_tokens,
+                    created_at
                 FROM pass2_debug_logs
                 WHERE session_id::text = :sid AND skeleton_index = :idx
             """),
@@ -6712,7 +6919,7 @@ def workflow_step_prompt_preview(session_id, step_number):
 
         directive = (_get_artifact("directive_generated") or "[Directive not yet generated]") if context_flags["directive"] else ""
         context = _build_preview_context()
-        directives_for_template = "" if p2_ver in (5, 6, 7, 8, 9, 10) else directive
+        directives_for_template = "" if p2_ver in (5, 6, 7, 8, 9, 10, 11, 12) else directive
 
         # Try to get first skeleton for a realistic preview
         skeletons_json = _get_artifact("pass1_skeletons")

@@ -38,13 +38,24 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
 DEFAULT_MODEL_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "16384"))
 DEFAULT_MODEL_TIMEOUT_SECONDS = float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "180"))
-DEFAULT_MODEL_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "6"))
+DEFAULT_MODEL_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "12"))
 DEFAULT_MODEL_RETRY_BASE_SECONDS = float(os.getenv("LLM_RETRY_BASE_SECONDS", "0.75"))
-DEFAULT_MODEL_RETRY_MAX_SECONDS = float(os.getenv("LLM_RETRY_MAX_SECONDS", "12.0"))
+DEFAULT_MODEL_RETRY_MAX_SECONDS = float(os.getenv("LLM_RETRY_MAX_SECONDS", "60.0"))
+DEFAULT_ENABLE_PROMPT_CACHING = str(os.getenv("LLM_ENABLE_PROMPT_CACHING", "1")).strip().lower() in (
+    "1", "true", "yes", "on"
+)
+DEFAULT_ENABLE_SEGMENTED_PROMPT_CACHING = str(
+    os.getenv("LLM_ENABLE_SEGMENTED_PROMPT_CACHING", "1")
+).strip().lower() in ("1", "true", "yes", "on")
+DEFAULT_OPUS46_ITPM_LIMIT = int(os.getenv("LLM_OPUS46_ITPM_LIMIT", "200000"))
+DEFAULT_OPUS46_OTPM_LIMIT = int(os.getenv("LLM_OPUS46_OTPM_LIMIT", "20000"))
 
 _MLFLOW_AUTOLOG_LOCK = threading.Lock()
 _MLFLOW_AUTOLOG_INITIALIZED = False
 _MLFLOW_AUTOLOG_DISABLED = False
+_MODEL_RATE_LIMIT_LOCK = threading.Lock()
+_MODEL_RATE_LIMIT_UNTIL_TS = 0.0
+_MODEL_RATE_LIMIT_STREAK = 0
 
 
 def _normalize_mlflow_tag_value(value: Any) -> str:
@@ -383,6 +394,80 @@ L200_PASS2_V10_JSON_SCHEMA = {
     "strict": True,
 }
 
+_V11_BULLET_CITATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "citation_id": {"type": "string"},
+        "source_index": {"type": "integer"},
+        "source_quote": {"type": "string"},
+    },
+    "required": ["source_index", "source_quote"],
+    "additionalProperties": False,
+}
+
+_V11_L200_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "citations": {"type": "array", "items": _V11_BULLET_CITATION_SCHEMA},
+    },
+    "required": ["text", "citations"],
+    "additionalProperties": False,
+}
+
+_V11_HEADLINE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "citations": {"type": "array", "items": _V11_BULLET_CITATION_SCHEMA},
+    },
+    "required": ["text", "citations"],
+    "additionalProperties": False,
+}
+
+_V11_SIDE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "headline": _V11_HEADLINE_SCHEMA,
+        "l200": {"type": "array", "items": _V11_L200_ITEM_SCHEMA},
+    },
+    "required": ["headline", "l200"],
+    "additionalProperties": False,
+}
+
+L200_PASS2_V11_JSON_SCHEMA = {
+    "name": "l200_diff_detail_v11",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "claims": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "databricks": _V11_SIDE_SCHEMA,
+                        "competitor": _V11_SIDE_SCHEMA,
+                        "sources": {"type": "array", "items": _SOURCE_ITEM_SCHEMA},
+                        "research_sources": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["id", "databricks", "competitor", "sources", "research_sources"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["claims"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+L200_PASS2_V12_JSON_SCHEMA = {
+    "name": "l200_diff_detail_v12",
+    "schema": L200_PASS2_V11_JSON_SCHEMA["schema"],
+    "strict": True,
+}
+
 _BATCH_LEGACY_CLAIM_ITEM_SCHEMA = {
     "type": "object",
     "properties": {
@@ -506,6 +591,90 @@ def _extract_status_code(exc: Exception) -> Optional[int]:
     return None
 
 
+def _extract_retry_after_seconds(exc: Exception) -> Optional[float]:
+    """Best-effort extraction of Retry-After from exception response headers."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None) if response is not None else None
+    if not headers:
+        return None
+
+    val = None
+    if isinstance(headers, dict):
+        val = headers.get("retry-after") or headers.get("Retry-After")
+    else:
+        # requests-like header mapping
+        val = getattr(headers, "get", lambda *_: None)("retry-after")
+        if val is None:
+            val = getattr(headers, "get", lambda *_: None)("Retry-After")
+    if val is None:
+        return None
+    try:
+        parsed = float(str(val).strip())
+        return parsed if parsed >= 0 else None
+    except Exception:
+        return None
+
+
+def _is_output_token_rate_limit(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return (
+        "output tokens per minute" in msg
+        or "request_limit_exceeded" in msg
+    )
+
+
+def _wait_for_shared_rate_limit_window(operation_name: str, model_name: str):
+    """Block until shared 429 cooldown window has elapsed."""
+    while True:
+        with _MODEL_RATE_LIMIT_LOCK:
+            wait_seconds = max(0.0, _MODEL_RATE_LIMIT_UNTIL_TS - time.time())
+        if wait_seconds <= 0:
+            return
+        sleep_for = min(wait_seconds, 5.0)
+        logger.info(
+            "Model call delayed for shared rate-limit cooldown: %s (%s), waiting %.2fs",
+            operation_name,
+            model_name,
+            wait_seconds,
+        )
+        time.sleep(sleep_for)
+
+
+def _register_shared_rate_limit_backoff(
+    exc: Exception,
+    *,
+    base_delay: float,
+    max_delay: float,
+) -> float:
+    """Advance shared cooldown after 429 and return recommended wait seconds."""
+    global _MODEL_RATE_LIMIT_UNTIL_TS, _MODEL_RATE_LIMIT_STREAK
+
+    retry_after = _extract_retry_after_seconds(exc)
+    output_tpm = _is_output_token_rate_limit(exc)
+    now = time.time()
+
+    with _MODEL_RATE_LIMIT_LOCK:
+        _MODEL_RATE_LIMIT_STREAK = min(_MODEL_RATE_LIMIT_STREAK + 1, 8)
+        streak_factor = 2 ** max(0, _MODEL_RATE_LIMIT_STREAK - 1)
+        adaptive = min(max_delay, base_delay * streak_factor)
+        floor = 15.0 if output_tpm else 3.0
+        jitter = random.uniform(0.0, min(3.0, adaptive * 0.3))
+        hold_seconds = retry_after if retry_after is not None else (max(floor, adaptive) + jitter)
+        hold_seconds = min(180.0, max(0.5, hold_seconds))
+        target_ts = now + hold_seconds
+        if target_ts > _MODEL_RATE_LIMIT_UNTIL_TS:
+            _MODEL_RATE_LIMIT_UNTIL_TS = target_ts
+        return max(0.0, _MODEL_RATE_LIMIT_UNTIL_TS - now)
+
+
+def _register_model_call_success():
+    """Gradually relax shared cooldown aggressiveness on successful calls."""
+    global _MODEL_RATE_LIMIT_STREAK
+    with _MODEL_RATE_LIMIT_LOCK:
+        if _MODEL_RATE_LIMIT_STREAK > 0:
+            _MODEL_RATE_LIMIT_STREAK -= 1
+
+
 def _is_retryable_model_error(exc: Exception) -> bool:
     """Return True for transient model-serving failures worth retrying."""
     status_code = _extract_status_code(exc)
@@ -547,8 +716,11 @@ def _call_databricks_model_with_backoff(
 
     last_exc = None
     for attempt in range(1, attempts + 1):
+        _wait_for_shared_rate_limit_window(operation_name, model_name)
         try:
-            return fn()
+            result = fn()
+            _register_model_call_success()
+            return result
         except Exception as exc:
             last_exc = exc
             retryable = _is_retryable_model_error(exc)
@@ -556,8 +728,17 @@ def _call_databricks_model_with_backoff(
                 raise
 
             backoff_cap = min(max_delay, base_delay * (2 ** (attempt - 1)))
-            sleep_seconds = random.uniform(0, backoff_cap)
             status_code = _extract_status_code(exc)
+            if status_code == 429:
+                shared_wait = _register_shared_rate_limit_backoff(
+                    exc,
+                    base_delay=base_delay,
+                    max_delay=max_delay,
+                )
+                jitter_wait = random.uniform(0.0, max(0.1, min(backoff_cap, 3.0)))
+                sleep_seconds = max(shared_wait, jitter_wait)
+            else:
+                sleep_seconds = random.uniform(0, backoff_cap)
             logger.warning(
                 "Model call retry for %s (%s): attempt %d/%d failed%s; backing off %.2fs",
                 operation_name,
@@ -572,6 +753,130 @@ def _call_databricks_model_with_backoff(
         raise last_exc
 
 
+def _model_supports_prompt_caching(model_name: str) -> bool:
+    name = str(model_name or "").lower()
+    return "claude" in name
+
+
+def _split_prompt_for_segmented_cache(rendered_prompt: str) -> tuple[Optional[str], Optional[str]]:
+    """Split prompt into cache-stable prefix and dynamic tail when possible."""
+    marker = "## Batch Inputs (changes per run)"
+    idx = rendered_prompt.find(marker)
+    if idx <= 0:
+        return None, None
+    static_part = rendered_prompt[:idx].rstrip()
+    dynamic_part = rendered_prompt[idx:].lstrip()
+    if not static_part or not dynamic_part:
+        return None, None
+    return static_part, dynamic_part
+
+
+def _build_chat_messages(
+    rendered_prompt: str,
+    model_name: str,
+    prompt_caching: Optional[bool],
+    segmented_prompt_caching: Optional[bool] = None,
+) -> tuple[list, bool, str]:
+    """Build chat messages and optionally apply Databricks prompt caching format."""
+    cache_enabled = DEFAULT_ENABLE_PROMPT_CACHING if prompt_caching is None else bool(prompt_caching)
+    cache_applied = bool(cache_enabled and _model_supports_prompt_caching(model_name))
+    segmented_enabled = (
+        DEFAULT_ENABLE_SEGMENTED_PROMPT_CACHING
+        if segmented_prompt_caching is None
+        else bool(segmented_prompt_caching)
+    )
+    if cache_applied:
+        if segmented_enabled:
+            static_part, dynamic_part = _split_prompt_for_segmented_cache(rendered_prompt)
+            if static_part and dynamic_part:
+                content = [
+                    {
+                        "type": "text",
+                        "text": static_part,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "text",
+                        "text": dynamic_part,
+                    },
+                ]
+                return [{"role": "user", "content": content}], True, "segmented_text_content_with_cache_control"
+        content = [
+            {
+                "type": "text",
+                "text": rendered_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        return [{"role": "user", "content": content}], True, "text_content_with_cache_control"
+    return [{"role": "user", "content": rendered_prompt}], False, "string"
+
+
+def _extract_usage_from_response(response: Any) -> Dict[str, int]:
+    """Extract usage counters from OpenAI-compatible response object."""
+    usage_obj = getattr(response, "usage", None)
+    usage_dict = {}
+    if usage_obj is not None:
+        if hasattr(usage_obj, "model_dump"):
+            try:
+                usage_dict = usage_obj.model_dump()
+            except Exception:
+                usage_dict = {}
+        elif isinstance(usage_obj, dict):
+            usage_dict = usage_obj
+
+    if not usage_dict and hasattr(response, "model_dump"):
+        try:
+            raw = response.model_dump()
+            if isinstance(raw, dict):
+                usage_dict = raw.get("usage") or {}
+        except Exception:
+            usage_dict = {}
+
+    def _as_int(v) -> int:
+        try:
+            return int(v or 0)
+        except Exception:
+            return 0
+
+    prompt_tokens = _as_int(usage_dict.get("prompt_tokens", usage_dict.get("input_tokens")))
+    completion_tokens = _as_int(usage_dict.get("completion_tokens", usage_dict.get("output_tokens")))
+    total_tokens = _as_int(usage_dict.get("total_tokens"))
+    if total_tokens <= 0:
+        total_tokens = prompt_tokens + completion_tokens
+
+    prompt_details = usage_dict.get("prompt_tokens_details") or {}
+    if not isinstance(prompt_details, dict):
+        prompt_details = {}
+    cache_read_input_tokens = _as_int(
+        usage_dict.get(
+            "cache_read_input_tokens",
+            prompt_details.get("cache_read_input_tokens", prompt_details.get("cached_tokens", 0)),
+        )
+    )
+    cache_creation_input_tokens = _as_int(
+        usage_dict.get(
+            "cache_creation_input_tokens",
+            prompt_details.get("cache_creation_input_tokens", prompt_details.get("cache_write_input_tokens", 0)),
+        )
+    )
+    cached_input_tokens = _as_int(
+        prompt_details.get(
+            "cached_tokens",
+            usage_dict.get("cache_read_input_tokens", prompt_details.get("cache_read_input_tokens", 0)),
+        )
+    )
+
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "cache_read_input_tokens": cache_read_input_tokens,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+    }
+
+
 def call_model(
     client: OpenAI,
     model_name: str,
@@ -581,15 +886,24 @@ def call_model(
     max_tokens: int = DEFAULT_MODEL_MAX_TOKENS,
     timeout_seconds: float = DEFAULT_MODEL_TIMEOUT_SECONDS,
     trace_context: Optional[Dict[str, Any]] = None,
+    prompt_caching: Optional[bool] = None,
+    segmented_prompt_caching: Optional[bool] = None,
+    usage_callback=None,
 ) -> str:
     """Call the model via Databricks Model Serving with optional structured output.
 
     Returns the raw response content as a string. If the SDK returns a parsed
     object (list/dict), it's re-serialized to JSON string for consistent handling.
     """
+    messages, cache_applied, _message_type = _build_chat_messages(
+        rendered_prompt,
+        model_name,
+        prompt_caching,
+        segmented_prompt_caching=segmented_prompt_caching,
+    )
     kwargs = {
         "model": model_name,
-        "messages": [{"role": "user", "content": rendered_prompt}],
+        "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
         "timeout": timeout_seconds,
@@ -606,6 +920,19 @@ def call_model(
             lambda: client.chat.completions.create(**kwargs),
             model_name=model_name,
             operation_name="chat.completions.create",
+        )
+    usage = _extract_usage_from_response(response)
+    if usage_callback:
+        try:
+            usage_callback(usage)
+        except Exception:
+            logger.exception("usage_callback failed for chat.completions.create")
+    if cache_applied:
+        logger.info(
+            "Prompt caching enabled for model %s (prompt_tokens=%d, completion_tokens=%d)",
+            model_name,
+            usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
         )
     content = response.choices[0].message.content
 
@@ -627,6 +954,9 @@ def call_model_with_debug(
     max_tokens: int = DEFAULT_MODEL_MAX_TOKENS,
     timeout_seconds: float = DEFAULT_MODEL_TIMEOUT_SECONDS,
     trace_context: Optional[Dict[str, Any]] = None,
+    prompt_caching: Optional[bool] = None,
+    segmented_prompt_caching: Optional[bool] = None,
+    usage_callback=None,
 ) -> Dict[str, Any]:
     """Call the model and return detailed debug info including request/response.
 
@@ -636,9 +966,15 @@ def call_model_with_debug(
       - api_response_raw: The raw response object as dict
       - response_was_parsed: Whether SDK returned pre-parsed JSON
     """
+    messages, cache_applied, message_type = _build_chat_messages(
+        rendered_prompt,
+        model_name,
+        prompt_caching,
+        segmented_prompt_caching=segmented_prompt_caching,
+    )
     kwargs = {
         "model": model_name,
-        "messages": [{"role": "user", "content": rendered_prompt}],
+        "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
         "timeout": timeout_seconds,
@@ -662,6 +998,12 @@ def call_model_with_debug(
         api_response_raw = response.model_dump() if hasattr(response, 'model_dump') else str(response)
     except Exception:
         api_response_raw = str(response)
+    usage = _extract_usage_from_response(response)
+    if usage_callback:
+        try:
+            usage_callback(usage)
+        except Exception:
+            logger.exception("usage_callback failed for chat.completions.create(debug)")
 
     content = response.choices[0].message.content
     response_was_parsed = False
@@ -674,10 +1016,22 @@ def call_model_with_debug(
 
     return {
         "content": content,
-        "api_request": {k: v for k, v in kwargs.items() if k != "messages"},  # Exclude large prompt
+        "api_request": {
+            **{k: v for k, v in kwargs.items() if k != "messages"},
+            "prompt_caching_enabled": bool(prompt_caching if prompt_caching is not None else DEFAULT_ENABLE_PROMPT_CACHING),
+            "segmented_prompt_caching_enabled": bool(
+                segmented_prompt_caching
+                if segmented_prompt_caching is not None
+                else DEFAULT_ENABLE_SEGMENTED_PROMPT_CACHING
+            ),
+            "cache_applied": cache_applied,
+            "message_content_type": message_type,
+        },
         "api_request_full": kwargs,  # Full request including messages
         "api_response_raw": api_response_raw,
         "response_was_parsed": response_was_parsed,
+        "usage": usage,
+        "cache_applied": cache_applied,
     }
 
 
@@ -916,8 +1270,17 @@ def load_pass2_template(version: int, engine=None) -> str:
         from app import PASS2_PROMPT_TEMPLATES
         cfg = PASS2_PROMPT_TEMPLATES.get(version)
         if cfg:
-            if "template" in cfg:
-                return cfg["template"]
+            template_text = cfg.get("template")
+            if isinstance(template_text, str) and template_text and template_text != "inline":
+                return template_text
+            if template_text == "inline":
+                # Inline-only prompt versions are expected to be hydrated in DB.
+                # If DB rows are missing, fall back to known inline strings from app seeds.
+                from app import _PASS2_INLINE_FALLBACKS  # type: ignore
+                inline_fallbacks = _PASS2_INLINE_FALLBACKS or {}
+                fallback_text = inline_fallbacks.get(int(version or 0))
+                if isinstance(fallback_text, str) and fallback_text.strip():
+                    return fallback_text
             if "file" in cfg:
                 return load_prompt_template(cfg["file"])
     except ImportError:
@@ -1052,6 +1415,8 @@ def _resolve_pass2_schema_alias(schema_name: str) -> Optional[Dict[str, Any]]:
     lookup = {
         L200_PASS2_JSON_SCHEMA["name"]: L200_PASS2_JSON_SCHEMA,
         L200_PASS2_V10_JSON_SCHEMA["name"]: L200_PASS2_V10_JSON_SCHEMA,
+        L200_PASS2_V11_JSON_SCHEMA["name"]: L200_PASS2_V11_JSON_SCHEMA,
+        L200_PASS2_V12_JSON_SCHEMA["name"]: L200_PASS2_V12_JSON_SCHEMA,
         L200_PASS2_BATCH_JSON_SCHEMA["name"]: L200_PASS2_BATCH_JSON_SCHEMA,
     }
     return lookup.get(name)
@@ -1059,7 +1424,11 @@ def _resolve_pass2_schema_alias(schema_name: str) -> Optional[Dict[str, Any]]:
 
 def _default_pass2_request_spec(version: int) -> Dict[str, Any]:
     ver = int(version or 0)
-    if ver == 10:
+    if ver == 12:
+        schema = L200_PASS2_V12_JSON_SCHEMA
+    elif ver == 11:
+        schema = L200_PASS2_V11_JSON_SCHEMA
+    elif ver == 10:
         schema = L200_PASS2_V10_JSON_SCHEMA
     elif ver in (5, 6, 7, 8, 9):
         schema = L200_PASS2_BATCH_JSON_SCHEMA
@@ -1073,8 +1442,10 @@ def _default_pass2_request_spec(version: int) -> Dict[str, Any]:
         "request_config": {
             "structured_output": True,
             "response_format_type": "json_schema",
-            "supports_category_batch": ver in (5, 6, 7, 8, 9, 10),
+            "supports_category_batch": ver in (5, 6, 7, 8, 9, 10, 11, 12),
             "supports_single_call": ver in (8,),
+            "prompt_caching": ver >= 10,
+            "segmented_prompt_caching": ver >= 12,
         },
         "binding_source": "builtin",
     }
@@ -1231,6 +1602,23 @@ class WorkflowRunner:
         self.session_id = session_id
         self.engine = engine
         self.worker_id = self._get_worker_id()
+        self._usage_lock = threading.Lock()
+        self._usage_events = []
+        self._usage_totals = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
+        self._latest_tpm_snapshot = {
+            "input_tpm": 0,
+            "output_tpm": 0,
+            "total_tpm": 0,
+            "input_limit": None,
+            "output_limit": None,
+        }
         self._load_session()
         self.client = get_openai_client()
 
@@ -1357,37 +1745,86 @@ class WorkflowRunner:
         """Save a Pass 2 debug log entry to the database (upsert by session_id + skeleton_index)."""
         try:
             with self.engine.begin() as conn:
-                conn.execute(
-                    text("""
-                        INSERT INTO pass2_debug_logs (
-                            session_id, skeleton_index, key_differentiator, category,
-                            rendered_prompt, api_request_json, api_response_raw,
-                            structured_output, response_type, was_list_fixed,
-                            lakebase_saved, lakebase_error, error_message, processing_time_ms
-                        ) VALUES (
-                            CAST(:session_id AS uuid), :skeleton_index, :key_differentiator, :category,
-                            :rendered_prompt, :api_request_json, :api_response_raw,
-                            :structured_output, :response_type, :was_list_fixed,
-                            :lakebase_saved, :lakebase_error, :error_message, :processing_time_ms
-                        )
-                        ON CONFLICT (session_id, skeleton_index)
-                        DO UPDATE SET
-                            key_differentiator = EXCLUDED.key_differentiator,
-                            category = EXCLUDED.category,
-                            rendered_prompt = EXCLUDED.rendered_prompt,
-                            api_request_json = EXCLUDED.api_request_json,
-                            api_response_raw = EXCLUDED.api_response_raw,
-                            structured_output = EXCLUDED.structured_output,
-                            response_type = EXCLUDED.response_type,
-                            was_list_fixed = EXCLUDED.was_list_fixed,
-                            lakebase_saved = EXCLUDED.lakebase_saved,
-                            lakebase_error = EXCLUDED.lakebase_error,
-                            error_message = EXCLUDED.error_message,
-                            processing_time_ms = EXCLUDED.processing_time_ms,
-                            created_at = NOW()
-                    """),
-                    debug_log,
-                )
+                try:
+                    conn.execute(
+                        text("""
+                            INSERT INTO pass2_debug_logs (
+                                session_id, skeleton_index, key_differentiator, category,
+                                rendered_prompt, api_request_json, api_response_raw,
+                                structured_output, response_type, was_list_fixed,
+                                lakebase_saved, lakebase_error, error_message, processing_time_ms,
+                                input_tokens, output_tokens, total_tokens,
+                                input_tpm, output_tpm, total_tpm,
+                                cache_applied, cached_input_tokens
+                            ) VALUES (
+                                CAST(:session_id AS uuid), :skeleton_index, :key_differentiator, :category,
+                                :rendered_prompt, :api_request_json, :api_response_raw,
+                                :structured_output, :response_type, :was_list_fixed,
+                                :lakebase_saved, :lakebase_error, :error_message, :processing_time_ms,
+                                :input_tokens, :output_tokens, :total_tokens,
+                                :input_tpm, :output_tpm, :total_tpm,
+                                :cache_applied, :cached_input_tokens
+                            )
+                            ON CONFLICT (session_id, skeleton_index)
+                            DO UPDATE SET
+                                key_differentiator = EXCLUDED.key_differentiator,
+                                category = EXCLUDED.category,
+                                rendered_prompt = EXCLUDED.rendered_prompt,
+                                api_request_json = EXCLUDED.api_request_json,
+                                api_response_raw = EXCLUDED.api_response_raw,
+                                structured_output = EXCLUDED.structured_output,
+                                response_type = EXCLUDED.response_type,
+                                was_list_fixed = EXCLUDED.was_list_fixed,
+                                lakebase_saved = EXCLUDED.lakebase_saved,
+                                lakebase_error = EXCLUDED.lakebase_error,
+                                error_message = EXCLUDED.error_message,
+                                processing_time_ms = EXCLUDED.processing_time_ms,
+                                input_tokens = EXCLUDED.input_tokens,
+                                output_tokens = EXCLUDED.output_tokens,
+                                total_tokens = EXCLUDED.total_tokens,
+                                input_tpm = EXCLUDED.input_tpm,
+                                output_tpm = EXCLUDED.output_tpm,
+                                total_tpm = EXCLUDED.total_tpm,
+                                cache_applied = EXCLUDED.cache_applied,
+                                cached_input_tokens = EXCLUDED.cached_input_tokens,
+                                created_at = NOW()
+                        """),
+                        debug_log,
+                    )
+                except Exception as inner_exc:
+                    if "column \"input_tokens\" of relation \"pass2_debug_logs\" does not exist" not in str(inner_exc):
+                        raise
+                    conn.execute(
+                        text("""
+                            INSERT INTO pass2_debug_logs (
+                                session_id, skeleton_index, key_differentiator, category,
+                                rendered_prompt, api_request_json, api_response_raw,
+                                structured_output, response_type, was_list_fixed,
+                                lakebase_saved, lakebase_error, error_message, processing_time_ms
+                            ) VALUES (
+                                CAST(:session_id AS uuid), :skeleton_index, :key_differentiator, :category,
+                                :rendered_prompt, :api_request_json, :api_response_raw,
+                                :structured_output, :response_type, :was_list_fixed,
+                                :lakebase_saved, :lakebase_error, :error_message, :processing_time_ms
+                            )
+                            ON CONFLICT (session_id, skeleton_index)
+                            DO UPDATE SET
+                                key_differentiator = EXCLUDED.key_differentiator,
+                                category = EXCLUDED.category,
+                                rendered_prompt = EXCLUDED.rendered_prompt,
+                                api_request_json = EXCLUDED.api_request_json,
+                                api_response_raw = EXCLUDED.api_response_raw,
+                                structured_output = EXCLUDED.structured_output,
+                                response_type = EXCLUDED.response_type,
+                                was_list_fixed = EXCLUDED.was_list_fixed,
+                                lakebase_saved = EXCLUDED.lakebase_saved,
+                                lakebase_error = EXCLUDED.lakebase_error,
+                                error_message = EXCLUDED.error_message,
+                                processing_time_ms = EXCLUDED.processing_time_ms,
+                                created_at = NOW()
+                        """),
+                        debug_log,
+                    )
         except Exception as e:
             logger.error("Failed to save Pass 2 debug log for skeleton %d: %s", debug_log.get("skeleton_index"), e)
 
@@ -1573,8 +2010,120 @@ class WorkflowRunner:
             return len(_TIKTOKEN_ENCODING.encode(text_content))
         return len(text_content) // 4  # rough char-based estimate
 
+    def _model_tpm_limits(self) -> tuple[Optional[int], Optional[int]]:
+        name = str(getattr(self, "model_name", "") or "").lower()
+        if "claude-opus-4-6" in name or "opus-4-6" in name:
+            return DEFAULT_OPUS46_ITPM_LIMIT, DEFAULT_OPUS46_OTPM_LIMIT
+        return None, None
+
+    def _snapshot_tpm(self) -> Dict[str, Any]:
+        now = time.time()
+        with self._usage_lock:
+            self._usage_events = [e for e in self._usage_events if now - e["ts"] <= 60.0]
+            input_tpm = sum(e["input_tokens"] for e in self._usage_events)
+            output_tpm = sum(e["output_tokens"] for e in self._usage_events)
+            total_tpm = sum(e["total_tokens"] for e in self._usage_events)
+            snapshot = {
+                "input_tpm": int(input_tpm),
+                "output_tpm": int(output_tpm),
+                "total_tpm": int(total_tpm),
+                "total_input_tokens": int(self._usage_totals["input_tokens"]),
+                "total_output_tokens": int(self._usage_totals["output_tokens"]),
+                "total_tokens": int(self._usage_totals["total_tokens"]),
+                "cached_input_tokens": int(self._usage_totals["cached_input_tokens"]),
+                "cache_read_input_tokens": int(self._usage_totals["cache_read_input_tokens"]),
+                "cache_creation_input_tokens": int(self._usage_totals["cache_creation_input_tokens"]),
+            }
+        input_limit, output_limit = self._model_tpm_limits()
+        snapshot["input_limit"] = int(input_limit) if input_limit else None
+        snapshot["output_limit"] = int(output_limit) if output_limit else None
+        self._latest_tpm_snapshot = snapshot
+        return snapshot
+
+    def _record_token_usage(self, usage: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        usage = usage or {}
+        input_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        output_tokens = int(usage.get("completion_tokens", 0) or 0)
+        total_tokens = int(usage.get("total_tokens", input_tokens + output_tokens) or 0)
+        cached_input_tokens = int(usage.get("cached_input_tokens", 0) or 0)
+        cache_read_input_tokens = int(usage.get("cache_read_input_tokens", cached_input_tokens) or 0)
+        cache_creation_input_tokens = int(usage.get("cache_creation_input_tokens", 0) or 0)
+        if total_tokens <= 0:
+            total_tokens = input_tokens + output_tokens
+        event = {
+            "ts": time.time(),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "cached_input_tokens": cached_input_tokens,
+            "cache_read_input_tokens": cache_read_input_tokens,
+            "cache_creation_input_tokens": cache_creation_input_tokens,
+        }
+        with self._usage_lock:
+            self._usage_events.append(event)
+            self._usage_totals["input_tokens"] += input_tokens
+            self._usage_totals["output_tokens"] += output_tokens
+            self._usage_totals["total_tokens"] += total_tokens
+            self._usage_totals["cached_input_tokens"] += cached_input_tokens
+            self._usage_totals["cache_read_input_tokens"] += cache_read_input_tokens
+            self._usage_totals["cache_creation_input_tokens"] += cache_creation_input_tokens
+        return self._snapshot_tpm()
+
+    def _tpm_status_suffix(self) -> str:
+        snap = self._snapshot_tpm()
+        in_limit = snap.get("input_limit")
+        out_limit = snap.get("output_limit")
+        if in_limit and out_limit:
+            return (
+                f" | ITPM {snap['input_tpm']:,}/{in_limit:,} "
+                f"OTPM {snap['output_tpm']:,}/{out_limit:,}"
+            )
+        return f" | ITPM {snap['input_tpm']:,} OTPM {snap['output_tpm']:,}"
+
+    def _usage_summary(self) -> Dict[str, Any]:
+        snap = self._snapshot_tpm()
+        return {
+            "totals": {
+                "input_tokens": snap.get("total_input_tokens", 0),
+                "output_tokens": snap.get("total_output_tokens", 0),
+                "total_tokens": snap.get("total_tokens", 0),
+                "cached_input_tokens": snap.get("cached_input_tokens", 0),
+                "cache_read_input_tokens": snap.get("cache_read_input_tokens", 0),
+                "cache_creation_input_tokens": snap.get("cache_creation_input_tokens", 0),
+            },
+            "current_tpm": {
+                "input_tpm": snap.get("input_tpm", 0),
+                "output_tpm": snap.get("output_tpm", 0),
+                "total_tpm": snap.get("total_tpm", 0),
+            },
+            "limits": {
+                "input_tpm_limit": snap.get("input_limit"),
+                "output_tpm_limit": snap.get("output_limit"),
+            },
+        }
+
+    def _throttle_for_tpm_budget(self):
+        """Best-effort proactive throttle before model calls to reduce 429 bursts."""
+        snap = self._snapshot_tpm()
+        in_limit = snap.get("input_limit")
+        out_limit = snap.get("output_limit")
+        sleep_seconds = 0.0
+        if in_limit and snap["input_tpm"] >= int(in_limit * 0.92):
+            sleep_seconds = max(sleep_seconds, 6.0)
+        if out_limit and snap["output_tpm"] >= int(out_limit * 0.88):
+            sleep_seconds = max(sleep_seconds, 10.0)
+        if sleep_seconds > 0:
+            logger.info(
+                "Proactive TPM throttle for session %s: sleeping %.1fs (ITPM=%s OTPM=%s)",
+                self.session_id,
+                sleep_seconds,
+                snap.get("input_tpm"),
+                snap.get("output_tpm"),
+            )
+            time.sleep(sleep_seconds)
+
     def _pass2_supports_category_batch(self, version: int) -> bool:
-        return int(version or 0) in (5, 6, 7, 8, 9, 10)
+        return int(version or 0) in (5, 6, 7, 8, 9, 10, 11, 12)
 
     def _pass2_supports_single_call(self, version: int) -> bool:
         return int(version or 0) in (8,)
@@ -1600,6 +2149,16 @@ class WorkflowRunner:
             return {"runtime_mode": "category_sequential", "parallel": False, "workers": 1}
 
         # auto
+        if pass1_version >= 3 and core_count > 1:
+            if workers > 1:
+                return {
+                    "runtime_mode": "category_parallel",
+                    "parallel": True,
+                    "workers": min(workers, core_count, 6),
+                }
+            # With one worker, still batch by category so each batch can be
+            # persisted incrementally to Lakebase instead of one final write.
+            return {"runtime_mode": "category_sequential", "parallel": False, "workers": 1}
         use_parallel = bool(pass1_version >= 3 and workers > 1 and core_count > 1)
         if use_parallel:
             return {
@@ -1616,6 +2175,8 @@ class WorkflowRunner:
         total_diffs = max(0, int(total_diffs or 0))
         supports_category = self._pass2_supports_category_batch(pass2_version)
         supports_single = self._pass2_supports_single_call(pass2_version)
+        model_lc = str(getattr(self, "model_name", "") or "").lower()
+        high_output_model = any(tag in model_lc for tag in ("opus", "gpt-5", "llama-70b"))
 
         def _per_diff(parallel: bool, fallback_reason: Optional[str] = None):
             use_parallel = parallel and workers > 1 and total_diffs > 1
@@ -1640,10 +2201,20 @@ class WorkflowRunner:
                 return {"runtime_mode": "single_call", "parallel": False, "workers": 1, "fallback_reason": None}
             return _per_diff(False, f"Prompt V{pass2_version} does not support single-call batching")
         if mode == "per_diff_parallel":
+            if high_output_model and total_diffs >= 20:
+                return _per_diff(
+                    False,
+                    f"Selected model '{self.model_name}' is output-rate-limited at this workload; forced sequential per-diff mode",
+                )
             return _per_diff(True)
         if mode == "per_diff_sequential":
             return _per_diff(False)
         if mode == "category_parallel":
+            if high_output_model and total_diffs >= 20:
+                return _per_diff(
+                    False,
+                    f"Selected model '{self.model_name}' is output-rate-limited at this workload; forced sequential per-diff mode",
+                )
             if supports_category:
                 return _category(True)
             return _per_diff(False, f"Prompt V{pass2_version} does not support category batching")
@@ -1653,7 +2224,23 @@ class WorkflowRunner:
             return _per_diff(False, f"Prompt V{pass2_version} does not support category batching")
 
         # auto
-        if pass2_version in (5, 6, 7, 8, 9, 10):
+        # V10 has much denser nested output (headline + per-bullet citations + L300),
+        # and V11 can still produce high token output at large scale.
+        if pass2_version in (10, 11, 12) and high_output_model and total_diffs >= 20:
+            return _per_diff(
+                False,
+                f"Auto-selected per-diff sequential mode for Pass 2 V{pass2_version} on high-output model to avoid output-token TPM limits",
+            )
+        if pass2_version == 10:
+            return _per_diff(True, "Auto-selected per-diff mode for Pass 2 V10 to reduce batch truncation/fallback risk")
+        if pass2_version in (11, 12):
+            return _category(True)
+        if pass2_version in (5, 6, 7, 8, 9) and high_output_model and total_diffs >= 20:
+            return _per_diff(
+                False,
+                "Auto-selected per-diff sequential mode on high-output model to avoid output-token TPM limits",
+            )
+        if pass2_version in (5, 6, 7, 8, 9):
             return _category(True)
         return _per_diff(True)
 
@@ -1875,11 +2462,28 @@ class WorkflowRunner:
         if feedback:
             rendered += f"\n\n## Previous Feedback\n{feedback}\n\nPlease regenerate incorporating this feedback."
 
+        _msg_preview, cache_applied, _msg_type = _build_chat_messages(
+            rendered,
+            self.model_name,
+            prompt_caching=None,
+            segmented_prompt_caching=None,
+        )
+        _ = _msg_preview  # keep local intent explicit; call_model rebuilds the canonical payload
+
+        usage_holder = {}
+
+        def _capture_usage(usage):
+            if not isinstance(usage, dict):
+                return
+            usage_holder.update(usage)
+            self._record_token_usage(usage)
+
         raw = call_model(
             client=self.client,
             model_name=self.model_name,
             rendered_prompt=rendered,
             json_schema=pass1_json_schema,
+            usage_callback=_capture_usage,
         )
         skeletons = json.loads(raw).get("slides", [])
 
@@ -1894,7 +2498,11 @@ class WorkflowRunner:
             key_diff_part = old_id.split("_", 1)[-1] if "_" in old_id else sk.get("key_differentiator", "unknown").replace(" ", "_")
             sk["id"] = f"{category.replace(' ', '_')}_{key_diff_part}"
 
-        return skeletons
+        return {
+            "skeletons": skeletons,
+            "usage": usage_holder,
+            "cache_applied": bool(cache_applied),
+        }
 
     def _stub_pass1_category(self, category):
         """Create N stub skeletons for a category that failed (fallback on error)."""
@@ -2093,6 +2701,9 @@ class WorkflowRunner:
             if use_parallel_pass1:
                 errors = []
                 completed = 0
+                written_batches = 0
+                batch_timeline = []
+                batch_sequence = 0
                 workers_label = (
                     f"{step4_workers} parallel workers"
                     if per_category_parallel and step4_workers > 1
@@ -2109,6 +2720,39 @@ class WorkflowRunner:
 
                 num_cats = len(core_cats_with_ids)
                 core_cat_names = [c["category_name"] for c in core_cats_with_ids]
+
+                def _iso_from_ts(ts: float | None) -> str | None:
+                    if ts is None:
+                        return None
+                    return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+
+                def _save_pass1_partial(accumulated_skeletons, completed_cat_names):
+                    self._save_artifact(
+                        4,
+                        "pass1_skeletons",
+                        "key_differentiators.json",
+                        json.dumps(accumulated_skeletons, indent=2),
+                        metadata={
+                            "count": len(accumulated_skeletons),
+                            "total": total_diffs,
+                            "generated_count": len(accumulated_skeletons),
+                            "written_count": written_batches * self.diffs_per_category,
+                            "partial": completed < num_cats,
+                            "completed_categories": completed,
+                            "written_categories": written_batches,
+                            "total_categories": num_cats,
+                            "categories": completed_cat_names,
+                            "model": self.model_name,
+                            "prompt_version_id": pass1_version_id,
+                            "parallel": per_category_parallel,
+                            "max_workers": step4_workers if per_category_parallel and step4_workers > 1 else 1,
+                            "execution_mode": step4_exec["runtime_mode"],
+                            "errors": errors,
+                            "batch_timeline": batch_timeline,
+                            "token_usage": self._usage_summary(),
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
 
                 # Record a representative prompt for the first category
                 first_cat_name = core_cats_with_ids[0]["category_name"]
@@ -2128,9 +2772,13 @@ class WorkflowRunner:
                 )
                 self._record_turn(4, "system_prompt", "system", "pass1_prompt", representative_prompt, model_name=self.model_name)
 
+                with self.engine.begin() as prep_conn:
+                    prep_gen_id = self._get_or_create_generation_id(prep_conn)
+                    self._clear_generation_step4_rows(prep_conn, int(prep_gen_id))
+
                 self._update_step(4, "in_progress",
                                   progress_message=f"[4/6] Generating diffs — 0/{num_cats} categories done ({workers_label}, model: {self.model_name})...",
-                                  progress_current=3, progress_total=3 + num_cats)
+                                  progress_current=0, progress_total=max(num_cats, 1))
 
                 # Submit one task per core category, using catalog_id as the key
                 futures = {}
@@ -2144,21 +2792,71 @@ class WorkflowRunner:
                         )
                         # Use catalog_id as key (or category_name as fallback)
                         key = cat_info["catalog_id"] if cat_info["catalog_id"] is not None else cat_info["category_name"]
-                        futures[future] = (key, cat_info)
+                        futures[future] = (key, cat_info, time.time())
 
                     # Collect results, saving incremental artifacts as each completes
                     # Key by catalog_id for consistent ordering
                     results_by_id = {}
                     for future in as_completed(futures):
-                        key, cat_info = futures[future]
+                        key, cat_info, gen_started_ts = futures[future]
+                        gen_finished_ts = time.time()
                         cat_name = cat_info["category_name"]
+                        usage = {}
+                        cache_applied = False
                         try:
-                            cat_skeletons = future.result()
-                            results_by_id[key] = cat_skeletons
+                            result_payload = future.result()
+                            cat_skeletons = result_payload.get("skeletons", []) if isinstance(result_payload, dict) else []
+                            usage = result_payload.get("usage", {}) if isinstance(result_payload, dict) else {}
+                            if not isinstance(usage, dict):
+                                usage = {}
+                            cache_applied = bool(result_payload.get("cache_applied", False)) if isinstance(result_payload, dict) else False
                         except Exception as e:
                             logger.error("Pass 1 failed for category '%s' (id=%s): %s", cat_name, key, e)
-                            results_by_id[key] = self._stub_pass1_category(cat_name)
+                            cat_skeletons = self._stub_pass1_category(cat_name)
                             errors.append({"category": cat_name, "catalog_id": cat_info.get("catalog_id"), "error": str(e)})
+
+                        event = {
+                            "batch_id": f"batch-{batch_sequence + 1}",
+                            "sequence": batch_sequence + 1,
+                            "label": cat_name,
+                            "diff_count": len(cat_skeletons or []),
+                            "generate_started_at": _iso_from_ts(gen_started_ts),
+                            "generate_finished_at": _iso_from_ts(gen_finished_ts),
+                            "generate_duration_ms": int(max(gen_finished_ts - gen_started_ts, 0.0) * 1000),
+                            "generated_marker_at": _iso_from_ts(gen_finished_ts),
+                            "status": "pending_write",
+                            "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                            "output_tokens": int(usage.get("completion_tokens", 0) or 0),
+                            "total_tokens": int(usage.get("total_tokens", 0) or 0),
+                            "cache_read_input_tokens": int(usage.get("cache_read_input_tokens", 0) or 0),
+                            "cache_creation_input_tokens": int(usage.get("cache_creation_input_tokens", 0) or 0),
+                            "cached_input_tokens": int(usage.get("cached_input_tokens", 0) or 0),
+                            "cache_applied": bool(cache_applied),
+                        }
+                        batch_sequence += 1
+                        batch_timeline.append(event)
+
+                        write_started_ts = time.time()
+                        event["write_started_at"] = _iso_from_ts(write_started_ts)
+                        try:
+                            cat_skeletons = self._save_skeletons_to_lakebase(cat_skeletons, append=True)
+                            write_finished_ts = time.time()
+                            event["write_finished_at"] = _iso_from_ts(write_finished_ts)
+                            event["write_duration_ms"] = int(max(write_finished_ts - write_started_ts, 0.0) * 1000)
+                            event["written_marker_at"] = event["write_finished_at"]
+                            event["status"] = "written"
+                            event["written_count"] = len(cat_skeletons or [])
+                            written_batches += 1
+                        except Exception as e:
+                            write_finished_ts = time.time()
+                            event["write_finished_at"] = _iso_from_ts(write_finished_ts)
+                            event["write_duration_ms"] = int(max(write_finished_ts - write_started_ts, 0.0) * 1000)
+                            event["status"] = "write_failed"
+                            event["error"] = str(e)[:500]
+                            logger.exception("Pass 1 Lakebase write failed for category '%s'", cat_name)
+                            errors.append({"category": cat_name, "catalog_id": cat_info.get("catalog_id"), "error": f"Lakebase write failed: {e}"})
+
+                        results_by_id[key] = cat_skeletons
 
                         completed += 1
                         error_suffix = f" ({len(errors)} errors)" if errors else ""
@@ -2171,27 +2869,17 @@ class WorkflowRunner:
                                 accumulated.extend(results_by_id[ci_key])
 
                         self._update_step(4, "in_progress",
-                                          progress_current=3 + completed,
-                                          progress_total=3 + num_cats,
-                                          progress_message=f"[4/6] Generating diffs — {completed}/{num_cats} categories done{error_suffix}: {cat_name}")
+                                          progress_current=completed,
+                                          progress_total=max(num_cats, 1),
+                                          progress_message=(
+                                              f"[4/6] Generating diffs — {completed}/{num_cats} categories done{error_suffix}: {cat_name}"
+                                              f"{self._tpm_status_suffix()}"
+                                          ))
 
                         # Incremental save: partial artifact so the frontend can poll and display
-                        partial_content = json.dumps(accumulated, indent=2)
                         completed_cat_names = [ci["category_name"] for ci in core_cats_with_ids
                                                if (ci["catalog_id"] if ci["catalog_id"] is not None else ci["category_name"]) in results_by_id]
-                        self._save_artifact(
-                            4, "pass1_skeletons", "key_differentiators.json",
-                            partial_content,
-                            metadata={
-                                "count": len(accumulated),
-                                "partial": completed < num_cats,
-                                "completed_categories": completed,
-                                "total_categories": num_cats,
-                                "categories": completed_cat_names,
-                                "model": self.model_name,
-                                "prompt_version_id": pass1_version_id,
-                            },
-                        )
+                        _save_pass1_partial(accumulated, completed_cat_names)
 
                 # Reassemble all skeletons in original category order
                 all_skeletons_raw = []
@@ -2210,7 +2898,7 @@ class WorkflowRunner:
                 # Stage 5: Save final artifact
                 self._update_step(4, "in_progress",
                                   progress_message=f"[5/6] Saving {len(all_skeletons)} key differentiators...",
-                                  progress_current=3 + num_cats, progress_total=3 + num_cats + 1)
+                                  progress_current=max(num_cats, 1), progress_total=max(num_cats, 1))
 
                 skeletons_content = json.dumps(all_skeletons, indent=2)
                 art_id = self._save_artifact(
@@ -2218,6 +2906,9 @@ class WorkflowRunner:
                     skeletons_content,
                     metadata={
                         "count": len(all_skeletons),
+                        "total": total_diffs,
+                        "generated_count": len(all_skeletons),
+                        "written_count": written_batches * self.diffs_per_category,
                         "partial": False,
                         "completed_categories": num_cats,
                         "total_categories": num_cats,
@@ -2230,43 +2921,22 @@ class WorkflowRunner:
                         "errors": errors,
                         "validation_warnings": validation_warnings,
                         "raw_count": len(all_skeletons_raw),
+                        "written_categories": written_batches,
+                        "batch_timeline": batch_timeline,
+                        "token_usage": self._usage_summary(),
                     },
                 )
 
                 self._record_turn(4, "model_output", "assistant", "pass1_skeletons", skeletons_content,
                                   model_name=self.model_name, artifact_id=art_id)
 
-                # Stage 6: Save to Lakebase tables
+                # Stage 6: Lakebase writes are already performed per batch
                 self._update_step(4, "in_progress",
-                                  progress_message=f"[6/6] Writing {len(all_skeletons)} key differentiators to database...",
-                                  progress_current=3 + num_cats + 1, progress_total=3 + num_cats + 2)
-
-                try:
-                    all_skeletons = self._save_skeletons_to_lakebase(all_skeletons)
-                    # Persist key_diff_id bindings for deterministic Pass 2 linking.
-                    enriched_content = json.dumps(all_skeletons, indent=2)
-                    self._save_artifact(
-                        4, "pass1_skeletons", "key_differentiators.json",
-                        enriched_content,
-                        metadata={
-                            "count": len(all_skeletons),
-                            "partial": False,
-                            "completed_categories": num_cats,
-                            "total_categories": num_cats,
-                            "categories": core_cat_names,
-                            "model": self.model_name,
-                            "prompt_version_id": pass1_version_id,
-                            "parallel": per_category_parallel,
-                            "max_workers": executor_workers,
-                            "execution_mode": step4_exec["runtime_mode"],
-                            "errors": errors,
-                            "validation_warnings": validation_warnings,
-                            "raw_count": len(all_skeletons_raw),
-                            "has_key_diff_ids": True,
-                        },
-                    )
-                except Exception as e:
-                    logger.exception("Failed to save skeletons to Lakebase (non-fatal)")
+                                  progress_message=(
+                                      f"[6/6] Finalizing Lakebase writes ({written_batches}/{num_cats} category batches written)..."
+                                      f"{self._tpm_status_suffix()}"
+                                  ),
+                                  progress_current=max(num_cats, 1), progress_total=max(num_cats, 1))
 
                 # Build final message with any warnings
                 error_suffix = f" ({len(errors)} had errors — used fallback stubs)" if errors else ""
@@ -2275,7 +2945,11 @@ class WorkflowRunner:
                     warning_suffix = f" ⚠️ Validation: {'; '.join(validation_warnings)}"
 
                 self._update_step(4, "waiting_human",
-                                  progress_message=f"Generated {len(all_skeletons)} key differentiators across {num_cats} categories ({step4_exec['runtime_mode']}).{error_suffix}{warning_suffix} Review and approve or provide feedback.",
+                                  progress_message=(
+                                      f"Generated {len(all_skeletons)} key differentiators across {num_cats} categories "
+                                      f"({step4_exec['runtime_mode']}). Lakebase writes: {written_batches}/{num_cats} category batches.{error_suffix}{warning_suffix} "
+                                      f"Review and approve or provide feedback."
+                                  ),
                                   progress_current=6, progress_total=6,
                                   error_details={"errors": errors, "validation_warnings": validation_warnings} if (errors or validation_warnings) else None)
                 return
@@ -2329,12 +3003,30 @@ class WorkflowRunner:
                               progress_message=f"[4/6] Calling {self.model_name} — generating {total_diffs} key differentiators across {len(categories)} categories...",
                               progress_current=3, progress_total=6)
 
+            _msg_preview, cache_applied, _msg_type = _build_chat_messages(
+                rendered,
+                self.model_name,
+                prompt_caching=None,
+                segmented_prompt_caching=None,
+            )
+            _ = (_msg_preview, _msg_type)
+            usage_holder = {}
+
+            def _capture_usage(usage):
+                if not isinstance(usage, dict):
+                    return
+                usage_holder.update(usage)
+                self._record_token_usage(usage)
+
+            gen_started_ts = time.time()
             raw = call_model(
                 client=self.client,
                 model_name=self.model_name,
                 rendered_prompt=rendered,
                 json_schema=pass1_json_schema,
+                usage_callback=_capture_usage,
             )
+            gen_finished_ts = time.time()
 
             # Stage 5: Parse and save
             self._update_step(4, "in_progress",
@@ -2377,15 +3069,47 @@ class WorkflowRunner:
                               progress_message=f"[6/6] Writing {len(skeletons)} key differentiators to database...",
                               progress_current=5, progress_total=6)
 
+            write_started_ts = time.time()
+            write_status = "written"
+            write_error = None
             try:
-                skeletons = self._save_skeletons_to_lakebase(skeletons)
+                skeletons = self._save_skeletons_to_lakebase(skeletons, append=False)
                 # Persist key_diff_id bindings for deterministic Pass 2 linking.
                 enriched_content = json.dumps(skeletons, indent=2)
+                write_finished_ts = time.time()
+                batch_timeline = [
+                    {
+                        "batch_id": "batch-1",
+                        "sequence": 1,
+                        "label": "single_call",
+                        "diff_count": len(skeletons),
+                        "generate_started_at": datetime.fromtimestamp(gen_started_ts, tz=timezone.utc).isoformat(),
+                        "generate_finished_at": datetime.fromtimestamp(gen_finished_ts, tz=timezone.utc).isoformat(),
+                        "generate_duration_ms": int(max(gen_finished_ts - gen_started_ts, 0.0) * 1000),
+                        "generated_marker_at": datetime.fromtimestamp(gen_finished_ts, tz=timezone.utc).isoformat(),
+                        "write_started_at": datetime.fromtimestamp(write_started_ts, tz=timezone.utc).isoformat(),
+                        "write_finished_at": datetime.fromtimestamp(write_finished_ts, tz=timezone.utc).isoformat(),
+                        "write_duration_ms": int(max(write_finished_ts - write_started_ts, 0.0) * 1000),
+                        "written_marker_at": datetime.fromtimestamp(write_finished_ts, tz=timezone.utc).isoformat(),
+                        "status": write_status,
+                        "written_count": len(skeletons),
+                        "input_tokens": int(usage_holder.get("prompt_tokens", 0) or 0),
+                        "output_tokens": int(usage_holder.get("completion_tokens", 0) or 0),
+                        "total_tokens": int(usage_holder.get("total_tokens", 0) or 0),
+                        "cache_read_input_tokens": int(usage_holder.get("cache_read_input_tokens", 0) or 0),
+                        "cache_creation_input_tokens": int(usage_holder.get("cache_creation_input_tokens", 0) or 0),
+                        "cached_input_tokens": int(usage_holder.get("cached_input_tokens", 0) or 0),
+                        "cache_applied": bool(cache_applied),
+                    }
+                ]
                 self._save_artifact(
                     4, "pass1_skeletons", "key_differentiators.json",
                     enriched_content,
                     metadata={
                         "count": len(skeletons),
+                        "total": total_diffs,
+                        "generated_count": len(skeletons),
+                        "written_count": len(skeletons),
                         "partial": False,
                         "categories": expected_cats,
                         "model": self.model_name,
@@ -2393,10 +3117,62 @@ class WorkflowRunner:
                         "validation_warnings": validation_warnings,
                         "raw_count": len(skeletons_raw),
                         "has_key_diff_ids": True,
+                        "written_categories": 1,
+                        "total_categories": len(expected_cats),
+                        "completed_categories": len(expected_cats),
+                        "batch_timeline": batch_timeline,
+                        "token_usage": self._usage_summary(),
                     },
                 )
             except Exception as e:
                 logger.exception("Failed to save skeletons to Lakebase (non-fatal)")
+                write_status = "write_failed"
+                write_error = str(e)
+                write_finished_ts = time.time()
+                self._save_artifact(
+                    4, "pass1_skeletons", "key_differentiators.json",
+                    skeletons_content,
+                    metadata={
+                        "count": len(skeletons),
+                        "total": total_diffs,
+                        "generated_count": len(skeletons),
+                        "written_count": 0,
+                        "partial": False,
+                        "categories": expected_cats,
+                        "model": self.model_name,
+                        "prompt_version_id": pass1_version_id,
+                        "validation_warnings": validation_warnings,
+                        "raw_count": len(skeletons_raw),
+                        "written_categories": 0,
+                        "total_categories": len(expected_cats),
+                        "completed_categories": len(expected_cats),
+                        "batch_timeline": [
+                            {
+                                "batch_id": "batch-1",
+                                "sequence": 1,
+                                "label": "single_call",
+                                "diff_count": len(skeletons),
+                                "generate_started_at": datetime.fromtimestamp(gen_started_ts, tz=timezone.utc).isoformat(),
+                                "generate_finished_at": datetime.fromtimestamp(gen_finished_ts, tz=timezone.utc).isoformat(),
+                                "generate_duration_ms": int(max(gen_finished_ts - gen_started_ts, 0.0) * 1000),
+                                "generated_marker_at": datetime.fromtimestamp(gen_finished_ts, tz=timezone.utc).isoformat(),
+                                "write_started_at": datetime.fromtimestamp(write_started_ts, tz=timezone.utc).isoformat(),
+                                "write_finished_at": datetime.fromtimestamp(write_finished_ts, tz=timezone.utc).isoformat(),
+                                "write_duration_ms": int(max(write_finished_ts - write_started_ts, 0.0) * 1000),
+                                "status": write_status,
+                                "error": write_error[:500] if write_error else None,
+                                "input_tokens": int(usage_holder.get("prompt_tokens", 0) or 0),
+                                "output_tokens": int(usage_holder.get("completion_tokens", 0) or 0),
+                                "total_tokens": int(usage_holder.get("total_tokens", 0) or 0),
+                                "cache_read_input_tokens": int(usage_holder.get("cache_read_input_tokens", 0) or 0),
+                                "cache_creation_input_tokens": int(usage_holder.get("cache_creation_input_tokens", 0) or 0),
+                                "cached_input_tokens": int(usage_holder.get("cached_input_tokens", 0) or 0),
+                                "cache_applied": bool(cache_applied),
+                            }
+                        ],
+                        "token_usage": self._usage_summary(),
+                    },
+                )
                 # Continue — artifact was saved, Lakebase write is bonus
 
             # Build final message with validation warnings if any
@@ -2417,43 +3193,51 @@ class WorkflowRunner:
             logger.exception("Pass 1 generation failed")
             self._update_step(4, "failed", error_message=f"Pass 1 failed: {e}")
 
-    def _save_skeletons_to_lakebase(self, skeletons):
-        """Save skeleton key differentiators to Lakebase and return enriched skeletons."""
+    def _clear_generation_step4_rows(self, conn, gen_id: int):
+        """Delete all Step 4 generation-scoped rows for a clean Pass 1 write."""
+        conn.execute(
+            text(
+                "DELETE FROM fact_checks WHERE evidence_id IN "
+                "(SELECT e.evidence_id FROM evidence e JOIN claims c ON e.claim_id = c.claim_id WHERE c.generation_id = :gid)"
+            ),
+            {"gid": gen_id},
+        )
+        conn.execute(
+            text(
+                "DELETE FROM evidence WHERE claim_id IN "
+                "(SELECT claim_id FROM claims WHERE generation_id = :gid)"
+            ),
+            {"gid": gen_id},
+        )
+        conn.execute(
+            text(
+                "DELETE FROM claim_detail_items WHERE claim_id IN "
+                "(SELECT claim_id FROM claims WHERE generation_id = :gid)"
+            ),
+            {"gid": gen_id},
+        )
+        conn.execute(
+            text("DELETE FROM claims WHERE generation_id = :gid"),
+            {"gid": gen_id},
+        )
+        conn.execute(
+            text("DELETE FROM key_differentiators WHERE generation_id = :gid"),
+            {"gid": gen_id},
+        )
+
+    def _save_skeletons_to_lakebase(self, skeletons, append: bool = False):
+        """Save skeleton key differentiators to Lakebase and return enriched skeletons.
+
+        append=True writes/overwrites only provided differentiators while preserving others.
+        append=False clears generation-scoped rows first (full refresh).
+        """
         with self.engine.begin() as conn:
             gen_id = self._get_or_create_generation_id(conn)
 
             # Regeneration path: replace generation-scoped differentiators instead of
             # accumulating duplicates across repeated Step 4 runs.
-            if gen_id:
-                conn.execute(
-                    text(
-                        "DELETE FROM fact_checks WHERE evidence_id IN "
-                        "(SELECT e.evidence_id FROM evidence e JOIN claims c ON e.claim_id = c.claim_id WHERE c.generation_id = :gid)"
-                    ),
-                    {"gid": gen_id},
-                )
-                conn.execute(
-                    text(
-                        "DELETE FROM evidence WHERE claim_id IN "
-                        "(SELECT claim_id FROM claims WHERE generation_id = :gid)"
-                    ),
-                    {"gid": gen_id},
-                )
-                conn.execute(
-                    text(
-                        "DELETE FROM claim_detail_items WHERE claim_id IN "
-                        "(SELECT claim_id FROM claims WHERE generation_id = :gid)"
-                    ),
-                    {"gid": gen_id},
-                )
-                conn.execute(
-                    text("DELETE FROM claims WHERE generation_id = :gid"),
-                    {"gid": gen_id},
-                )
-                conn.execute(
-                    text("DELETE FROM key_differentiators WHERE generation_id = :gid"),
-                    {"gid": gen_id},
-                )
+            if gen_id and not append:
+                self._clear_generation_step4_rows(conn, int(gen_id))
 
             selected_rows = conn.execute(
                 text(
@@ -2496,6 +3280,47 @@ class WorkflowRunner:
                 if cat_id is None:
                     unresolved_categories.append(category_name or "<blank>")
                     continue
+
+                if append:
+                    existing_ids = conn.execute(
+                        text(
+                            "SELECT key_diff_id FROM key_differentiators "
+                            "WHERE generation_id = :gid AND category_id = :cat AND key_diff_name = :name"
+                        ),
+                        {"gid": int(gen_id), "cat": int(cat_id), "name": sk.get("key_differentiator", "")},
+                    ).scalars().all()
+                    for existing_kd_id in existing_ids:
+                        conn.execute(
+                            text(
+                                "DELETE FROM fact_checks WHERE evidence_id IN ("
+                                "SELECT e.evidence_id FROM evidence e "
+                                "JOIN claims c ON e.claim_id = c.claim_id "
+                                "WHERE c.generation_id = :gid AND c.key_diff_id = :kid)"
+                            ),
+                            {"gid": int(gen_id), "kid": int(existing_kd_id)},
+                        )
+                        conn.execute(
+                            text(
+                                "DELETE FROM evidence WHERE claim_id IN ("
+                                "SELECT claim_id FROM claims WHERE generation_id = :gid AND key_diff_id = :kid)"
+                            ),
+                            {"gid": int(gen_id), "kid": int(existing_kd_id)},
+                        )
+                        conn.execute(
+                            text(
+                                "DELETE FROM claim_detail_items WHERE claim_id IN ("
+                                "SELECT claim_id FROM claims WHERE generation_id = :gid AND key_diff_id = :kid)"
+                            ),
+                            {"gid": int(gen_id), "kid": int(existing_kd_id)},
+                        )
+                        conn.execute(
+                            text("DELETE FROM claims WHERE generation_id = :gid AND key_diff_id = :kid"),
+                            {"gid": int(gen_id), "kid": int(existing_kd_id)},
+                        )
+                        conn.execute(
+                            text("DELETE FROM key_differentiators WHERE key_diff_id = :kid"),
+                            {"kid": int(existing_kd_id)},
+                        )
 
                 key_diff_id = conn.execute(
                     text(
@@ -2588,7 +3413,7 @@ class WorkflowRunner:
 
             # Per-batch prompts already receive directive content
             # through the context XML; avoid injecting directives twice.
-            directives_for_template = "" if ver in (5, 6, 7, 8, 9, 10) else directive
+            directives_for_template = "" if ver in (5, 6, 7, 8, 9, 10, 11, 12) else directive
 
             # Build category payloads for templates that expect key_diffs_json.
             category_payloads = {}
@@ -2634,7 +3459,13 @@ class WorkflowRunner:
                         )
                 return normalized
 
-            def _normalize_batched_result(parsed_result, skeleton, *, strict_match: bool = False):
+            def _normalize_batched_result(
+                parsed_result,
+                skeleton,
+                *,
+                strict_match: bool = False,
+                allow_single_candidate_fallback: bool = False,
+            ):
                 """Map batched output objects into the standard Pass 2 shape."""
                 # Some model SDK paths return wrapper blocks like:
                 # {"type":"text","text":"{...json...}"}.
@@ -2708,6 +3539,14 @@ class WorkflowRunner:
                     elif len(name_matches) > 1 and strict_match:
                         raise ValueError(
                             f"Batched response had ambiguous key_differentiator matches for '{target_name}'"
+                        )
+                if chosen is None and len(candidates) == 1 and (allow_single_candidate_fallback or not strict_match):
+                    chosen = candidates[0]
+                    if strict_match and allow_single_candidate_fallback:
+                        logger.warning(
+                            "Pass 2 strict matcher fallback used single candidate for id='%s' name='%s'",
+                            target_id,
+                            target_name,
                         )
                 if chosen is None and candidates and not strict_match:
                     chosen = candidates[0]
@@ -2976,6 +3815,108 @@ class WorkflowRunner:
             all_claims = [None] * total
             completed = 0
             errors = []  # Track per-skeleton errors
+            batch_timeline = []
+            batch_sequence = 0
+            written_indexes = set()
+
+            def _iso_from_ts(ts: float | None) -> str | None:
+                if ts is None:
+                    return None
+                return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+
+            def _persist_pass2_partial_artifact():
+                generated_count = len([c for c in all_claims if isinstance(c, dict)])
+                self._save_artifact(
+                    5,
+                    "pass2_claims",
+                    "claims.json",
+                    json.dumps(all_claims, indent=2),
+                    metadata={
+                        "count": generated_count,
+                        "total": total,
+                        "generated_count": generated_count,
+                        "written_count": len(written_indexes),
+                        "partial": generated_count < total or len(written_indexes) < generated_count,
+                        "model": self.model_name,
+                        "prompt_version_id": pass2_version_id,
+                        "max_workers": self.max_workers,
+                        "execution_mode": runtime_mode if "runtime_mode" in locals() else "unknown",
+                        "step5_inline_fact_check": bool(self.step5_inline_fact_check),
+                        "errors": errors,
+                        "batch_timeline": batch_timeline,
+                        "token_usage": self._usage_summary(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+
+            def _write_claim_batch(
+                idx_list: list[int],
+                batch_label: str,
+                *,
+                generate_started_ts: float | None = None,
+                generate_ended_ts: float | None = None,
+            ):
+                nonlocal batch_sequence
+                batch_sequence += 1
+                valid_indexes = [idx for idx in idx_list if 0 <= idx < total and isinstance(all_claims[idx], dict)]
+                event = {
+                    "batch_id": f"batch-{batch_sequence}",
+                    "sequence": batch_sequence,
+                    "label": batch_label,
+                    "diff_count": len(valid_indexes),
+                    "indexes": valid_indexes,
+                    "generate_started_at": _iso_from_ts(generate_started_ts),
+                    "generate_finished_at": _iso_from_ts(generate_ended_ts),
+                    "generate_duration_ms": (
+                        int(max((generate_ended_ts or 0.0) - (generate_started_ts or 0.0), 0.0) * 1000)
+                        if generate_started_ts is not None and generate_ended_ts is not None
+                        else None
+                    ),
+                    "generated_marker_at": _iso_from_ts(generate_ended_ts),
+                    "status": "pending_write",
+                }
+                batch_timeline.append(event)
+
+                if not valid_indexes:
+                    event["status"] = "skipped"
+                    event["error"] = "No generated claims in batch."
+                    _persist_pass2_partial_artifact()
+                    return
+
+                write_started_ts = time.time()
+                event["write_started_at"] = _iso_from_ts(write_started_ts)
+                try:
+                    self._save_claims_to_lakebase(
+                        [skeletons[idx] for idx in valid_indexes],
+                        [all_claims[idx] for idx in valid_indexes],
+                        inline_fact_check=bool(self.step5_inline_fact_check),
+                        append=True,
+                    )
+                    write_finished_ts = time.time()
+                    event["write_finished_at"] = _iso_from_ts(write_finished_ts)
+                    event["write_duration_ms"] = int(max(write_finished_ts - write_started_ts, 0.0) * 1000)
+                    event["written_marker_at"] = event["write_finished_at"]
+                    event["written_count"] = len(valid_indexes)
+                    event["status"] = "written"
+                    written_indexes.update(valid_indexes)
+                    _persist_pass2_partial_artifact()
+                except Exception as write_exc:
+                    write_finished_ts = time.time()
+                    event["write_finished_at"] = _iso_from_ts(write_finished_ts)
+                    event["write_duration_ms"] = int(max(write_finished_ts - write_started_ts, 0.0) * 1000)
+                    event["status"] = "write_failed"
+                    event["error"] = str(write_exc)[:500]
+                    _persist_pass2_partial_artifact()
+                    raise
+
+            # Clear previous Step 5 claim rows once at run start, then append per generated batch.
+            with self.engine.begin() as prep_conn:
+                prep_gen_id = self._get_or_create_generation_id(prep_conn)
+                self._clear_generation_claim_rows(prep_conn, int(prep_gen_id))
+                prep_conn.execute(
+                    text("UPDATE battlecard_generations SET total_claims = 0 WHERE generation_id = :gid"),
+                    {"gid": int(prep_gen_id)},
+                )
 
             # Record a representative Pass 2 prompt (using first skeleton)
             if skeletons:
@@ -2997,7 +3938,18 @@ class WorkflowRunner:
                 self._record_turn(5, "system_prompt", "system", "pass2_prompt",
                                   representative_prompt, model_name=self.model_name)
 
-            def _process_single_diff(idx: int, sk: dict) -> dict:
+            def _payload_from_skeleton(sk: dict) -> dict:
+                return {
+                    "id": sk.get("id", ""),
+                    "category": sk.get("category", ""),
+                    "key_differentiator": sk.get("key_differentiator", ""),
+                    "description": sk.get("description", ""),
+                    "databricks_rating": sk.get("databricks_rating", ""),
+                    "competitor_rating": sk.get("competitor_rating", ""),
+                    "selection_reasoning": sk.get("selection_reasoning", ""),
+                }
+
+            def _process_single_diff(idx: int, sk: dict, *, force_single_payload: bool = False) -> dict:
                 """Generate claims for a single skeleton diff."""
                 import time as _time
                 start_time = _time.time()
@@ -3006,6 +3958,11 @@ class WorkflowRunner:
                 category = sk.get("category", "")
                 logger.info("Pass 2 processing skeleton %d: %s", idx, kd_name)
 
+                category_payload = (
+                    [_payload_from_skeleton(sk)]
+                    if force_single_payload
+                    else category_payloads.get(category, [])
+                )
                 rendered = render_template(
                     template_text,
                     competitor=self.competitor,
@@ -3015,8 +3972,8 @@ class WorkflowRunner:
                     databricks_rating=sk.get("databricks_rating", ""),
                     competitor_rating=sk.get("competitor_rating", ""),
                     selection_reasoning=sk.get("selection_reasoning", ""),
-                    num_diffs=len(category_payloads.get(category, [])),
-                    key_diffs_json=json.dumps(category_payloads.get(category, []), indent=2),
+                    num_diffs=len(category_payload),
+                    key_diffs_json=json.dumps(category_payload, indent=2),
                     directives=directives_for_template,
                     context=context,
                 )
@@ -3040,29 +3997,56 @@ class WorkflowRunner:
                     "lakebase_error": None,
                     "error_message": None,
                     "processing_time_ms": None,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "input_tpm": 0,
+                    "output_tpm": 0,
+                    "total_tpm": 0,
+                    "cache_applied": False,
+                    "cached_input_tokens": 0,
                 }
 
                 try:
                     use_structured_output = bool(pass2_request_spec.get("use_structured_output"))
+                    self._throttle_for_tpm_budget()
                     # Use debug version to capture request/response
                     debug_result = call_model_with_debug(
                         client=self.client,
                         model_name=self.model_name,
                         rendered_prompt=rendered,
                         json_schema=pass2_json_schema if use_structured_output else None,
+                        prompt_caching=(pass2_request_spec.get("request_config") or {}).get("prompt_caching"),
+                        segmented_prompt_caching=(pass2_request_spec.get("request_config") or {}).get("segmented_prompt_caching"),
+                        usage_callback=self._record_token_usage,
                     )
 
                     raw = debug_result["content"]
                     debug_log["api_request_json"] = json.dumps(debug_result["api_request"], indent=2)
                     debug_log["api_response_raw"] = json.dumps(debug_result["api_response_raw"], indent=2) if isinstance(debug_result["api_response_raw"], dict) else str(debug_result["api_response_raw"])
+                    usage = debug_result.get("usage") or {}
+                    tpm_snapshot = self._snapshot_tpm()
+                    debug_log["input_tokens"] = int(usage.get("prompt_tokens", 0) or 0)
+                    debug_log["output_tokens"] = int(usage.get("completion_tokens", 0) or 0)
+                    debug_log["total_tokens"] = int(usage.get("total_tokens", 0) or 0)
+                    debug_log["cached_input_tokens"] = int(usage.get("cached_input_tokens", 0) or 0)
+                    debug_log["cache_applied"] = bool(debug_result.get("cache_applied", False))
+                    debug_log["input_tpm"] = int(tpm_snapshot.get("input_tpm", 0) or 0)
+                    debug_log["output_tpm"] = int(tpm_snapshot.get("output_tpm", 0) or 0)
+                    debug_log["total_tpm"] = int(tpm_snapshot.get("total_tpm", 0) or 0)
 
                     result = parse_model_json(raw)
 
-                    if ver in (5, 6, 7, 8, 9, 10):
+                    if ver in (5, 6, 7, 8, 9, 10, 11, 12):
                         debug_log["response_type"] = type(result).__name__ if type(result).__name__ in ("dict", "list") else "unknown"
                         debug_log["was_list_fixed"] = False
                         debug_log["structured_output"] = json.dumps(result, indent=2)
-                        result = _normalize_batched_result(result, sk, strict_match=True)
+                        result = _normalize_batched_result(
+                            result,
+                            sk,
+                            strict_match=True,
+                            allow_single_candidate_fallback=force_single_payload,
+                        )
                     else:
                         # Determine response type and handle list case (potentially nested)
                         extraction_depth = 0
@@ -3127,6 +4111,7 @@ class WorkflowRunner:
                     progress_message=(
                         f"[3/5] Generating claims by category — 0/{total_groups} categories "
                         f"({workers_label}, model: {self.model_name}, prompt: V{ver})..."
+                        f"{self._tpm_status_suffix()}"
                     ),
                     progress_current=0,
                     progress_total=max(total_groups, 1),
@@ -3153,16 +4138,38 @@ class WorkflowRunner:
                     )
 
                     try:
+                        self._throttle_for_tpm_budget()
                         debug_result = call_model_with_debug(
                             client=self.client,
                             model_name=self.model_name,
                             rendered_prompt=rendered,
                             json_schema=pass2_json_schema if pass2_request_spec.get("use_structured_output") else None,
+                            prompt_caching=(pass2_request_spec.get("request_config") or {}).get("prompt_caching"),
+                            segmented_prompt_caching=(pass2_request_spec.get("request_config") or {}).get("segmented_prompt_caching"),
+                            usage_callback=self._record_token_usage,
                         )
                         raw = debug_result["content"]
                         parsed = parse_model_json(raw)
                         elapsed_ms = int((_time.time() - start_time) * 1000)
+                        usage = debug_result.get("usage") or {}
+                        tpm_snapshot = self._snapshot_tpm()
                         batch_results = {}
+
+                        if isinstance(parsed, dict):
+                            claims_raw = parsed.get("claims")
+                            if isinstance(claims_raw, list):
+                                candidate_count = len([c for c in claims_raw if isinstance(c, dict)])
+                            else:
+                                candidate_count = 1
+                        elif isinstance(parsed, list):
+                            candidate_count = len([c for c in parsed if isinstance(c, dict)])
+                        else:
+                            candidate_count = 0
+                        if candidate_count < len(idx_list):
+                            raise ValueError(
+                                f"Batched response returned {candidate_count} claim object(s) "
+                                f"for category '{category}' (expected {len(idx_list)})"
+                            )
 
                         for idx in idx_list:
                             sk = skeletons[idx]
@@ -3187,6 +4194,14 @@ class WorkflowRunner:
                                     "lakebase_error": None,
                                     "error_message": None,
                                     "processing_time_ms": elapsed_ms,
+                                    "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                                    "output_tokens": int(usage.get("completion_tokens", 0) or 0),
+                                    "total_tokens": int(usage.get("total_tokens", 0) or 0),
+                                    "input_tpm": int(tpm_snapshot.get("input_tpm", 0) or 0),
+                                    "output_tpm": int(tpm_snapshot.get("output_tpm", 0) or 0),
+                                    "total_tpm": int(tpm_snapshot.get("total_tpm", 0) or 0),
+                                    "cache_applied": bool(debug_result.get("cache_applied", False)),
+                                    "cached_input_tokens": int(usage.get("cached_input_tokens", 0) or 0),
                                 }
                             )
                         return batch_results
@@ -3210,6 +4225,14 @@ class WorkflowRunner:
                                     "lakebase_error": None,
                                     "error_message": str(e)[:2000],
                                     "processing_time_ms": elapsed_ms,
+                                    "input_tokens": 0,
+                                    "output_tokens": 0,
+                                    "total_tokens": 0,
+                                    "input_tpm": int(self._snapshot_tpm().get("input_tpm", 0) or 0),
+                                    "output_tpm": int(self._snapshot_tpm().get("output_tpm", 0) or 0),
+                                    "total_tpm": int(self._snapshot_tpm().get("total_tpm", 0) or 0),
+                                    "cache_applied": False,
+                                    "cached_input_tokens": 0,
                                 }
                             )
                         raise
@@ -3221,10 +4244,15 @@ class WorkflowRunner:
                     futures = {}
                     with ThreadPoolExecutor(max_workers=workers_to_use) as executor:
                         for category, idx_list in category_groups:
-                            futures[executor.submit(_process_category_batch, category, idx_list)] = (category, idx_list)
+                            futures[executor.submit(_process_category_batch, category, idx_list)] = (
+                                category,
+                                idx_list,
+                                time.time(),
+                            )
 
                         for future in as_completed(futures):
-                            category, idx_list = futures[future]
+                            category, idx_list, gen_started_ts = futures[future]
+                            gen_finished_ts = time.time()
                             try:
                                 batch_results = future.result()
                                 for idx, claim in batch_results.items():
@@ -3232,12 +4260,46 @@ class WorkflowRunner:
                             except Exception as e:
                                 error_str = str(e)
                                 logger.error("Pass 2 failed for category '%s': %s", category, error_str)
+                                # Category-batch call failed. Recover deterministically by retrying per diff
+                                # with a single-diff payload for this category slice.
+                                recovered = 0
                                 for idx in idx_list:
                                     sk = skeletons[idx]
                                     kd_name = sk.get("key_differentiator", "")[:50]
-                                    all_claims[idx] = self._stub_pass2_claim(sk)
-                                    errors.append({"index": idx, "key_differentiator": kd_name, "error": error_str})
-                                self._update_step(5, "in_progress", last_error=f"[{category}] {error_str[:500]}")
+                                    try:
+                                        all_claims[idx] = _process_single_diff(idx, sk, force_single_payload=True)
+                                        recovered += 1
+                                    except Exception as recover_exc:
+                                        recover_err = str(recover_exc)
+                                        errors.append(
+                                            {
+                                                "index": idx,
+                                                "key_differentiator": kd_name,
+                                                "error": f"{error_str} | per-diff retry failed: {recover_err}",
+                                            }
+                                        )
+                                        self._update_step(5, "in_progress", last_error=f"[{kd_name}] {recover_err[:500]}")
+                                logger.warning(
+                                    "Pass 2 category '%s' recovered via per-diff retries: %d/%d succeeded",
+                                    category,
+                                    recovered,
+                                    len(idx_list),
+                                )
+                                if recovered > 0:
+                                    self._update_step(
+                                        5,
+                                        "in_progress",
+                                        last_error=(
+                                            f"[{category}] category batch failed; recovered {recovered}/{len(idx_list)} "
+                                            f"via per-diff retries"
+                                        ),
+                                    )
+                            _write_claim_batch(
+                                idx_list,
+                                category,
+                                generate_started_ts=gen_started_ts,
+                                generate_ended_ts=gen_finished_ts,
+                            )
 
                             completed_groups += 1
                             completed_claims += len(idx_list)
@@ -3250,28 +4312,13 @@ class WorkflowRunner:
                                 progress_message=(
                                     f"[3/5] Generating claims by category — {completed_groups}/{total_groups} "
                                     f"categories ({completed_claims}/{total} diffs){error_suffix}: {category}"
+                                    f"{self._tpm_status_suffix()}"
                                 ),
                             )
 
-                            self._save_artifact(
-                                5,
-                                "pass2_claims",
-                                "claims.json",
-                                json.dumps(all_claims, indent=2),
-                                metadata={
-                                    "count": total,
-                                    "partial": completed_groups < total_groups,
-                                    "completed": completed_claims,
-                                    "total": total,
-                                    "completed_categories": completed_groups,
-                                    "total_categories": total_groups,
-                                    "model": self.model_name,
-                                    "errors": errors,
-                                    "mode": "category_batched",
-                                },
-                            )
                 else:
                     for category, idx_list in category_groups:
+                        gen_started_ts = time.time()
                         try:
                             batch_results = _process_category_batch(category, idx_list)
                             for idx, claim in batch_results.items():
@@ -3282,9 +4329,30 @@ class WorkflowRunner:
                             for idx in idx_list:
                                 sk = skeletons[idx]
                                 kd_name = sk.get("key_differentiator", "")[:50]
-                                all_claims[idx] = self._stub_pass2_claim(sk)
-                                errors.append({"index": idx, "key_differentiator": kd_name, "error": error_str})
-                            self._update_step(5, "in_progress", last_error=f"[{category}] {error_str[:500]}")
+                                try:
+                                    all_claims[idx] = _process_single_diff(idx, sk, force_single_payload=True)
+                                except Exception as recover_exc:
+                                    recover_err = str(recover_exc)
+                                    errors.append(
+                                        {
+                                            "index": idx,
+                                            "key_differentiator": kd_name,
+                                            "error": f"{error_str} | per-diff retry failed: {recover_err}",
+                                        }
+                                    )
+                                    self._update_step(5, "in_progress", last_error=f"[{kd_name}] {recover_err[:500]}")
+                            self._update_step(
+                                5,
+                                "in_progress",
+                                last_error=f"[{category}] category batch failed; fallback to per-diff retries applied",
+                            )
+                        gen_finished_ts = time.time()
+                        _write_claim_batch(
+                            idx_list,
+                            category,
+                            generate_started_ts=gen_started_ts,
+                            generate_ended_ts=gen_finished_ts,
+                        )
 
                         completed_groups += 1
                         completed_claims += len(idx_list)
@@ -3297,6 +4365,7 @@ class WorkflowRunner:
                             progress_message=(
                                 f"[3/5] Generating claims by category — {completed_groups}/{total_groups} "
                                 f"categories ({completed_claims}/{total} diffs){error_suffix}: {category}"
+                                f"{self._tpm_status_suffix()}"
                             ),
                         )
             elif runtime_mode == "single_call":
@@ -3306,6 +4375,7 @@ class WorkflowRunner:
                     progress_message=(
                         f"[3/5] Generating claims in single-call mode — 0/1 "
                         f"(model: {self.model_name}, prompt: V{ver})..."
+                        f"{self._tpm_status_suffix()}"
                     ),
                     progress_current=0,
                     progress_total=1,
@@ -3344,15 +4414,21 @@ class WorkflowRunner:
                         directives=directives_for_template,
                         context=context,
                     )
+                    self._throttle_for_tpm_budget()
                     debug_result = call_model_with_debug(
                         client=self.client,
                         model_name=self.model_name,
                         rendered_prompt=rendered,
                         json_schema=pass2_json_schema if pass2_request_spec.get("use_structured_output") else None,
+                        prompt_caching=(pass2_request_spec.get("request_config") or {}).get("prompt_caching"),
+                        segmented_prompt_caching=(pass2_request_spec.get("request_config") or {}).get("segmented_prompt_caching"),
+                        usage_callback=self._record_token_usage,
                     )
                     raw = debug_result["content"]
                     parsed = parse_model_json(raw)
                     elapsed_ms = int((_time.time() - start_time) * 1000)
+                    usage = debug_result.get("usage") or {}
+                    tpm_snapshot = self._snapshot_tpm()
                     out = {}
                     for idx, sk in enumerate(skeletons):
                         out[idx] = _normalize_batched_result(parsed, sk, strict_match=True)
@@ -3376,18 +4452,37 @@ class WorkflowRunner:
                                 "lakebase_error": None,
                                 "error_message": None,
                                 "processing_time_ms": elapsed_ms,
+                                "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                                "output_tokens": int(usage.get("completion_tokens", 0) or 0),
+                                "total_tokens": int(usage.get("total_tokens", 0) or 0),
+                                "input_tpm": int(tpm_snapshot.get("input_tpm", 0) or 0),
+                                "output_tpm": int(tpm_snapshot.get("output_tpm", 0) or 0),
+                                "total_tpm": int(tpm_snapshot.get("total_tpm", 0) or 0),
+                                "cache_applied": bool(debug_result.get("cache_applied", False)),
+                                "cached_input_tokens": int(usage.get("cached_input_tokens", 0) or 0),
                             }
                         )
                     return out
 
                 try:
+                    single_gen_started_ts = time.time()
                     result_map = _process_single_call()
+                    single_gen_finished_ts = time.time()
                     for idx, val in result_map.items():
                         all_claims[idx] = val
+                    _write_claim_batch(
+                        list(result_map.keys()),
+                        "ALL_CATEGORIES",
+                        generate_started_ts=single_gen_started_ts,
+                        generate_ended_ts=single_gen_finished_ts,
+                    )
                     self._update_step(
                         5,
                         "in_progress",
-                        progress_message=f"[3/5] Generating claims in single-call mode — 1/1 complete ({total} diffs).",
+                        progress_message=(
+                            f"[3/5] Generating claims in single-call mode — 1/1 complete ({total} diffs)."
+                            f"{self._tpm_status_suffix()}"
+                        ),
                         progress_current=1,
                         progress_total=1,
                     )
@@ -3395,7 +4490,6 @@ class WorkflowRunner:
                     err = str(e)
                     logger.error("Pass 2 single-call generation failed: %s", err)
                     for idx, sk in enumerate(skeletons):
-                        all_claims[idx] = self._stub_pass2_claim(sk)
                         errors.append({"index": idx, "key_differentiator": sk.get("key_differentiator", "")[:50], "error": err})
                     self._update_step(5, "in_progress", last_error=f"[single_call] {err[:500]}")
             else:
@@ -3404,7 +4498,10 @@ class WorkflowRunner:
                 self._update_step(
                     5,
                     "in_progress",
-                    progress_message=f"[3/5] Generating claims — 0/{total} done ({workers_label}, model: {self.model_name}, prompt: V{ver})...",
+                    progress_message=(
+                        f"[3/5] Generating claims — 0/{total} done ({workers_label}, model: {self.model_name}, prompt: V{ver})..."
+                        f"{self._tpm_status_suffix()}"
+                    ),
                     progress_current=0,
                     progress_total=max(total, 1),
                 )
@@ -3413,20 +4510,27 @@ class WorkflowRunner:
                     futures = {}
                     with ThreadPoolExecutor(max_workers=workers_to_use) as executor:
                         for idx, sk in enumerate(skeletons):
-                            future = executor.submit(_process_single_diff, idx, sk)
-                            futures[future] = (idx, sk)
+                            future = executor.submit(_process_single_diff, idx, sk, force_single_payload=True)
+                            futures[future] = (idx, sk, time.time())
 
                         for future in as_completed(futures):
-                            idx, sk = futures[future]
+                            idx, sk, gen_started_ts = futures[future]
+                            gen_finished_ts = time.time()
                             kd_name = sk.get("key_differentiator", "")[:50]
                             try:
                                 all_claims[idx] = future.result()
                             except Exception as e:
                                 error_str = str(e)
                                 logger.error("Pass 2 failed for skeleton %d (%s): %s", idx, kd_name, error_str)
-                                all_claims[idx] = self._stub_pass2_claim(sk)
                                 errors.append({"index": idx, "key_differentiator": kd_name, "error": error_str})
                                 self._update_step(5, "in_progress", last_error=f"[{kd_name}] {error_str[:500]}")
+
+                            _write_claim_batch(
+                                [idx],
+                                kd_name or f"diff-{idx + 1}",
+                                generate_started_ts=gen_started_ts,
+                                generate_ended_ts=gen_finished_ts,
+                            )
 
                             completed += 1
                             error_suffix = f" ({len(errors)} errors)" if errors else ""
@@ -3435,58 +4539,76 @@ class WorkflowRunner:
                                 "in_progress",
                                 progress_current=completed,
                                 progress_total=max(total, 1),
-                                progress_message=f"[3/5] Generating claims — {completed}/{total} done{error_suffix}: {kd_name}",
-                            )
-
-                            self._save_artifact(
-                                5,
-                                "pass2_claims",
-                                "claims.json",
-                                json.dumps(all_claims, indent=2),
-                                metadata={
-                                    "count": total,
-                                    "partial": completed < total,
-                                    "completed": completed,
-                                    "total": total,
-                                    "model": self.model_name,
-                                    "errors": errors,
-                                    "mode": "per_diff",
-                                },
+                                progress_message=(
+                                    f"[3/5] Generating claims — {completed}/{total} done{error_suffix}: {kd_name}"
+                                    f"{self._tpm_status_suffix()}"
+                                ),
                             )
                 else:
                     for idx, sk in enumerate(skeletons):
+                        gen_started_ts = time.time()
                         kd_name = sk.get("key_differentiator", "")[:50]
                         self._update_step(
                             5,
                             "in_progress",
                             progress_current=idx,
                             progress_total=max(total, 1),
-                            progress_message=f"[3/5] Generating claim {idx + 1}/{total}: {kd_name}",
+                            progress_message=(
+                                f"[3/5] Generating claim {idx + 1}/{total}: {kd_name}"
+                                f"{self._tpm_status_suffix()}"
+                            ),
                         )
 
                         try:
-                            all_claims[idx] = _process_single_diff(idx, sk)
+                            all_claims[idx] = _process_single_diff(idx, sk, force_single_payload=True)
                         except Exception as e:
                             error_str = str(e)
                             logger.error("Pass 2 failed for skeleton %d (%s): %s", idx, kd_name, error_str)
-                            all_claims[idx] = self._stub_pass2_claim(sk)
                             errors.append({"index": idx, "key_differentiator": kd_name, "error": error_str})
                             self._update_step(5, "in_progress", last_error=f"[{kd_name}] {error_str[:500]}")
+                        gen_finished_ts = time.time()
+                        _write_claim_batch(
+                            [idx],
+                            kd_name or f"diff-{idx + 1}",
+                            generate_started_ts=gen_started_ts,
+                            generate_ended_ts=gen_finished_ts,
+                        )
 
-            for idx, claim in enumerate(all_claims):
-                if claim is None:
-                    all_claims[idx] = self._stub_pass2_claim(skeletons[idx])
-                    errors.append(
-                        {
-                            "index": idx,
-                            "key_differentiator": skeletons[idx].get("key_differentiator", "")[:50],
-                            "error": "Missing model output; inserted fallback stub.",
-                        }
-                    )
+            existing_error_indexes = {int(e.get("index", -1)) for e in errors if isinstance(e.get("index", -1), int)}
+            missing_indexes = [idx for idx, claim in enumerate(all_claims) if claim is None]
+            for idx in missing_indexes:
+                if idx in existing_error_indexes:
+                    continue
+                errors.append(
+                    {
+                        "index": idx,
+                        "key_differentiator": skeletons[idx].get("key_differentiator", "")[:50],
+                        "error": "Missing model output for this differentiator.",
+                    }
+                )
+            if errors:
+                raise RuntimeError(
+                    f"Pass 2 produced {len(errors)} error(s); aborting remaining batches."
+                )
+
+            pending_write_indexes = [
+                idx for idx, claim in enumerate(all_claims) if isinstance(claim, dict) and idx not in written_indexes
+            ]
+            if pending_write_indexes:
+                now_ts = time.time()
+                _write_claim_batch(
+                    pending_write_indexes,
+                    "finalize_remaining",
+                    generate_started_ts=now_ts,
+                    generate_ended_ts=now_ts,
+                )
 
             # Stage 4: Save artifact
             self._update_step(5, "in_progress",
-                              progress_message=f"[4/5] Saving {len(all_claims)} claims to artifacts...",
+                              progress_message=(
+                                  f"[4/5] Saving {len(all_claims)} claims to artifacts..."
+                                  f"{self._tpm_status_suffix()}"
+                              ),
                               progress_current=total, progress_total=total)
 
             claims_content = json.dumps(all_claims, indent=2)
@@ -3501,6 +4623,11 @@ class WorkflowRunner:
                     "execution_mode": runtime_mode,
                     "step5_inline_fact_check": bool(self.step5_inline_fact_check),
                     "errors": errors,
+                    "partial": False,
+                    "generated_count": len(all_claims),
+                    "written_count": len(written_indexes),
+                    "batch_timeline": batch_timeline,
+                    "token_usage": self._usage_summary(),
                 },
             )
 
@@ -3508,24 +4635,19 @@ class WorkflowRunner:
             self._record_turn(5, "model_output", "assistant", "pass2_claims", claims_content,
                               model_name=self.model_name, artifact_id=art_id)
 
-            # Stage 5: Save to Lakebase tables
+            # Stage 5: Finalize status (Lakebase writes are already completed per batch)
             self._update_step(5, "in_progress",
-                              progress_message=f"[5/5] Writing {len(all_claims)} claims to database...",
+                              progress_message=(
+                                  f"[5/5] Finalizing batch writes ({len(written_indexes)}/{len(all_claims)} claim pairs saved)..."
+                                  f"{self._tpm_status_suffix()}"
+                              ),
                               progress_current=total, progress_total=total)
 
-            try:
-                self._save_claims_to_lakebase(
-                    skeletons,
-                    all_claims,
-                    inline_fact_check=bool(self.step5_inline_fact_check),
-                )
-            except Exception as e:
-                logger.exception("Failed to save claims to Lakebase (non-fatal)")
-                errors.append({"index": -1, "key_differentiator": "lakebase_write", "error": str(e)})
-
-            error_suffix = f" ({len(errors)} had errors — used fallback stubs)" if errors else ""
             self._update_step(5, "waiting_human",
-                              progress_message=f"Generated {len(all_claims)} claim pairs.{error_suffix} Review and approve or provide feedback.",
+                              progress_message=(
+                                  f"Generated {len(all_claims)} claim pairs. Saved {len(written_indexes)} claim pairs to Lakebase. Review and approve or provide feedback."
+                                  f"{self._tpm_status_suffix()}"
+                              ),
                               progress_current=total, progress_total=total,
                               error_details={"errors": errors} if errors else None)
 
@@ -3534,33 +4656,35 @@ class WorkflowRunner:
             self._update_step(5, "failed", error_message=f"Pass 2 failed: {e}",
                               error_details={"errors": errors} if errors else None)
 
-    def _stub_pass2_claim(self, skeleton):
-        """Create a stub claim for a skeleton differentiator (fallback on error)."""
-        kd_name = skeleton.get("key_differentiator", "Unknown")
-        return {
-            "databricks_headline": f"Databricks: {kd_name}",
-            "databricks_details": [f"Databricks provides strong capabilities in {kd_name}."],
-            "databricks_details_verbose": [[]],
-            "databricks_reasoning": "Generation failed — stub reasoning.",
-            "competitor_headline": f"{self.competitor}: {kd_name}",
-            "competitor_details": [f"{self.competitor} has partial support for {kd_name}."],
-            "competitor_details_verbose": [[]],
-            "competitor_reasoning": "Generation failed — stub reasoning.",
-            "citations": {
-                "databricks_headline": [],
-                "databricks_details": [],
-                "databricks_detail_verbose": [],
-                "databricks_reasoning": [],
-                "competitor_headline": [],
-                "competitor_details": [],
-                "competitor_detail_verbose": [],
-                "competitor_reasoning": [],
-            },
-            "sources": [],
-            "research_sources": [],
-        }
+    def _clear_generation_claim_rows(self, conn, gen_id: int):
+        """Delete all claim-side rows for a generation."""
+        conn.execute(
+            text(
+                "DELETE FROM fact_checks WHERE evidence_id IN "
+                "(SELECT e.evidence_id FROM evidence e JOIN claims c ON e.claim_id = c.claim_id WHERE c.generation_id = :gid)"
+            ),
+            {"gid": gen_id},
+        )
+        conn.execute(
+            text(
+                "DELETE FROM evidence WHERE claim_id IN "
+                "(SELECT claim_id FROM claims WHERE generation_id = :gid)"
+            ),
+            {"gid": gen_id},
+        )
+        conn.execute(
+            text(
+                "DELETE FROM claim_detail_items WHERE claim_id IN "
+                "(SELECT claim_id FROM claims WHERE generation_id = :gid)"
+            ),
+            {"gid": gen_id},
+        )
+        conn.execute(
+            text("DELETE FROM claims WHERE generation_id = :gid"),
+            {"gid": gen_id},
+        )
 
-    def _save_claims_to_lakebase(self, skeletons, claims, inline_fact_check: bool = False):
+    def _save_claims_to_lakebase(self, skeletons, claims, inline_fact_check: bool = False, append: bool = False):
         """Save Pass 2 claims into the Lakebase claims/evidence/fact_checks tables."""
         with self.engine.begin() as conn:
             # Reuse the generation created at workflow creation.
@@ -3571,32 +4695,10 @@ class WorkflowRunner:
                 {"sid": self.session_id},
             ).scalar()
 
-            # Clear any existing claims for this generation (in case of regeneration)
-            conn.execute(
-                text(
-                    "DELETE FROM fact_checks WHERE evidence_id IN "
-                    "(SELECT e.evidence_id FROM evidence e JOIN claims c ON e.claim_id = c.claim_id WHERE c.generation_id = :gid)"
-                ),
-                {"gid": gen_id},
-            )
-            conn.execute(
-                text(
-                    "DELETE FROM evidence WHERE claim_id IN "
-                    "(SELECT claim_id FROM claims WHERE generation_id = :gid)"
-                ),
-                {"gid": gen_id},
-            )
-            conn.execute(
-                text(
-                    "DELETE FROM claim_detail_items WHERE claim_id IN "
-                    "(SELECT claim_id FROM claims WHERE generation_id = :gid)"
-                ),
-                {"gid": gen_id},
-            )
-            conn.execute(
-                text("DELETE FROM claims WHERE generation_id = :gid"),
-                {"gid": gen_id},
-            )
+            # For full writes, clear generation rows first.
+            # For append writes, keep existing rows and only replace per-key-diff rows.
+            if not append:
+                self._clear_generation_claim_rows(conn, int(gen_id))
 
             # Ensure companies exist
             db_id = conn.execute(
@@ -3617,7 +4719,13 @@ class WorkflowRunner:
                     {"name": self.competitor},
                 ).scalar()
 
-            total_claims = 0
+            existing_total = 0
+            if append:
+                existing_total = conn.execute(
+                    text("SELECT COALESCE(total_claims, 0) FROM battlecard_generations WHERE generation_id = :gid"),
+                    {"gid": gen_id},
+                ).scalar() or 0
+            total_claims = int(existing_total)
             for idx, (sk, claim) in enumerate(zip(skeletons, claims)):
                 kd_name = sk.get("key_differentiator", "")
                 category_name = sk.get("category", "")
@@ -3677,6 +4785,36 @@ class WorkflowRunner:
                         f"key_diff_id not found for '{kd_name}' in category '{category_name}'",
                     )
                     continue
+
+                # In append mode, replace any existing claims for this key diff to keep writes idempotent.
+                if append:
+                    conn.execute(
+                        text(
+                            "DELETE FROM fact_checks WHERE evidence_id IN ("
+                            "SELECT e.evidence_id FROM evidence e "
+                            "JOIN claims c ON e.claim_id = c.claim_id "
+                            "WHERE c.generation_id = :gid AND c.key_diff_id = :kid)"
+                        ),
+                        {"gid": gen_id, "kid": kd_id},
+                    )
+                    conn.execute(
+                        text(
+                            "DELETE FROM evidence WHERE claim_id IN ("
+                            "SELECT claim_id FROM claims WHERE generation_id = :gid AND key_diff_id = :kid)"
+                        ),
+                        {"gid": gen_id, "kid": kd_id},
+                    )
+                    conn.execute(
+                        text(
+                            "DELETE FROM claim_detail_items WHERE claim_id IN ("
+                            "SELECT claim_id FROM claims WHERE generation_id = :gid AND key_diff_id = :kid)"
+                        ),
+                        {"gid": gen_id, "kid": kd_id},
+                    )
+                    conn.execute(
+                        text("DELETE FROM claims WHERE generation_id = :gid AND key_diff_id = :kid"),
+                        {"gid": gen_id, "kid": kd_id},
+                    )
 
                 def _rating_to_symbol(rating):
                     if rating in ("advantage", "strong_advantage", "positive"):
@@ -4076,7 +5214,7 @@ class WorkflowRunner:
                               progress_message=f"[2/4] Loading Pass 2 prompt template V{ver} for regeneration ({total} claims)...",
                               progress_current=1, progress_total=4)
             template_text = load_pass2_template(ver, engine=self.engine)
-            directives_for_template = "" if ver in (5, 6, 7, 8, 9, 10) else directive
+            directives_for_template = "" if ver in (5, 6, 7, 8, 9, 10, 11, 12) else directive
             pass2_request_spec = get_pass2_request_spec_with_engine(ver, engine=self.engine)
             pass2_json_schema = pass2_request_spec.get("schema")
 
@@ -4108,7 +5246,13 @@ class WorkflowRunner:
                         )
                 return normalized
 
-            def _normalize_v5_v6_result(parsed_result, skeleton, *, strict_match: bool = False):
+            def _normalize_v5_v6_result(
+                parsed_result,
+                skeleton,
+                *,
+                strict_match: bool = False,
+                allow_single_candidate_fallback: bool = False,
+            ):
                 # Some model SDK paths return wrapper blocks like:
                 # {"type":"text","text":"{...json...}"}.
                 # Unwrap these before candidate matching.
@@ -4181,6 +5325,14 @@ class WorkflowRunner:
                     elif len(name_matches) > 1 and strict_match:
                         raise ValueError(
                             f"Batched regeneration response had ambiguous key_differentiator matches for '{target_name}'"
+                        )
+                if chosen is None and len(candidates) == 1 and (allow_single_candidate_fallback or not strict_match):
+                    chosen = candidates[0]
+                    if strict_match and allow_single_candidate_fallback:
+                        logger.warning(
+                            "Pass 3 strict matcher fallback used single candidate for id='%s' name='%s'",
+                            target_id,
+                            target_name,
                         )
                 if chosen is None and candidates and not strict_match:
                     chosen = candidates[0]
@@ -4379,6 +5531,9 @@ class WorkflowRunner:
                         model_name=self.model_name,
                         rendered_prompt=rendered,
                         json_schema=pass2_json_schema if pass2_request_spec.get("use_structured_output") else None,
+                        prompt_caching=(pass2_request_spec.get("request_config") or {}).get("prompt_caching"),
+                        segmented_prompt_caching=(pass2_request_spec.get("request_config") or {}).get("segmented_prompt_caching"),
+                        usage_callback=self._record_token_usage,
                     )
                     parsed = parse_model_json(raw)
                     return {idx: _normalize_v5_v6_result(parsed, skeletons[idx], strict_match=True) for idx in idx_list}
@@ -4480,6 +5635,9 @@ class WorkflowRunner:
                         model_name=self.model_name,
                         rendered_prompt=rendered,
                         json_schema=pass2_json_schema if pass2_request_spec.get("use_structured_output") else None,
+                        prompt_caching=(pass2_request_spec.get("request_config") or {}).get("prompt_caching"),
+                        segmented_prompt_caching=(pass2_request_spec.get("request_config") or {}).get("segmented_prompt_caching"),
+                        usage_callback=self._record_token_usage,
                     )
                     parsed = parse_model_json(raw)
                     for idx, sk in enumerate(skeletons):
@@ -4506,6 +5664,18 @@ class WorkflowRunner:
                                       progress_current=idx, progress_total=max(total, 1),
                                       progress_message=f"[3/4] Regenerating claim {idx + 1}/{total}: {kd_name}")
 
+                    single_payload = [
+                        {
+                            "id": sk.get("id", ""),
+                            "category": sk.get("category", ""),
+                            "key_differentiator": sk.get("key_differentiator", ""),
+                            "description": sk.get("description", ""),
+                            "databricks_rating": sk.get("databricks_rating", ""),
+                            "competitor_rating": sk.get("competitor_rating", ""),
+                            "selection_reasoning": sk.get("selection_reasoning", ""),
+                        }
+                    ]
+
                     rendered = render_template(
                         template_text,
                         competitor=self.competitor,
@@ -4515,8 +5685,8 @@ class WorkflowRunner:
                         databricks_rating=sk.get("databricks_rating", ""),
                         competitor_rating=sk.get("competitor_rating", ""),
                         selection_reasoning=sk.get("selection_reasoning", ""),
-                        num_diffs=len(category_payloads.get(sk.get("category", ""), [])),
-                        key_diffs_json=json.dumps(category_payloads.get(sk.get("category", ""), []), indent=2),
+                        num_diffs=1,
+                        key_diffs_json=json.dumps(single_payload, indent=2),
                         directives=directives_for_template,
                         context=context,
                     )
@@ -4535,11 +5705,15 @@ class WorkflowRunner:
                             model_name=self.model_name,
                             rendered_prompt=rendered,
                             json_schema=pass2_json_schema if pass2_request_spec.get("use_structured_output") else None,
+                            prompt_caching=(pass2_request_spec.get("request_config") or {}).get("prompt_caching"),
+                            segmented_prompt_caching=(pass2_request_spec.get("request_config") or {}).get("segmented_prompt_caching"),
+                            usage_callback=self._record_token_usage,
                         )
                         updated_claims[idx] = _normalize_v5_v6_result(
                             parse_model_json(raw),
                             sk,
-                            strict_match=ver in (5, 6, 7, 8, 9, 10),
+                            strict_match=ver in (5, 6, 7, 8, 9, 10, 11, 12),
+                            allow_single_candidate_fallback=ver in (5, 6, 7, 8, 9, 10, 11, 12),
                         )
                     except Exception as e:
                         error_str = str(e)
@@ -4547,10 +5721,14 @@ class WorkflowRunner:
                         errors.append({"index": idx, "key_differentiator": kd_name, "error": error_str})
                         self._update_step(5, "in_progress", last_error=f"[Regen {kd_name}] {error_str[:500]}")
 
+            if errors:
+                raise RuntimeError(
+                    f"Pass 2 regeneration produced {len(errors)} error(s); aborting without saving regenerated claims."
+                )
+
             # Stage 4: Save artifacts and to Lakebase
-            error_suffix = f" ({len(errors)} errors)" if errors else ""
             self._update_step(5, "in_progress",
-                              progress_message=f"[4/4] Saving {len(updated_claims)} regenerated claims{error_suffix}...",
+                              progress_message=f"[4/4] Saving {len(updated_claims)} regenerated claims...",
                               progress_current=total, progress_total=total)
 
             regen_content = json.dumps(updated_claims, indent=2)
@@ -4578,19 +5756,14 @@ class WorkflowRunner:
             )
 
             # Re-save to Lakebase
-            try:
-                self._save_claims_to_lakebase(
-                    skeletons,
-                    updated_claims,
-                    inline_fact_check=bool(self.step5_inline_fact_check),
-                )
-            except Exception as e:
-                logger.exception("Failed to save regenerated claims to Lakebase (non-fatal)")
-                errors.append({"index": -1, "key_differentiator": "lakebase_write", "error": str(e)})
+            self._save_claims_to_lakebase(
+                skeletons,
+                updated_claims,
+                inline_fact_check=bool(self.step5_inline_fact_check),
+            )
 
-            error_suffix = f" ({len(errors)} had errors — kept originals)" if errors else ""
             self._update_step(5, "waiting_human",
-                              progress_message=f"Regenerated {len(updated_claims)} claims.{error_suffix} Review again.",
+                              progress_message=f"Regenerated {len(updated_claims)} claims. Review again.",
                               progress_current=total, progress_total=total,
                               error_details={"errors": errors} if errors else None)
 

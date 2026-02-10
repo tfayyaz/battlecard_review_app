@@ -5503,85 +5503,12 @@
 
         /**
          * Build expansion HTML for the Key Differentiator column.
-         * Shows: description, selection reasoning, directive alignment, research sources, MLflow links.
+         * Shows only Step 4 reasoning fields for review mode:
+         * selection_reasoning, rank_reasoning, directive_alignment.
          */
         function buildKeyDiffExpansionHtml(diffData, citations, sourcesArr) {
-            function formatDbValue(value) {
-                if (value === null || value === undefined || value === '') {
-                    return '<span class="no-data">N/A</span>';
-                }
-                if (typeof value === 'boolean') return value ? 'true' : 'false';
-                if (typeof value === 'object') {
-                    try {
-                        return escapeHtmlTrial(JSON.stringify(value));
-                    } catch (e) {
-                        return escapeHtmlTrial(String(value));
-                    }
-                }
-                return escapeHtmlTrial(String(value));
-            }
-
-            function renderDbFieldGrid(fields) {
-                const parts = [];
-                fields.forEach(function(field) {
-                    const key = field[0];
-                    const value = field[1];
-                    parts.push(`<div class="db-field-key">${escapeHtmlTrial(String(key))}</div>`);
-                    parts.push(`<div class="db-field-value">${formatDbValue(value)}</div>`);
-                });
-                if (parts.length === 0) return '<span class="no-data">No database fields available</span>';
-                return `<div class="db-field-grid">${parts.join('')}</div>`;
-            }
-
             let html = '<div class="citation-expansion">';
             html += '<div class="citation-expansion-header" style="border-bottom-color:#0369a1; color:#0369a1;">Key Differentiator Details</div>';
-
-            const dbRecord = diffData.db_record || {};
-            const dbRelated = diffData.db_related || {};
-            const dbFields = [
-                ['key_diff_id', dbRecord.key_diff_id ?? diffData.key_diff_id],
-                ['category_id', dbRecord.category_id ?? diffData.category_id],
-                ['generation_id', dbRecord.generation_id ?? diffData.generation_id],
-                ['key_diff_name', dbRecord.key_diff_name ?? diffData.key_differentiator],
-                ['key_diff_description', dbRecord.key_diff_description ?? diffData.description],
-                ['display_order', dbRecord.display_order ?? diffData.rank],
-                ['is_active', dbRecord.is_active ?? diffData.key_diff_is_active],
-                ['created_at', dbRecord.created_at ?? diffData.key_diff_created_at],
-                ['category_name (joined)', dbRecord.category_name ?? diffData.category],
-            ];
-
-            const relatedFields = [
-                ['databricks_claim_id', dbRelated.databricks_claim_id ?? diffData.databricks_claim_id],
-                ['competitor_claim_id', dbRelated.competitor_claim_id ?? diffData.fabric_claim_id],
-                ['databricks_detail_items', dbRelated.databricks_detail_items_count ?? (Array.isArray(diffData.databricks_detail_items) ? diffData.databricks_detail_items.length : 0)],
-                ['competitor_detail_items', dbRelated.competitor_detail_items_count ?? (Array.isArray(diffData.fabric_detail_items) ? diffData.fabric_detail_items.length : 0)],
-                ['databricks_l300_items', dbRelated.databricks_verbose_items_count ?? 0],
-                ['competitor_l300_items', dbRelated.competitor_verbose_items_count ?? 0],
-                ['evidence_rows_total', dbRelated.evidence_rows_total ?? 0],
-                ['fact_check_rows_total', dbRelated.fact_check_rows_total ?? (Array.isArray(diffData.fact_checks) ? diffData.fact_checks.length : 0)],
-            ];
-
-            html += '<div class="expand-section">';
-            html += '<div class="expand-section-title">Key Diff Database Row (key_differentiators)</div>';
-            html += `<div class="expand-section-content">${renderDbFieldGrid(dbFields)}</div>`;
-            if (Object.keys(dbRecord).length > 0) {
-                html += `<div class="db-json-block">${escapeHtmlTrial(JSON.stringify(dbRecord, null, 2))}</div>`;
-            }
-            html += '</div>';
-
-            html += '<div class="expand-section">';
-            html += '<div class="expand-section-title">Related Database Records</div>';
-            html += `<div class="expand-section-content">${renderDbFieldGrid(relatedFields)}</div>`;
-            if (Object.keys(dbRelated).length > 0) {
-                html += `<div class="db-json-block">${escapeHtmlTrial(JSON.stringify(dbRelated, null, 2))}</div>`;
-            }
-            html += '</div>';
-
-            // Description
-            html += '<div class="expand-section">';
-            html += '<div class="expand-section-title">Description</div>';
-            html += `<div class="expand-section-content">${diffData.description ? escapeHtmlTrial(diffData.description) : '<span class="no-data">No description provided</span>'}</div>`;
-            html += '</div>';
 
             // Selection Reasoning
             const selReasoning = diffData.selection_reasoning || diffData.key_diff_reasoning || diffData.reasoning || '';
@@ -5592,24 +5519,18 @@
             html += '</div>';
 
             // Rank Reasoning
-            if (diffData.rank_reasoning) {
-                html += '<div class="expand-section">';
-                html += '<div class="expand-section-title">Rank Reasoning</div>';
-                html += `<div class="expand-section-content">${escapeHtmlTrial(diffData.rank_reasoning)}</div>`;
-                html += '</div>';
-            }
+            const rankReasoning = diffData.rank_reasoning || '';
+            html += '<div class="expand-section">';
+            html += '<div class="expand-section-title">Rank Reasoning</div>';
+            html += `<div class="expand-section-content">${rankReasoning ? escapeHtmlTrial(rankReasoning) : '<span class="no-data">No rank reasoning provided</span>'}</div>`;
+            html += '</div>';
 
-            // MLflow Links (UC battlecards only)
-            const mlflowRunUrl = trialData.trial.mlflow_run_url || '';
-            if (mlflowRunUrl) {
-                html += '<div class="expand-section">';
-                html += '<div class="expand-section-title">MLflow Tracking</div>';
-                html += '<div class="expand-section-content" style="display:flex;gap:12px;flex-wrap:wrap;">';
-                if (mlflowRunUrl) {
-                    html += `<a href="${escapeHtmlTrial(mlflowRunUrl)}" target="_blank" class="mlflow-link"><span class="mlflow-icon">&#9881;</span> MLflow Run / Trace</a>`;
-                }
-                html += '</div></div>';
-            }
+            // Directive Alignment
+            const directiveAlignment = diffData.directive_alignment || '';
+            html += '<div class="expand-section">';
+            html += '<div class="expand-section-title">Directive Alignment</div>';
+            html += `<div class="expand-section-content">${directiveAlignment ? escapeHtmlTrial(directiveAlignment) : '<span class="no-data">No directive alignment provided</span>'}</div>`;
+            html += '</div>';
 
             html += '</div>';
             return html;

@@ -491,6 +491,115 @@
             font-weight: 600;
             color: var(--info);
         }
+        .batch-timeline-panel {
+            margin: 10px 0 14px;
+            padding: 10px 12px;
+            border: 1px solid #DBEAFE;
+            background: #F8FAFF;
+            border-radius: 8px;
+        }
+        .batch-timeline-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 10px;
+            margin-bottom: 6px;
+        }
+        .batch-timeline-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: #1E3A8A;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .batch-timeline-summary {
+            font-size: 12px;
+            color: #1F2937;
+        }
+        .batch-gantt-empty {
+            font-size: 12px;
+            color: #6B7280;
+            padding: 4px 0;
+        }
+        .batch-gantt-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 320px;
+            overflow-y: auto;
+            padding-right: 2px;
+        }
+        .batch-gantt-item {
+            border: 1px solid #E5E7EB;
+            border-radius: 8px;
+            background: #FFFFFF;
+            padding: 8px 10px;
+        }
+        .batch-gantt-item-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            align-items: baseline;
+            margin-bottom: 6px;
+        }
+        .batch-gantt-item-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #111827;
+        }
+        .batch-gantt-item-meta {
+            font-size: 11px;
+            color: #6B7280;
+        }
+        .batch-track-row {
+            display: grid;
+            grid-template-columns: 92px 1fr;
+            gap: 8px;
+            align-items: center;
+            margin-top: 4px;
+        }
+        .batch-track-label {
+            font-size: 11px;
+            color: #4B5563;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .batch-track-bar-wrap {
+            position: relative;
+            height: 16px;
+            border-radius: 6px;
+            background: #F3F4F6;
+            overflow: hidden;
+        }
+        .batch-track-bar {
+            position: absolute;
+            top: 2px;
+            bottom: 2px;
+            border-radius: 4px;
+            min-width: 2px;
+        }
+        .batch-track-bar.generate { background: #2563EB; }
+        .batch-track-bar.write { background: #059669; }
+        .batch-track-marker {
+            position: absolute;
+            top: -1px;
+            width: 2px;
+            height: 18px;
+            background: #111827;
+        }
+        .batch-track-marker-label {
+            position: absolute;
+            top: -16px;
+            font-size: 10px;
+            color: #1F2937;
+            white-space: nowrap;
+        }
+        .batch-gantt-status {
+            font-size: 11px;
+            font-weight: 600;
+            color: #1F2937;
+        }
+        .batch-gantt-status.failed { color: #B91C1C; }
         .error-details-list {
             margin: 8px 0;
             font-size: 12px;
@@ -2363,7 +2472,26 @@
                                 <button class="btn btn-primary" onclick="triggerStep(4, 'generate')" id="btn-step4-generate">Generate Key Differentiators</button>
                                 <button class="btn" onclick="viewPrompt(4)">View Prompt</button>
                             </div>
+                            {% elif step.status == 'in_progress' %}
+                            <div class="batch-timeline-panel">
+                                <div class="batch-timeline-head">
+                                    <div class="batch-timeline-title">Step 4 Batch Timeline</div>
+                                    <div class="batch-timeline-summary" id="step4-batch-summary">Waiting for first generated batch...</div>
+                                </div>
+                                <div class="step4-batch-timeline">
+                                    <div class="batch-gantt-empty">No batch data yet.</div>
+                                </div>
+                            </div>
                             {% elif step.status == 'waiting_human' %}
+                            <div class="batch-timeline-panel">
+                                <div class="batch-timeline-head">
+                                    <div class="batch-timeline-title">Step 4 Batch Timeline</div>
+                                    <div class="batch-timeline-summary" id="step4-batch-summary">Loaded from latest Step 4 artifact.</div>
+                                </div>
+                                <div class="step4-batch-timeline">
+                                    <div class="batch-gantt-empty">No batch data recorded for this run.</div>
+                                </div>
+                            </div>
                             <div id="skeletons-preview">
                                 {% set skel_artifacts = artifacts_by_step.get(4, []) %}
                                 {% for a in skel_artifacts if a.artifact_type == 'pass1_skeletons' %}
@@ -2478,7 +2606,17 @@
 
                         <!-- Step 5: Generate Key Diff Claims -->
                         {% elif step.step_number == 5 %}
-                            {% if step.status == 'ready' %}
+                            {% if step.status == 'in_progress' %}
+                            <div class="batch-timeline-panel">
+                                <div class="batch-timeline-head">
+                                    <div class="batch-timeline-title">Step 5 Batch Timeline</div>
+                                    <div class="batch-timeline-summary" id="step5-batch-summary">Waiting for first generated batch...</div>
+                                </div>
+                                <div class="step5-batch-timeline">
+                                    <div class="batch-gantt-empty">No batch data yet.</div>
+                                </div>
+                            </div>
+                            {% elif step.status == 'ready' %}
                             <div class="step-template-config">
                                 <label for="step5-pass2-template">Step 5 Prompt Template</label>
                                 <div class="step-template-config-row">
@@ -2515,6 +2653,15 @@
                                     <button class="btn" onclick="saveStep5TemplateConfig()" id="btn-step5-save-template-regen">Save</button>
                                 </div>
                                 <div class="step-template-hint" id="step5-template-hint-regen"></div>
+                            </div>
+                            <div class="batch-timeline-panel">
+                                <div class="batch-timeline-head">
+                                    <div class="batch-timeline-title">Step 5 Batch Timeline</div>
+                                    <div class="batch-timeline-summary" id="step5-batch-summary">Loaded from latest Step 5 artifact.</div>
+                                </div>
+                                <div class="step5-batch-timeline">
+                                    <div class="batch-gantt-empty">No batch data recorded for this run.</div>
+                                </div>
                             </div>
                             <div id="claims-preview">
                                 {% set skel_arts_waiting = artifacts_by_step.get(4, [])|selectattr('artifact_type', 'eq', 'pass1_skeletons')|list %}
@@ -3302,6 +3449,29 @@
                 const badge = document.getElementById('step-badge-' + n);
                 const statusText = document.getElementById('step-status-text-' + n);
 
+                function ensureStep5TimelinePanel() {
+                    if (n !== 5) return;
+                    if (document.querySelector('#step-body-5 .step5-batch-timeline')) return;
+                    const body = document.getElementById('step-body-5');
+                    if (!body) return;
+                    const html =
+                        '<div class="batch-timeline-panel">' +
+                            '<div class="batch-timeline-head">' +
+                                '<div class="batch-timeline-title">Step 5 Batch Timeline</div>' +
+                                '<div class="batch-timeline-summary" id="step5-batch-summary">Loading batch timeline...</div>' +
+                            '</div>' +
+                            '<div class="step5-batch-timeline">' +
+                                '<div class="batch-gantt-empty">No batch timeline events yet.</div>' +
+                            '</div>' +
+                        '</div>';
+                    const progressEl = document.getElementById('progress-5');
+                    if (progressEl) {
+                        progressEl.insertAdjacentHTML('afterend', html);
+                    } else {
+                        body.insertAdjacentHTML('afterbegin', html);
+                    }
+                }
+
                 // Handle stuck steps
                 if (step.is_stuck) {
                     if (badge) {
@@ -3360,6 +3530,7 @@
                 // Update progress if in_progress
                 if (step.status === 'in_progress') {
                     anyInProgress = true;
+                    ensureStep5TimelinePanel();
                     let progressEl = document.getElementById('progress-' + n);
                     if (!progressEl) {
                         // Create progress bar with percentage and stop button
@@ -4132,6 +4303,12 @@
 
                 var html = '';
                 _debugLogs.forEach(function(log, idx) {
+                    var inputTokens = Number(log.input_tokens || 0);
+                    var outputTokens = Number(log.output_tokens || 0);
+                    var totalTokens = Number(log.total_tokens || (inputTokens + outputTokens));
+                    var inputTpm = Number(log.input_tpm || 0);
+                    var outputTpm = Number(log.output_tpm || 0);
+
                     var respTypeBadge = '';
                     if (log.response_type === 'dict') {
                         respTypeBadge = '<span class="debug-badge dict">Dict</span>';
@@ -4147,6 +4324,9 @@
                     var savedBadge = log.lakebase_saved
                         ? '<span class="debug-badge saved">Saved</span>'
                         : '<span class="debug-badge not-saved">Not Saved</span>';
+                    var cacheBadge = log.cache_applied
+                        ? '<span class="debug-badge fixed">Cache On</span>'
+                        : '<span class="debug-badge">Cache Off</span>';
 
                     html += '<div class="debug-log-item">' +
                         '<div class="debug-log-header" onclick="toggleDebugLogItem(' + idx + ')">' +
@@ -4155,10 +4335,13 @@
                                 '<div class="debug-log-meta">' +
                                     '<span>Category: ' + escapeHtml(log.category || 'N/A') + '</span>' +
                                     '<span>Time: ' + (log.processing_time_ms || 0) + 'ms</span>' +
+                                    '<span>Tokens: in ' + inputTokens.toLocaleString() + ' / out ' + outputTokens.toLocaleString() + ' / total ' + totalTokens.toLocaleString() + '</span>' +
+                                    '<span>TPM: in ' + inputTpm.toLocaleString() + ' / out ' + outputTpm.toLocaleString() + '</span>' +
                                 '</div>' +
                             '</div>' +
                             '<div class="debug-log-badges">' +
                                 respTypeBadge +
+                                cacheBadge +
                                 savedBadge +
                             '</div>' +
                         '</div>' +
@@ -4841,7 +5024,157 @@
     var _lastClaimsCount = 0;
     var _currentSkeletons = [];
     var _currentClaims = [];
+    var _currentPass1Meta = {};
+    var _currentPass2Meta = {};
     var _competitor = "{{ session.competitor_name }}";
+
+    function _renderBatchTimelineCommon(meta, containersSelector, summaryElementId, emptyMessage) {
+        var containers = document.querySelectorAll(containersSelector);
+        if (!containers || containers.length === 0) return;
+
+        meta = meta || {};
+        var timeline = Array.isArray(meta.batch_timeline) ? meta.batch_timeline : [];
+        var generatedCount = Number(meta.generated_count || 0);
+        var writtenCount = Number(meta.written_count || 0);
+        var totalCount = Number(meta.total || meta.count || generatedCount || 0);
+        var summaryEl = document.getElementById(summaryElementId);
+        if (summaryEl) {
+            summaryEl.textContent = generatedCount + '/' + totalCount + ' generated, ' + writtenCount + '/' + totalCount + ' written';
+        }
+
+        if (!timeline.length) {
+            containers.forEach(function(container) {
+                container.innerHTML = '<div class="batch-gantt-empty">' + (emptyMessage || 'No batch timeline events yet.') + '</div>';
+            });
+            return;
+        }
+
+        function esc(v) {
+            return String(v || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+        function ts(v) {
+            if (!v) return null;
+            var t = new Date(v).getTime();
+            return Number.isFinite(t) ? t : null;
+        }
+
+        var minTs = Infinity;
+        var maxTs = 0;
+        timeline.forEach(function(evt) {
+            [evt.generate_started_at, evt.generate_finished_at, evt.write_started_at, evt.write_finished_at].forEach(function(rawTs) {
+                var t = ts(rawTs);
+                if (t !== null) {
+                    if (t < minTs) minTs = t;
+                    if (t > maxTs) maxTs = t;
+                }
+            });
+        });
+        if (!Number.isFinite(minTs)) {
+            minTs = Date.now();
+            maxTs = minTs + 1000;
+        }
+        if (maxTs <= minTs) {
+            maxTs = minTs + 1000;
+        }
+        var span = Math.max(maxTs - minTs, 1);
+
+        function renderTrack(evt, kind) {
+            var startTs = ts(kind === 'generate' ? evt.generate_started_at : evt.write_started_at);
+            var endTs = ts(kind === 'generate' ? evt.generate_finished_at : evt.write_finished_at);
+            var markerTs = endTs;
+            if (startTs === null && endTs === null) {
+                return '';
+            }
+            if (startTs === null) startTs = endTs;
+            if (endTs === null) endTs = Date.now();
+
+            var leftPct = ((startTs - minTs) / span) * 100;
+            var widthPct = Math.max(((endTs - startTs) / span) * 100, 0.8);
+            leftPct = Math.max(0, Math.min(100, leftPct));
+            widthPct = Math.max(0.8, Math.min(100 - leftPct, widthPct));
+            var cls = kind === 'generate' ? 'generate' : 'write';
+            var markerLeft = markerTs !== null ? ((markerTs - minTs) / span) * 100 : null;
+            if (markerLeft !== null) markerLeft = Math.max(0, Math.min(100, markerLeft));
+            var markerLabel = kind === 'generate' ? 'generated' : 'saved';
+            var markerHtml = markerLeft === null ? '' : (
+                '<span class="batch-track-marker" style="left:' + markerLeft + '%;"></span>' +
+                '<span class="batch-track-marker-label" style="left:' + Math.max(0, Math.min(95, markerLeft)) + '%;">' + markerLabel + '</span>'
+            );
+            return (
+                '<div class="batch-track-bar-wrap">' +
+                    '<span class="batch-track-bar ' + cls + '" style="left:' + leftPct + '%; width:' + widthPct + '%;"></span>' +
+                    markerHtml +
+                '</div>'
+            );
+        }
+
+        var listHtml = '<div class="batch-gantt-list">';
+        timeline.forEach(function(evt, idx) {
+            var label = evt.label || ('Batch ' + (idx + 1));
+            var diffCount = Number(evt.diff_count || 0);
+            var status = String(evt.status || 'unknown');
+            var statusClass = /failed/.test(status) ? 'failed' : '';
+            var genMs = evt.generate_duration_ms != null ? (evt.generate_duration_ms + 'ms') : 'n/a';
+            var writeMs = evt.write_duration_ms != null ? (evt.write_duration_ms + 'ms') : 'n/a';
+            var inputTokens = Number(evt.input_tokens || 0);
+            var outputTokens = Number(evt.output_tokens || 0);
+            var cacheRead = Number(evt.cache_read_input_tokens || 0);
+            var cacheWrite = Number(evt.cache_creation_input_tokens || 0);
+            listHtml +=
+                '<div class="batch-gantt-item">' +
+                    '<div class="batch-gantt-item-head">' +
+                        '<div class="batch-gantt-item-label">Batch ' + (idx + 1) + ': ' + esc(label) + '</div>' +
+                        '<div class="batch-gantt-item-meta">' + diffCount + ' diffs</div>' +
+                    '</div>' +
+                    '<div class="batch-track-row">' +
+                        '<div class="batch-track-label">Generate</div>' +
+                        renderTrack(evt, 'generate') +
+                    '</div>' +
+                    '<div class="batch-track-row">' +
+                        '<div class="batch-track-label">Lakebase</div>' +
+                        renderTrack(evt, 'write') +
+                    '</div>' +
+                    '<div class="batch-gantt-item-meta" style="margin-top:6px;">' +
+                        '<span>gen ' + esc(genMs) + '</span> · <span>write ' + esc(writeMs) + '</span> · ' +
+                        '<span class="batch-gantt-status ' + statusClass + '">' + esc(status) + '</span>' +
+                        (evt.error ? (' · <span class="batch-gantt-status failed">' + esc(evt.error) + '</span>') : '') +
+                    '</div>' +
+                    '<div class="batch-gantt-item-meta" style="margin-top:4px;">' +
+                        '<span>input ' + esc(inputTokens) + '</span> · ' +
+                        '<span>cache read ' + esc(cacheRead) + '</span> · ' +
+                        '<span>cache write ' + esc(cacheWrite) + '</span> · ' +
+                        '<span>output ' + esc(outputTokens) + '</span>' +
+                    '</div>' +
+                '</div>';
+        });
+        listHtml += '</div>';
+        containers.forEach(function(container) {
+            container.innerHTML = listHtml;
+        });
+    }
+
+    window.renderStep4BatchTimeline = function(pass1Meta) {
+        _renderBatchTimelineCommon(
+            pass1Meta,
+            '.step4-batch-timeline',
+            'step4-batch-summary',
+            'No Step 4 batch timeline events yet.'
+        );
+    };
+
+    window.renderStep5BatchTimeline = function(pass2Meta) {
+        _renderBatchTimelineCommon(
+            pass2Meta,
+            '.step5-batch-timeline',
+            'step5-batch-summary',
+            'No Step 5 batch timeline events yet.'
+        );
+    };
 
     // Render battlecard as category tables with Databricks/Competitor columns
     window.renderBattlecardCards = function(skeletons, claims) {
@@ -5010,6 +5343,15 @@
                 }
             }
 
+            if (data.pass2_meta && typeof data.pass2_meta === 'object') {
+                _currentPass2Meta = data.pass2_meta;
+                window.renderStep5BatchTimeline(_currentPass2Meta);
+            }
+            if (data.pass1_meta && typeof data.pass1_meta === 'object') {
+                _currentPass1Meta = data.pass1_meta;
+                window.renderStep4BatchTimeline(_currentPass1Meta);
+            }
+
             // Show category placeholders if categories exist but no skeletons yet
             if (data.category_selections && (!data.pass1_skeletons || data.pass1_skeletons.length === 0) && _lastDiffsCount === 0) {
                 window.renderCategoryPlaceholders(data.category_selections);
@@ -5031,11 +5373,14 @@
             var skeletons = [];
             var claims = [];
             var catSel = null;
+            var pass2Meta = {};
+            var pass1Meta = {};
 
             {% if skel_arts %}
             try {
                 skeletons = {{ skel_arts[0].artifact_content | safe }};
                 _lastDiffsCount = skeletons.length;
+                pass1Meta = {{ (skel_arts[0].artifact_metadata or {}) | tojson }};
             } catch(e) { console.error('Failed to parse skeletons:', e); }
             {% endif %}
 
@@ -5043,6 +5388,7 @@
             try {
                 claims = {{ claim_arts[0].artifact_content | safe }};
                 _lastClaimsCount = claims.length;
+                pass2Meta = {{ (claim_arts[0].artifact_metadata or {}) | tojson }};
             } catch(e) { console.error('Failed to parse claims:', e); }
             {% endif %}
 
@@ -5057,6 +5403,10 @@
             } else if (catSel) {
                 window.renderCategoryPlaceholders(catSel);
             }
+            _currentPass2Meta = pass2Meta || {};
+            _currentPass1Meta = pass1Meta || {};
+            window.renderStep4BatchTimeline(_currentPass1Meta);
+            window.renderStep5BatchTimeline(_currentPass2Meta);
         }, 100);
     })();
 

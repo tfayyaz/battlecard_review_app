@@ -136,3 +136,46 @@ databricks apps deploy --target dev -p fe-vm-pmt
 ```bash
 databricks apps logs battlecards-review-pg -p fe-vm-pmt --tail-lines 200
 ```
+
+## Autoscaling Dev Branch (Run-Local)
+
+Use this flow when you want local app testing against a Lakebase Autoscaling Postgres branch instead of the provisioned instance.
+
+### Local entrypoint
+- `app.local.yaml` uses `command: [".venv/bin/python", "app.py"]`.
+- This avoids local `python` (Python 2) incompatibility with `app.py`.
+
+### Create/refresh autoscaling dev branch and endpoint
+- Example resources used:
+  - project: `projects/battlecards-review-dev`
+  - branch: `projects/battlecards-review-dev/branches/dev`
+  - endpoint: `projects/battlecards-review-dev/branches/dev/endpoints/rw`
+
+### Migrate provisioned data to autoscaling with pg_dump/pg_restore
+```bash
+cd /Users/tahir.fayyaz/databricks-dev/battle-station-dev/battlecard-review-app
+./scripts/migrate_provisioned_to_autoscaling.sh \
+  --profile fe-vm-pmt \
+  --source-instance battlestation \
+  --target-endpoint projects/battlecards-review-dev/branches/main/endpoints/rw
+```
+
+Notes:
+- Script exports only `public` base tables to avoid Databricks-managed internal schema/event trigger conflicts.
+- Script verifies source/target row counts for all exported tables.
+
+### Run local app against autoscaling dev branch
+```bash
+cd /Users/tahir.fayyaz/databricks-dev/battle-station-dev/battlecard-review-app
+./scripts/run_local_autoscaling_dev.sh \
+  --profile fe-vm-pmt \
+  --endpoint projects/battlecards-review-dev/branches/dev/endpoints/rw \
+  --entry-point app.local.yaml \
+  --app-port 5060 \
+  --port 5061
+```
+
+### Validate run-local is using dev branch
+1. Create a workflow via local app (`http://localhost:5061/workflow/new`).
+2. Query the new `session_id` on both branches.
+3. Expect row exists in `dev`, not `main`.

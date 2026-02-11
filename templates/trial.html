@@ -3259,6 +3259,16 @@
                             <span class="session-id-display" onclick="copySessionId('{{ trial.session_id }}')" title="Click to copy workflow session ID">Workflow ID: <code>{{ trial.session_id }}</code><span class="copy-icon">&#128203;</span></span>
                             <a class="workflow-link" href="/workflow/{{ trial.session_id }}">Open Workflow</a>
                             {% endif %}
+                            {% if trial.battlecard_id %}
+                            <a class="workflow-link" href="/api/battlecard/{{ trial.battlecard_id }}/attribution" target="_blank" rel="noopener">Attribution JSON</a>
+                            {% endif %}
+                            {% if trial.session_audit %}
+                            <span>
+                                Session Created By:
+                                <strong>{{ trial.session_audit.created_by_user_name or trial.session_audit.created_by_user_id or 'unknown' }}</strong>
+                                / {{ trial.session_audit.created_by_agent_name or trial.session_audit.created_by_agent_id or 'unknown' }}
+                            </span>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
@@ -5961,6 +5971,25 @@
             html += `<div class="expand-section-content">${directiveAlignment ? escapeHtmlTrial(directiveAlignment) : '<span class="no-data">No directive alignment provided</span>'}</div>`;
             html += '</div>';
 
+            const keyDiffMetaRows = [];
+            const createdUser = diffData.key_diff_created_by_user_name || diffData.key_diff_created_by_user_id || 'unknown';
+            const createdAgent = diffData.key_diff_created_by_agent_name || diffData.key_diff_created_by_agent_id || 'unknown';
+            const updatedUser = diffData.key_diff_updated_by_user_name || diffData.key_diff_updated_by_user_id || 'unknown';
+            const updatedAgent = diffData.key_diff_updated_by_agent_name || diffData.key_diff_updated_by_agent_id || 'unknown';
+            const copiedGen = diffData.db_record && diffData.db_record.copied_from_generation_id;
+            const copiedKd = diffData.db_record && diffData.db_record.copied_from_key_diff_id;
+            keyDiffMetaRows.push(`<div><strong>Created By:</strong> user=${escapeHtmlTrial(String(createdUser))} · agent=${escapeHtmlTrial(String(createdAgent))}</div>`);
+            keyDiffMetaRows.push(`<div><strong>Updated By:</strong> user=${escapeHtmlTrial(String(updatedUser))} · agent=${escapeHtmlTrial(String(updatedAgent))}</div>`);
+            if (copiedGen || copiedKd) {
+                keyDiffMetaRows.push(
+                    `<div><strong>Copied From:</strong> generation=${escapeHtmlTrial(String(copiedGen || 'n/a'))} · key_diff_id=${escapeHtmlTrial(String(copiedKd || 'n/a'))}</div>`
+                );
+            }
+            html += '<div class="expand-section">';
+            html += '<div class="expand-section-title">Attribution</div>';
+            html += `<div class="expand-section-content">${keyDiffMetaRows.join('')}</div>`;
+            html += '</div>';
+
             html += '</div>';
             return html;
         }
@@ -5982,6 +6011,7 @@
             const headline = isDatabricks ? diffData.databricks_headline : diffData.fabric_headline;
             const detailsText = isDatabricks ? diffData.databricks_details : diffData.fabric_details;
             const detailItems2 = isDatabricks ? (diffData.databricks_detail_items || []) : (diffData.fabric_detail_items || []);
+            const related = diffData.db_related || {};
 
             // Citation fields
             const headlineCitationField = isDatabricks ? 'databricks_headline' : (citations.competitor_headline ? 'competitor_headline' : 'fabric_headline');
@@ -6013,6 +6043,36 @@
                 html += '</div>';
                 html += '</div>';
             }
+
+            const createdUser = isDatabricks
+                ? (related.databricks_claim_created_by_user_name || related.databricks_claim_created_by_user_id || 'unknown')
+                : (related.competitor_claim_created_by_user_name || related.competitor_claim_created_by_user_id || 'unknown');
+            const createdAgent = isDatabricks
+                ? (related.databricks_claim_created_by_agent_name || related.databricks_claim_created_by_agent_id || 'unknown')
+                : (related.competitor_claim_created_by_agent_name || related.competitor_claim_created_by_agent_id || 'unknown');
+            const updatedUser = isDatabricks
+                ? (related.databricks_claim_updated_by_user_name || related.databricks_claim_updated_by_user_id || 'unknown')
+                : (related.competitor_claim_updated_by_user_name || related.competitor_claim_updated_by_user_id || 'unknown');
+            const updatedAgent = isDatabricks
+                ? (related.databricks_claim_updated_by_agent_name || related.databricks_claim_updated_by_agent_id || 'unknown')
+                : (related.competitor_claim_updated_by_agent_name || related.competitor_claim_updated_by_agent_id || 'unknown');
+            const copiedClaimId = isDatabricks
+                ? related.databricks_claim_copied_from_claim_id
+                : related.competitor_claim_copied_from_claim_id;
+            const copiedGenId = isDatabricks
+                ? related.databricks_claim_copied_from_generation_id
+                : related.competitor_claim_copied_from_generation_id;
+
+            html += '<div class="expand-section">';
+            html += '<div class="expand-section-title">Attribution</div>';
+            html += '<div class="expand-section-content">';
+            html += `<div><strong>Created By:</strong> user=${escapeHtmlTrial(String(createdUser))} · agent=${escapeHtmlTrial(String(createdAgent))}</div>`;
+            html += `<div><strong>Updated By:</strong> user=${escapeHtmlTrial(String(updatedUser))} · agent=${escapeHtmlTrial(String(updatedAgent))}</div>`;
+            if (copiedClaimId || copiedGenId) {
+                html += `<div><strong>Copied From:</strong> generation=${escapeHtmlTrial(String(copiedGenId || 'n/a'))} · claim_id=${escapeHtmlTrial(String(copiedClaimId || 'n/a'))}</div>`;
+            }
+            html += '</div>';
+            html += '</div>';
 
             html += '</div>'; // .citation-expansion
             return html;

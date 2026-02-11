@@ -32,6 +32,16 @@ from flask import Flask, jsonify, redirect, render_template, request
 from flask_cors import CORS
 from sqlalchemy import create_engine, event, text
 from werkzeug.exceptions import HTTPException
+from identity import (
+    extract_request_user,
+    ensure_agent,
+    ensure_role,
+    ensure_user,
+    ensure_user_role,
+    system_user_context,
+    ROLE_ARTIFACT_CREATOR,
+    ROLE_ARTIFACT_REVIEWER,
+)
 
 app = Flask(__name__)
 CORS(app)
@@ -487,6 +497,45 @@ PILL_CONFIG = {
 SCHEMA_SQL = """
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+CREATE TABLE IF NOT EXISTS users (
+    user_id VARCHAR(255) PRIMARY KEY,
+    user_name VARCHAR(255) NOT NULL,
+    user_email VARCHAR(255) UNIQUE,
+    user_team VARCHAR(255),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS roles (
+    role_id SERIAL PRIMARY KEY,
+    role_name VARCHAR(100) NOT NULL UNIQUE,
+    feature_flags JSONB,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS user_assigned_roles (
+    user_id VARCHAR(255) NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    role_id INT NOT NULL REFERENCES roles(role_id) ON DELETE CASCADE,
+    assigned_by_user_id VARCHAR(255),
+    assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, role_id)
+);
+
+CREATE TABLE IF NOT EXISTS agents (
+    agent_id VARCHAR(255) PRIMARY KEY,
+    agent_name VARCHAR(255) NOT NULL,
+    agent_version VARCHAR(100),
+    llm_model VARCHAR(255),
+    llm_model_version VARCHAR(100),
+    agent_tools_list JSONB,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS companies (
     company_id SERIAL PRIMARY KEY,
     company_name VARCHAR(255) NOT NULL,
@@ -508,10 +557,16 @@ CREATE TABLE IF NOT EXISTS key_differentiators (
     key_diff_id SERIAL PRIMARY KEY,
     category_id INT REFERENCES product_category_catalog(catalog_id),
     generation_id INT,
+    copied_from_generation_id INT,
+    copied_from_key_diff_id INT,
     key_diff_name VARCHAR(255) NOT NULL,
     key_diff_description TEXT,
     display_order INT DEFAULT 0,
     is_active BOOLEAN DEFAULT TRUE,
+    created_by_user_id VARCHAR(255),
+    created_by_agent_id VARCHAR(255),
+    updated_by_user_id VARCHAR(255),
+    updated_by_agent_id VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -552,6 +607,10 @@ CREATE TABLE IF NOT EXISTS battlecard_generations (
         'superseded'
     )),
     previous_generation_id INT REFERENCES battlecard_generations(generation_id),
+    created_by_user_id VARCHAR(255),
+    created_by_agent_id VARCHAR(255),
+    updated_by_user_id VARCHAR(255),
+    updated_by_agent_id VARCHAR(255),
     total_claims INT DEFAULT 0,
     verified_claims INT DEFAULT 0,
     unverified_claims INT DEFAULT 0,
@@ -570,6 +629,11 @@ CREATE TABLE IF NOT EXISTS claims (
     description TEXT NOT NULL,
     change_type VARCHAR(50) CHECK (change_type IN ('new', 'unchanged', 'modified', 'removed')),
     previous_claim_id INT REFERENCES claims(claim_id),
+    copied_from_generation_id INT,
+    created_by_user_id VARCHAR(255),
+    created_by_agent_id VARCHAR(255),
+    updated_by_user_id VARCHAR(255),
+    updated_by_agent_id VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -632,6 +696,10 @@ CREATE TABLE IF NOT EXISTS fact_checks (
         'manual',
         'human_override'
     )),
+    created_by_user_id VARCHAR(255),
+    created_by_agent_id VARCHAR(255),
+    updated_by_user_id VARCHAR(255),
+    updated_by_agent_id VARCHAR(255),
     valid_until DATE,
     confidence_score INT CHECK (confidence_score BETWEEN 0 AND 100)
 );
@@ -682,7 +750,11 @@ CREATE TABLE IF NOT EXISTS human_reviews (
     resolved_by VARCHAR(255),
     reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     reviewed_by VARCHAR(255) NOT NULL,
-    reviewer_role VARCHAR(100)
+    reviewer_role VARCHAR(100),
+    created_by_user_id VARCHAR(255),
+    created_by_agent_id VARCHAR(255),
+    updated_by_user_id VARCHAR(255),
+    updated_by_agent_id VARCHAR(255)
 );
 
 CREATE TABLE IF NOT EXISTS regeneration_requests (
@@ -765,6 +837,10 @@ CREATE TABLE IF NOT EXISTS workflow_sessions (
     pass2_prompt_version_id INT REFERENCES prompt_versions(prompt_version_id),
     pass1_prompt_template_version INT NOT NULL DEFAULT 3,
     pass2_prompt_template_version INT NOT NULL DEFAULT 2,
+    created_by_user_id VARCHAR(255),
+    created_by_agent_id VARCHAR(255),
+    updated_by_user_id VARCHAR(255),
+    updated_by_agent_id VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -782,6 +858,10 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
     progress_message TEXT,
     error_message TEXT,
     error_details JSONB,
+    created_by_user_id VARCHAR(255),
+    created_by_agent_id VARCHAR(255),
+    updated_by_user_id VARCHAR(255),
+    updated_by_agent_id VARCHAR(255),
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
     heartbeat_at TIMESTAMP,
@@ -797,6 +877,12 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
     artifact_name VARCHAR(500),
     artifact_content TEXT,
     artifact_metadata JSONB,
+    source_generation_id INT,
+    source_session_id UUID,
+    created_by_user_id VARCHAR(255),
+    created_by_agent_id VARCHAR(255),
+    updated_by_user_id VARCHAR(255),
+    updated_by_agent_id VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -813,6 +899,8 @@ CREATE TABLE IF NOT EXISTS agent_turns (
     token_count INT,
     model_name VARCHAR(255),
     artifact_id INT REFERENCES workflow_artifacts(artifact_id),
+    created_by_user_id VARCHAR(255),
+    created_by_agent_id VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -840,9 +928,29 @@ CREATE TABLE IF NOT EXISTS session_category_selections (
         'core_product_category', 'cross_platform_capability', 'skip'
     )),
     display_order INT DEFAULT 0,
+    created_by_user_id VARCHAR(255),
+    created_by_agent_id VARCHAR(255),
+    updated_by_user_id VARCHAR(255),
+    updated_by_agent_id VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(session_id, catalog_id)
+);
+
+CREATE TABLE IF NOT EXISTS content_copy_log (
+    copy_log_id SERIAL PRIMARY KEY,
+    session_id UUID REFERENCES workflow_sessions(session_id) ON DELETE SET NULL,
+    generation_id INT REFERENCES battlecard_generations(generation_id) ON DELETE SET NULL,
+    entity_table VARCHAR(100) NOT NULL,
+    entity_pk VARCHAR(255),
+    source_generation_id INT REFERENCES battlecard_generations(generation_id) ON DELETE SET NULL,
+    source_session_id UUID REFERENCES workflow_sessions(session_id) ON DELETE SET NULL,
+    source_entity_pk VARCHAR(255),
+    copy_stage VARCHAR(100),
+    copy_reason TEXT,
+    copied_by_user_id VARCHAR(255),
+    copied_by_agent_id VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS prompt_templates (
@@ -1011,6 +1119,103 @@ def init_db():
     # Migrations: add columns that may not exist on older schemas.
     # Each runs in its own transaction to avoid one failure aborting all.
     migrations = [
+        """CREATE TABLE IF NOT EXISTS users (
+            user_id VARCHAR(255) PRIMARY KEY,
+            user_name VARCHAR(255) NOT NULL,
+            user_email VARCHAR(255) UNIQUE,
+            user_team VARCHAR(255),
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS roles (
+            role_id SERIAL PRIMARY KEY,
+            role_name VARCHAR(100) NOT NULL UNIQUE,
+            feature_flags JSONB,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS user_assigned_roles (
+            user_id VARCHAR(255) NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            role_id INT NOT NULL REFERENCES roles(role_id) ON DELETE CASCADE,
+            assigned_by_user_id VARCHAR(255),
+            assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, role_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS agents (
+            agent_id VARCHAR(255) PRIMARY KEY,
+            agent_name VARCHAR(255) NOT NULL,
+            agent_version VARCHAR(100),
+            llm_model VARCHAR(255),
+            llm_model_version VARCHAR(100),
+            agent_tools_list JSONB,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS content_copy_log (
+            copy_log_id SERIAL PRIMARY KEY,
+            session_id UUID REFERENCES workflow_sessions(session_id) ON DELETE SET NULL,
+            generation_id INT REFERENCES battlecard_generations(generation_id) ON DELETE SET NULL,
+            entity_table VARCHAR(100) NOT NULL,
+            entity_pk VARCHAR(255),
+            source_generation_id INT REFERENCES battlecard_generations(generation_id) ON DELETE SET NULL,
+            source_session_id UUID REFERENCES workflow_sessions(session_id) ON DELETE SET NULL,
+            source_entity_pk VARCHAR(255),
+            copy_stage VARCHAR(100),
+            copy_reason TEXT,
+            copied_by_user_id VARCHAR(255),
+            copied_by_agent_id VARCHAR(255),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "ALTER TABLE battlecard_generations ADD COLUMN IF NOT EXISTS created_by_user_id VARCHAR(255)",
+        "ALTER TABLE battlecard_generations ADD COLUMN IF NOT EXISTS created_by_agent_id VARCHAR(255)",
+        "ALTER TABLE battlecard_generations ADD COLUMN IF NOT EXISTS updated_by_user_id VARCHAR(255)",
+        "ALTER TABLE battlecard_generations ADD COLUMN IF NOT EXISTS updated_by_agent_id VARCHAR(255)",
+        "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS created_by_user_id VARCHAR(255)",
+        "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS created_by_agent_id VARCHAR(255)",
+        "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS updated_by_user_id VARCHAR(255)",
+        "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS updated_by_agent_id VARCHAR(255)",
+        "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS created_by_user_id VARCHAR(255)",
+        "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS created_by_agent_id VARCHAR(255)",
+        "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS updated_by_user_id VARCHAR(255)",
+        "ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS updated_by_agent_id VARCHAR(255)",
+        "ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS source_generation_id INT",
+        "ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS source_session_id UUID",
+        "ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS created_by_user_id VARCHAR(255)",
+        "ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS created_by_agent_id VARCHAR(255)",
+        "ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS updated_by_user_id VARCHAR(255)",
+        "ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS updated_by_agent_id VARCHAR(255)",
+        "ALTER TABLE session_category_selections ADD COLUMN IF NOT EXISTS created_by_user_id VARCHAR(255)",
+        "ALTER TABLE session_category_selections ADD COLUMN IF NOT EXISTS created_by_agent_id VARCHAR(255)",
+        "ALTER TABLE session_category_selections ADD COLUMN IF NOT EXISTS updated_by_user_id VARCHAR(255)",
+        "ALTER TABLE session_category_selections ADD COLUMN IF NOT EXISTS updated_by_agent_id VARCHAR(255)",
+        "ALTER TABLE key_differentiators ADD COLUMN IF NOT EXISTS copied_from_generation_id INT",
+        "ALTER TABLE key_differentiators ADD COLUMN IF NOT EXISTS copied_from_key_diff_id INT",
+        "ALTER TABLE key_differentiators ADD COLUMN IF NOT EXISTS created_by_user_id VARCHAR(255)",
+        "ALTER TABLE key_differentiators ADD COLUMN IF NOT EXISTS created_by_agent_id VARCHAR(255)",
+        "ALTER TABLE key_differentiators ADD COLUMN IF NOT EXISTS updated_by_user_id VARCHAR(255)",
+        "ALTER TABLE key_differentiators ADD COLUMN IF NOT EXISTS updated_by_agent_id VARCHAR(255)",
+        "ALTER TABLE claims ADD COLUMN IF NOT EXISTS copied_from_generation_id INT",
+        "ALTER TABLE claims ADD COLUMN IF NOT EXISTS created_by_user_id VARCHAR(255)",
+        "ALTER TABLE claims ADD COLUMN IF NOT EXISTS created_by_agent_id VARCHAR(255)",
+        "ALTER TABLE claims ADD COLUMN IF NOT EXISTS updated_by_user_id VARCHAR(255)",
+        "ALTER TABLE claims ADD COLUMN IF NOT EXISTS updated_by_agent_id VARCHAR(255)",
+        "ALTER TABLE human_reviews ADD COLUMN IF NOT EXISTS created_by_user_id VARCHAR(255)",
+        "ALTER TABLE human_reviews ADD COLUMN IF NOT EXISTS created_by_agent_id VARCHAR(255)",
+        "ALTER TABLE human_reviews ADD COLUMN IF NOT EXISTS updated_by_user_id VARCHAR(255)",
+        "ALTER TABLE human_reviews ADD COLUMN IF NOT EXISTS updated_by_agent_id VARCHAR(255)",
+        "ALTER TABLE fact_checks ADD COLUMN IF NOT EXISTS created_by_user_id VARCHAR(255)",
+        "ALTER TABLE fact_checks ADD COLUMN IF NOT EXISTS created_by_agent_id VARCHAR(255)",
+        "ALTER TABLE fact_checks ADD COLUMN IF NOT EXISTS updated_by_user_id VARCHAR(255)",
+        "ALTER TABLE fact_checks ADD COLUMN IF NOT EXISTS updated_by_agent_id VARCHAR(255)",
+        "ALTER TABLE agent_turns ADD COLUMN IF NOT EXISTS created_by_user_id VARCHAR(255)",
+        "ALTER TABLE agent_turns ADD COLUMN IF NOT EXISTS created_by_agent_id VARCHAR(255)",
+        "CREATE INDEX IF NOT EXISTS idx_key_diffs_copy_from_generation ON key_differentiators(copied_from_generation_id)",
+        "CREATE INDEX IF NOT EXISTS idx_claims_copy_from_generation ON claims(copied_from_generation_id)",
+        "CREATE INDEX IF NOT EXISTS idx_copy_log_generation ON content_copy_log(generation_id)",
+        "CREATE INDEX IF NOT EXISTS idx_copy_log_source_generation ON content_copy_log(source_generation_id)",
         "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS pass2_prompt_template_version INT NOT NULL DEFAULT 2",
         "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS pass1_prompt_template_version INT NOT NULL DEFAULT 2",
         "ALTER TABLE workflow_sessions ADD COLUMN IF NOT EXISTS step4_execution_mode VARCHAR(50) NOT NULL DEFAULT 'auto'",
@@ -1184,6 +1389,7 @@ def init_db():
 
     # Seed prompt_templates if empty
     _seed_prompt_templates()
+    _seed_identity_defaults()
 
 
 def _seed_product_category_catalog():
@@ -2498,6 +2704,45 @@ def seed_data():
         )
 
 
+def _seed_identity_defaults():
+    """Seed baseline users/roles/agents used by attribution metadata."""
+    with ENGINE.begin() as conn:
+        system_uid = ensure_user(conn, system_user_context())
+        ensure_role(conn, ROLE_ARTIFACT_CREATOR, {"can_create_artifacts": True})
+        ensure_role(conn, ROLE_ARTIFACT_REVIEWER, {"can_review_artifacts": True})
+        ensure_user_role(conn, system_uid, ROLE_ARTIFACT_CREATOR, assigned_by_user_id=system_uid)
+        ensure_user_role(conn, system_uid, ROLE_ARTIFACT_REVIEWER, assigned_by_user_id=system_uid)
+
+        ensure_agent(
+            conn,
+            "battlecard_review_app",
+            "Battlecard Review App",
+            agent_version="1",
+            llm_model="",
+            llm_model_version="",
+            agent_tools_list=["lakebase_postgres"],
+        )
+        ensure_agent(
+            conn,
+            "claude_code_cli",
+            "Claude Code CLI",
+            agent_version="1",
+            llm_model="",
+            llm_model_version="",
+            agent_tools_list=["terminal", "git"],
+        )
+        for step_num in range(1, 8):
+            ensure_agent(
+                conn,
+                f"custom_battlecard_agent_pass_step_{step_num}",
+                f"Custom Battlecard Agent - Step {step_num}",
+                agent_version="1",
+                llm_model="",
+                llm_model_version="",
+                agent_tools_list=["lakebase_postgres", "databricks_model_serving"],
+            )
+
+
 # =============================================================================
 # Token estimation helpers (tiktoken)
 # =============================================================================
@@ -2907,9 +3152,19 @@ def load_battlecard_slides(battlecard_id):
             text(
                 "SELECT kd.key_diff_id, kd.category_id, kd.generation_id AS key_diff_generation_id, "
                 "kd.key_diff_name, kd.key_diff_description, kd.display_order, kd.is_active, kd.created_at, "
+                "kd.copied_from_generation_id, kd.copied_from_key_diff_id, "
+                "kd.created_by_user_id, kd.created_by_agent_id, kd.updated_by_user_id, kd.updated_by_agent_id, "
+                "cu.user_name AS key_diff_created_by_user_name, "
+                "uu.user_name AS key_diff_updated_by_user_name, "
+                "ca.agent_name AS key_diff_created_by_agent_name, "
+                "ua.agent_name AS key_diff_updated_by_agent_name, "
                 "pcc.catalog_id AS category_catalog_id, pcc.category_name "
                 "FROM key_differentiators kd "
                 "JOIN product_category_catalog pcc ON kd.category_id = pcc.catalog_id "
+                "LEFT JOIN users cu ON cu.user_id = kd.created_by_user_id "
+                "LEFT JOIN users uu ON uu.user_id = kd.updated_by_user_id "
+                "LEFT JOIN agents ca ON ca.agent_id = kd.created_by_agent_id "
+                "LEFT JOIN agents ua ON ua.agent_id = kd.updated_by_agent_id "
                 "WHERE kd.is_active = TRUE "
                 "AND kd.key_diff_id IN (SELECT DISTINCT cl.key_diff_id FROM claims cl WHERE cl.generation_id = :gid) "
                 "ORDER BY pcc.display_order, kd.display_order"
@@ -2921,9 +3176,17 @@ def load_battlecard_slides(battlecard_id):
 
         claims = conn.execute(
             text(
-                "SELECT cl.*, c.company_type, c.company_name "
+                "SELECT cl.*, c.company_type, c.company_name, "
+                "cu.user_name AS claim_created_by_user_name, "
+                "uu.user_name AS claim_updated_by_user_name, "
+                "ca.agent_name AS claim_created_by_agent_name, "
+                "ua.agent_name AS claim_updated_by_agent_name "
                 "FROM claims cl "
                 "JOIN companies c ON cl.company_id = c.company_id "
+                "LEFT JOIN users cu ON cu.user_id = cl.created_by_user_id "
+                "LEFT JOIN users uu ON uu.user_id = cl.updated_by_user_id "
+                "LEFT JOIN agents ca ON ca.agent_id = cl.created_by_agent_id "
+                "LEFT JOIN agents ua ON ua.agent_id = cl.updated_by_agent_id "
                 "WHERE cl.generation_id = :gid"
             ),
             {"gid": gen_id},
@@ -3201,6 +3464,14 @@ def load_battlecard_slides(battlecard_id):
             "generation_id": d.get("key_diff_generation_id"),
             "key_diff_is_active": bool(d.get("is_active")),
             "key_diff_created_at": created_at_iso,
+            "key_diff_created_by_user_id": d.get("created_by_user_id"),
+            "key_diff_created_by_user_name": d.get("key_diff_created_by_user_name"),
+            "key_diff_created_by_agent_id": d.get("created_by_agent_id"),
+            "key_diff_created_by_agent_name": d.get("key_diff_created_by_agent_name"),
+            "key_diff_updated_by_user_id": d.get("updated_by_user_id"),
+            "key_diff_updated_by_user_name": d.get("key_diff_updated_by_user_name"),
+            "key_diff_updated_by_agent_id": d.get("updated_by_agent_id"),
+            "key_diff_updated_by_agent_name": d.get("key_diff_updated_by_agent_name"),
             "databricks_headline": (db_claim.get("headline") if db_claim else ""),
             "databricks_details": db_details_flat,
             "databricks_detail_items": db_detail_items,
@@ -3225,16 +3496,46 @@ def load_battlecard_slides(battlecard_id):
                 "key_diff_id": key_diff_id,
                 "category_id": d.get("category_id"),
                 "generation_id": d.get("key_diff_generation_id"),
+                "copied_from_generation_id": d.get("copied_from_generation_id"),
+                "copied_from_key_diff_id": d.get("copied_from_key_diff_id"),
                 "key_diff_name": d.get("key_diff_name") or "",
                 "key_diff_description": d.get("key_diff_description") or "",
                 "display_order": d.get("display_order") or 0,
                 "is_active": bool(d.get("is_active")),
                 "created_at": created_at_iso,
                 "category_name": d.get("category_name") or "",
+                "created_by_user_id": d.get("created_by_user_id"),
+                "created_by_user_name": d.get("key_diff_created_by_user_name"),
+                "created_by_agent_id": d.get("created_by_agent_id"),
+                "created_by_agent_name": d.get("key_diff_created_by_agent_name"),
+                "updated_by_user_id": d.get("updated_by_user_id"),
+                "updated_by_user_name": d.get("key_diff_updated_by_user_name"),
+                "updated_by_agent_id": d.get("updated_by_agent_id"),
+                "updated_by_agent_name": d.get("key_diff_updated_by_agent_name"),
             },
             "db_related": {
                 "databricks_claim_id": db_claim_id,
                 "competitor_claim_id": fab_claim_id,
+                "databricks_claim_copied_from_claim_id": db_claim.get("previous_claim_id") if db_claim else None,
+                "databricks_claim_copied_from_generation_id": db_claim.get("copied_from_generation_id") if db_claim else None,
+                "competitor_claim_copied_from_claim_id": fab_claim.get("previous_claim_id") if fab_claim else None,
+                "competitor_claim_copied_from_generation_id": fab_claim.get("copied_from_generation_id") if fab_claim else None,
+                "databricks_claim_created_by_user_id": db_claim.get("created_by_user_id") if db_claim else None,
+                "databricks_claim_created_by_user_name": db_claim.get("claim_created_by_user_name") if db_claim else None,
+                "databricks_claim_created_by_agent_id": db_claim.get("created_by_agent_id") if db_claim else None,
+                "databricks_claim_created_by_agent_name": db_claim.get("claim_created_by_agent_name") if db_claim else None,
+                "databricks_claim_updated_by_user_id": db_claim.get("updated_by_user_id") if db_claim else None,
+                "databricks_claim_updated_by_user_name": db_claim.get("claim_updated_by_user_name") if db_claim else None,
+                "databricks_claim_updated_by_agent_id": db_claim.get("updated_by_agent_id") if db_claim else None,
+                "databricks_claim_updated_by_agent_name": db_claim.get("claim_updated_by_agent_name") if db_claim else None,
+                "competitor_claim_created_by_user_id": fab_claim.get("created_by_user_id") if fab_claim else None,
+                "competitor_claim_created_by_user_name": fab_claim.get("claim_created_by_user_name") if fab_claim else None,
+                "competitor_claim_created_by_agent_id": fab_claim.get("created_by_agent_id") if fab_claim else None,
+                "competitor_claim_created_by_agent_name": fab_claim.get("claim_created_by_agent_name") if fab_claim else None,
+                "competitor_claim_updated_by_user_id": fab_claim.get("updated_by_user_id") if fab_claim else None,
+                "competitor_claim_updated_by_user_name": fab_claim.get("claim_updated_by_user_name") if fab_claim else None,
+                "competitor_claim_updated_by_agent_id": fab_claim.get("updated_by_agent_id") if fab_claim else None,
+                "competitor_claim_updated_by_agent_name": fab_claim.get("claim_updated_by_agent_name") if fab_claim else None,
                 "databricks_detail_items_count": len(db_detail_items),
                 "competitor_detail_items_count": len(fab_detail_items),
                 "databricks_verbose_items_count": db_verbose_count,
@@ -3272,7 +3573,18 @@ def load_battlecard_reviews(battlecard_id):
     with ENGINE.begin() as conn:
         rows = conn.execute(
             text(
-                "SELECT * FROM human_reviews WHERE generation_id = :gid ORDER BY review_id DESC, reviewed_at DESC"
+                "SELECT hr.*, "
+                "cu.user_name AS created_by_user_name, "
+                "uu.user_name AS updated_by_user_name, "
+                "ca.agent_name AS created_by_agent_name, "
+                "ua.agent_name AS updated_by_agent_name "
+                "FROM human_reviews hr "
+                "LEFT JOIN users cu ON cu.user_id = hr.created_by_user_id "
+                "LEFT JOIN users uu ON uu.user_id = hr.updated_by_user_id "
+                "LEFT JOIN agents ca ON ca.agent_id = hr.created_by_agent_id "
+                "LEFT JOIN agents ua ON ua.agent_id = hr.updated_by_agent_id "
+                "WHERE hr.generation_id = :gid "
+                "ORDER BY hr.review_id DESC, hr.reviewed_at DESC"
             ),
             {"gid": gen_id},
         ).mappings().all()
@@ -3331,6 +3643,14 @@ def load_battlecard_reviews(battlecard_id):
                     "comment": "",
                     "timestamp": r.get("reviewed_at") or "",
                     "human_review_id": r.get("review_id"),
+                    "created_by_user_id": r.get("created_by_user_id"),
+                    "created_by_user_name": r.get("created_by_user_name"),
+                    "created_by_agent_id": r.get("created_by_agent_id"),
+                    "created_by_agent_name": r.get("created_by_agent_name"),
+                    "updated_by_user_id": r.get("updated_by_user_id"),
+                    "updated_by_user_name": r.get("updated_by_user_name"),
+                    "updated_by_agent_id": r.get("updated_by_agent_id"),
+                    "updated_by_agent_name": r.get("updated_by_agent_name"),
                 },
             )
 
@@ -3636,7 +3956,17 @@ def get_fact_check_summary(battlecard_id):
     return result
 
 
-def save_review_to_db(battlecard_id, diff_id, review_scope, status, comment="", rating_value=None, reorder=None, reviewer_email="anonymous"):
+def save_review_to_db(
+    battlecard_id,
+    diff_id,
+    review_scope,
+    status,
+    comment="",
+    rating_value=None,
+    reorder=None,
+    reviewer_email="anonymous",
+    user_ctx=None,
+):
     gen = _fetch_generation_by_uuid(battlecard_id)
     if not gen:
         return None
@@ -3678,11 +4008,20 @@ def save_review_to_db(battlecard_id, diff_id, review_scope, status, comment="", 
         payload["reorder"] = reorder
 
     with ENGINE.begin() as conn:
+        actor = _ensure_actor_context(
+            conn,
+            user_ctx=user_ctx,
+            agent_id="battlecard_review_app",
+            agent_name="Battlecard Review App",
+            role_name=ROLE_ARTIFACT_REVIEWER,
+            llm_model="",
+            agent_tools=["lakebase_postgres"],
+        )
         review_id = conn.execute(
             text(
                 "INSERT INTO human_reviews (generation_id, claim_id, detail_item_id, review_type, feedback_text, "
-                "reviewed_by, reviewer_role) "
-                "VALUES (:gen, :claim, :detail_item, :rtype, :feedback, :by, :role) RETURNING review_id"
+                "reviewed_by, reviewer_role, created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id) "
+                "VALUES (:gen, :claim, :detail_item, :rtype, :feedback, :by, :role, :uid, :aid, :uid, :aid) RETURNING review_id"
             ),
             {
                 "gen": gen_id,
@@ -3692,6 +4031,8 @@ def save_review_to_db(battlecard_id, diff_id, review_scope, status, comment="", 
                 "feedback": json.dumps(payload),
                 "by": reviewer_email,
                 "role": "reviewer",
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
             },
         ).scalar()
 
@@ -3701,6 +4042,85 @@ def save_review_to_db(battlecard_id, diff_id, review_scope, status, comment="", 
 # =============================================================================
 # Utility
 # =============================================================================
+
+
+def _request_user_context():
+    try:
+        return extract_request_user(request)
+    except Exception:
+        return system_user_context()
+
+
+def _ensure_actor_context(
+    conn,
+    *,
+    user_ctx=None,
+    agent_id: str = "battlecard_review_app",
+    agent_name: str = "Battlecard Review App",
+    role_name: str | None = None,
+    llm_model: str = "",
+    agent_tools: list[str] | None = None,
+):
+    """Ensure user/agent records exist and return normalized actor ids."""
+    resolved_user_ctx = dict(user_ctx or _request_user_context())
+    user_id = ensure_user(conn, resolved_user_ctx)
+    if role_name:
+        ensure_user_role(conn, user_id, role_name, assigned_by_user_id=user_id)
+    resolved_agent_id = ensure_agent(
+        conn,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        agent_version="1",
+        llm_model=llm_model,
+        llm_model_version="",
+        agent_tools_list=agent_tools or ["lakebase_postgres"],
+    )
+    return {
+        "user_id": user_id,
+        "agent_id": resolved_agent_id,
+        "user_ctx": resolved_user_ctx,
+    }
+
+
+def _log_content_copy(
+    conn,
+    *,
+    session_id: str | None,
+    generation_id: int | None,
+    entity_table: str,
+    entity_pk: str | None,
+    source_generation_id: int | None,
+    source_session_id: str | None,
+    source_entity_pk: str | None,
+    copy_stage: str,
+    copy_reason: str,
+    copied_by_user_id: str | None,
+    copied_by_agent_id: str | None,
+):
+    conn.execute(
+        text(
+            "INSERT INTO content_copy_log ("
+            "session_id, generation_id, entity_table, entity_pk, "
+            "source_generation_id, source_session_id, source_entity_pk, "
+            "copy_stage, copy_reason, copied_by_user_id, copied_by_agent_id"
+            ") VALUES ("
+            "CAST(:sid AS uuid), :gid, :tbl, :pk, :src_gid, CAST(:src_sid AS uuid), :src_pk, "
+            ":stage, :reason, :uid, :aid)"
+        ),
+        {
+            "sid": session_id,
+            "gid": generation_id,
+            "tbl": entity_table,
+            "pk": entity_pk,
+            "src_gid": source_generation_id,
+            "src_sid": source_session_id,
+            "src_pk": source_entity_pk,
+            "stage": copy_stage,
+            "reason": copy_reason,
+            "uid": copied_by_user_id,
+            "aid": copied_by_agent_id,
+        },
+    )
 
 
 def calculate_trial_score(battlecard_id, differentiators, feedback):
@@ -4552,6 +4972,26 @@ def view_battlecard(battlecard_id):
             break
 
     embedded = request.args.get('embedded', '').lower() in ('true', '1', 'yes')
+    session_id = _lookup_workflow_session_for_battlecard(battlecard_id)
+    session_audit = {}
+    if session_id:
+        with ENGINE.begin() as conn:
+            session_row = conn.execute(
+                text(
+                    "SELECT ws.created_by_user_id, ws.created_by_agent_id, ws.updated_by_user_id, ws.updated_by_agent_id, "
+                    "cu.user_name AS created_by_user_name, uu.user_name AS updated_by_user_name, "
+                    "ca.agent_name AS created_by_agent_name, ua.agent_name AS updated_by_agent_name "
+                    "FROM workflow_sessions ws "
+                    "LEFT JOIN users cu ON cu.user_id = ws.created_by_user_id "
+                    "LEFT JOIN users uu ON uu.user_id = ws.updated_by_user_id "
+                    "LEFT JOIN agents ca ON ca.agent_id = ws.created_by_agent_id "
+                    "LEFT JOIN agents ua ON ua.agent_id = ws.updated_by_agent_id "
+                    "WHERE ws.session_id::text = :sid"
+                ),
+                {"sid": session_id},
+            ).mappings().first()
+        if session_row:
+            session_audit = dict(session_row)
 
     trial = {
         "name": f"{gen_info.get('competitor', 'Unknown')} vs Databricks (v{gen_info.get('battlecard_version_id', '?')})",
@@ -4564,7 +5004,8 @@ def view_battlecard(battlecard_id):
         "prompt_version": gen_info.get("prompt_version", 0),
         "is_uc_battlecard": True,
         "has_flagged_slides": has_flagged,
-        "session_id": _lookup_workflow_session_for_battlecard(battlecard_id),
+        "session_id": session_id,
+        "session_audit": session_audit,
         "mlflow_experiment_url": "",
         "mlflow_run_url": "",
         "embedded": embedded,
@@ -4605,6 +5046,7 @@ def view_battlecard(battlecard_id):
 @app.route('/api/uc/feedback', methods=['POST'])
 def submit_uc_feedback():
     data = request.json
+    user_ctx = _request_user_context()
     battlecard_id = data.get('battlecard_id')
     diff_id = data.get('diff_id')
     level = data.get('level')
@@ -4630,7 +5072,8 @@ def submit_uc_feedback():
         review_scope=level,
         status=status,
         comment=comment,
-        reviewer_email="anonymous",
+        reviewer_email=user_ctx.get("user_email", "anonymous"),
+        user_ctx=user_ctx,
     )
 
     if not review_id:
@@ -4655,6 +5098,9 @@ def submit_uc_feedback():
         "scope": level,
         "status": status,
         "table": "human_reviews",
+        "saved_by_user_id": user_ctx.get("user_id"),
+        "saved_by_user_email": user_ctx.get("user_email"),
+        "saved_by_agent_id": "battlecard_review_app",
     })
 
 
@@ -4662,6 +5108,7 @@ def submit_uc_feedback():
 def submit_uc_citation_feedback():
     """Persist human review for a single citation/evidence row."""
     data = request.json or {}
+    user_ctx = _request_user_context()
     battlecard_id = data.get("battlecard_id")
     diff_id = data.get("diff_id")
     evidence_id = data.get("evidence_id")
@@ -4693,11 +5140,21 @@ def submit_uc_citation_feedback():
     }
 
     with ENGINE.begin() as conn:
+        actor = _ensure_actor_context(
+            conn,
+            user_ctx=user_ctx,
+            agent_id="battlecard_review_app",
+            agent_name="Battlecard Review App",
+            role_name=ROLE_ARTIFACT_REVIEWER,
+            llm_model="",
+            agent_tools=["lakebase_postgres"],
+        )
         review_id = conn.execute(
             text(
                 "INSERT INTO human_reviews (generation_id, claim_id, detail_item_id, evidence_id, fact_check_id, "
-                "review_type, feedback_text, reviewed_by, reviewer_role) "
-                "VALUES (:gen, NULL, NULL, :eid, :fcid, :rtype, :feedback, :by, :role) "
+                "review_type, feedback_text, reviewed_by, reviewer_role, "
+                "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id) "
+                "VALUES (:gen, NULL, NULL, :eid, :fcid, :rtype, :feedback, :by, :role, :uid, :aid, :uid, :aid) "
                 "RETURNING review_id"
             ),
             {
@@ -4706,18 +5163,27 @@ def submit_uc_citation_feedback():
                 "fcid": int(fact_check_id) if fact_check_id else None,
                 "rtype": review_type,
                 "feedback": json.dumps(payload),
-                "by": "anonymous",
+                "by": user_ctx.get("user_email", "anonymous"),
                 "role": "reviewer",
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
             },
         ).scalar()
-
-    return jsonify({"success": True, "review_id": review_id})
+    return jsonify(
+        {
+            "success": True,
+            "review_id": review_id,
+            "saved_by_user_id": user_ctx.get("user_id"),
+            "saved_by_agent_id": "battlecard_review_app",
+        }
+    )
 
 
 @app.route('/api/uc/fact-check-feedback', methods=['POST'])
 def submit_uc_fact_check_feedback():
     """Persist human feedback for a fact-check verdict row."""
     data = request.json or {}
+    user_ctx = _request_user_context()
     battlecard_id = data.get("battlecard_id")
     diff_id = data.get("diff_id")
     fact_check_id = data.get("fact_check_id")
@@ -4745,11 +5211,21 @@ def submit_uc_fact_check_feedback():
     }
 
     with ENGINE.begin() as conn:
+        actor = _ensure_actor_context(
+            conn,
+            user_ctx=user_ctx,
+            agent_id="battlecard_review_app",
+            agent_name="Battlecard Review App",
+            role_name=ROLE_ARTIFACT_REVIEWER,
+            llm_model="",
+            agent_tools=["lakebase_postgres"],
+        )
         review_id = conn.execute(
             text(
                 "INSERT INTO human_reviews (generation_id, claim_id, detail_item_id, evidence_id, fact_check_id, "
-                "review_type, feedback_text, reviewed_by, reviewer_role) "
-                "VALUES (:gen, NULL, NULL, NULL, :fcid, :rtype, :feedback, :by, :role) "
+                "review_type, feedback_text, reviewed_by, reviewer_role, "
+                "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id) "
+                "VALUES (:gen, NULL, NULL, NULL, :fcid, :rtype, :feedback, :by, :role, :uid, :aid, :uid, :aid) "
                 "RETURNING review_id"
             ),
             {
@@ -4757,17 +5233,26 @@ def submit_uc_fact_check_feedback():
                 "fcid": int(fact_check_id),
                 "rtype": review_type,
                 "feedback": json.dumps(payload),
-                "by": "anonymous",
+                "by": user_ctx.get("user_email", "anonymous"),
                 "role": "reviewer",
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
             },
         ).scalar()
-
-    return jsonify({"success": True, "review_id": review_id})
+    return jsonify(
+        {
+            "success": True,
+            "review_id": review_id,
+            "saved_by_user_id": user_ctx.get("user_id"),
+            "saved_by_agent_id": "battlecard_review_app",
+        }
+    )
 
 
 @app.route('/api/uc/reorder', methods=['POST'])
 def reorder_key_diffs():
     data = request.json
+    user_ctx = _request_user_context()
     battlecard_id = data.get('battlecard_id')
     category = data.get('category')
     new_order = data.get('new_order')
@@ -4783,7 +5268,8 @@ def reorder_key_diffs():
             status="approved",
             comment="",
             reorder={"original_rank": None, "new_rank": idx},
-            reviewer_email="anonymous",
+            reviewer_email=user_ctx.get("user_email", "anonymous"),
+            user_ctx=user_ctx,
         )
 
     return jsonify({"success": True})
@@ -4792,6 +5278,120 @@ def reorder_key_diffs():
 @app.route('/api/battlecard/<battlecard_id>/prompt')
 def get_prompt_details(battlecard_id):
     return jsonify({"prompt_name": "", "prompt_version": 0, "prompt_text": ""})
+
+
+@app.route('/api/battlecard/<battlecard_id>/attribution')
+def get_battlecard_attribution(battlecard_id):
+    """Return user/agent attribution for workflow, key diffs, claims, and reviews."""
+    gen = _fetch_generation_by_uuid(battlecard_id)
+    if not gen:
+        return jsonify({"error": "Battlecard not found"}), 404
+    gen_id = int(gen["generation_id"])
+
+    with ENGINE.begin() as conn:
+        workflow_row = conn.execute(
+            text(
+                "SELECT ws.session_id::text AS session_id, ws.generation_id, ws.created_at, ws.updated_at, "
+                "ws.created_by_user_id, ws.created_by_agent_id, ws.updated_by_user_id, ws.updated_by_agent_id, "
+                "cu.user_name AS created_by_user_name, uu.user_name AS updated_by_user_name, "
+                "ca.agent_name AS created_by_agent_name, ua.agent_name AS updated_by_agent_name "
+                "FROM workflow_sessions ws "
+                "LEFT JOIN users cu ON cu.user_id = ws.created_by_user_id "
+                "LEFT JOIN users uu ON uu.user_id = ws.updated_by_user_id "
+                "LEFT JOIN agents ca ON ca.agent_id = ws.created_by_agent_id "
+                "LEFT JOIN agents ua ON ua.agent_id = ws.updated_by_agent_id "
+                "WHERE ws.generation_id = :gid "
+                "ORDER BY ws.created_at DESC LIMIT 1"
+            ),
+            {"gid": gen_id},
+        ).mappings().first()
+
+        key_diffs = [
+            dict(r)
+            for r in conn.execute(
+                text(
+                    "SELECT kd.key_diff_id, kd.key_diff_name, kd.copied_from_generation_id, kd.copied_from_key_diff_id, "
+                    "kd.created_by_user_id, kd.created_by_agent_id, kd.updated_by_user_id, kd.updated_by_agent_id, "
+                    "cu.user_name AS created_by_user_name, uu.user_name AS updated_by_user_name, "
+                    "ca.agent_name AS created_by_agent_name, ua.agent_name AS updated_by_agent_name "
+                    "FROM key_differentiators kd "
+                    "LEFT JOIN users cu ON cu.user_id = kd.created_by_user_id "
+                    "LEFT JOIN users uu ON uu.user_id = kd.updated_by_user_id "
+                    "LEFT JOIN agents ca ON ca.agent_id = kd.created_by_agent_id "
+                    "LEFT JOIN agents ua ON ua.agent_id = kd.updated_by_agent_id "
+                    "WHERE kd.generation_id = :gid "
+                    "ORDER BY kd.key_diff_id"
+                ),
+                {"gid": gen_id},
+            ).mappings().all()
+        ]
+
+        claims = [
+            dict(r)
+            for r in conn.execute(
+                text(
+                    "SELECT cl.claim_id, cl.key_diff_id, co.company_type, cl.headline, cl.previous_claim_id, cl.copied_from_generation_id, "
+                    "cl.created_by_user_id, cl.created_by_agent_id, cl.updated_by_user_id, cl.updated_by_agent_id, "
+                    "cu.user_name AS created_by_user_name, uu.user_name AS updated_by_user_name, "
+                    "ca.agent_name AS created_by_agent_name, ua.agent_name AS updated_by_agent_name "
+                    "FROM claims cl "
+                    "JOIN companies co ON co.company_id = cl.company_id "
+                    "LEFT JOIN users cu ON cu.user_id = cl.created_by_user_id "
+                    "LEFT JOIN users uu ON uu.user_id = cl.updated_by_user_id "
+                    "LEFT JOIN agents ca ON ca.agent_id = cl.created_by_agent_id "
+                    "LEFT JOIN agents ua ON ua.agent_id = cl.updated_by_agent_id "
+                    "WHERE cl.generation_id = :gid "
+                    "ORDER BY cl.claim_id"
+                ),
+                {"gid": gen_id},
+            ).mappings().all()
+        ]
+
+        reviews = [
+            dict(r)
+            for r in conn.execute(
+                text(
+                    "SELECT hr.review_id, hr.review_type, hr.reviewed_by, hr.reviewed_at, hr.claim_id, hr.detail_item_id, hr.evidence_id, "
+                    "hr.created_by_user_id, hr.created_by_agent_id, hr.updated_by_user_id, hr.updated_by_agent_id, "
+                    "cu.user_name AS created_by_user_name, uu.user_name AS updated_by_user_name, "
+                    "ca.agent_name AS created_by_agent_name, ua.agent_name AS updated_by_agent_name "
+                    "FROM human_reviews hr "
+                    "LEFT JOIN users cu ON cu.user_id = hr.created_by_user_id "
+                    "LEFT JOIN users uu ON uu.user_id = hr.updated_by_user_id "
+                    "LEFT JOIN agents ca ON ca.agent_id = hr.created_by_agent_id "
+                    "LEFT JOIN agents ua ON ua.agent_id = hr.updated_by_agent_id "
+                    "WHERE hr.generation_id = :gid "
+                    "ORDER BY hr.review_id DESC"
+                ),
+                {"gid": gen_id},
+            ).mappings().all()
+        ]
+
+        copy_log = [
+            dict(r)
+            for r in conn.execute(
+                text(
+                    "SELECT copy_log_id, entity_table, entity_pk, source_generation_id, source_session_id::text AS source_session_id, "
+                    "source_entity_pk, copy_stage, copy_reason, copied_by_user_id, copied_by_agent_id, created_at "
+                    "FROM content_copy_log "
+                    "WHERE generation_id = :gid "
+                    "ORDER BY copy_log_id DESC"
+                ),
+                {"gid": gen_id},
+            ).mappings().all()
+        ]
+
+    return jsonify(
+        {
+            "battlecard_id": battlecard_id,
+            "generation_id": gen_id,
+            "workflow_session": dict(workflow_row) if workflow_row else None,
+            "key_differentiators": key_diffs,
+            "claims": claims,
+            "reviews": reviews,
+            "content_copy_log": copy_log,
+        }
+    )
 
 
 @app.route('/api/battlecard/<battlecard_id>/status')
@@ -4938,6 +5538,7 @@ def api_verify_pass2_prompt_binding():
 @app.route('/api/workflow/create', methods=['POST'])
 def create_workflow():
     data = request.json or {}
+    request_user = _request_user_context()
     competitor_name = data.get('competitor_name', '').strip()
     product_area = data.get('product_area', 'Data Platform').strip()
     model_name = data.get('model_name', 'databricks-claude-sonnet-4').strip()
@@ -4979,16 +5580,35 @@ def create_workflow():
         }), 400
 
     with ENGINE.begin() as conn:
+        actor = _ensure_actor_context(
+            conn,
+            user_ctx=request_user,
+            agent_id="battlecard_review_app",
+            agent_name="Battlecard Review App",
+            role_name=ROLE_ARTIFACT_CREATOR,
+            llm_model=model_name,
+            agent_tools=["lakebase_postgres", "databricks_model_serving"],
+        )
         # If no explicit previous_generation_id was provided but the competitor
         # already has workflows, auto-link to the latest generation for
         # version chaining.
         if not previous_generation_id:
+            # Prefer prior versions that already contain reusable Step 1/2 context.
             prev = conn.execute(
                 text(
-                    "SELECT bg.generation_id FROM workflow_sessions ws "
+                    "SELECT bg.generation_id "
+                    "FROM workflow_sessions ws "
                     "JOIN battlecard_generations bg ON ws.generation_id = bg.generation_id "
+                    "LEFT JOIN LATERAL ("
+                    "  SELECT "
+                    "    MAX(CASE WHEN wa.artifact_type = 'directive_generated' THEN 1 ELSE 0 END) AS has_dir, "
+                    "    MAX(CASE WHEN wa.artifact_type = 'old_battlecard_extracted' THEN 1 ELSE 0 END) AS has_old "
+                    "  FROM workflow_artifacts wa "
+                    "  WHERE wa.session_id = ws.session_id"
+                    ") ctx ON TRUE "
                     "WHERE ws.competitor_name = :comp AND ws.product_area = :area "
-                    "ORDER BY ws.created_at DESC LIMIT 1"
+                    "ORDER BY (COALESCE(ctx.has_dir, 0) + COALESCE(ctx.has_old, 0)) DESC, ws.created_at DESC "
+                    "LIMIT 1"
                 ),
                 {"comp": competitor_name, "area": product_area},
             ).scalar()
@@ -5001,11 +5621,17 @@ def create_workflow():
         gen_id = conn.execute(
             text(
                 "INSERT INTO battlecard_generations "
-                "(trigger_type, generated_by, generation_model, status, previous_generation_id) "
-                "VALUES ('manual_request', 'workflow_runner', :model, 'draft', :prev) "
+                "(trigger_type, generated_by, generation_model, status, previous_generation_id, "
+                "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id) "
+                "VALUES ('manual_request', 'workflow_runner', :model, 'draft', :prev, :uid, :aid, :uid, :aid) "
                 "RETURNING generation_id"
             ),
-            {"model": model_name, "prev": previous_generation_id},
+            {
+                "model": model_name,
+                "prev": previous_generation_id,
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
+            },
         ).scalar()
 
         row = conn.execute(
@@ -5013,11 +5639,12 @@ def create_workflow():
                 "INSERT INTO workflow_sessions ("
                 "competitor_name, product_area, model_name, diffs_per_category, max_workers, "
                 "step4_execution_mode, step5_execution_mode, step5_inline_fact_check, "
-                "generation_id, pass1_prompt_template_version, pass2_prompt_template_version"
+                "generation_id, pass1_prompt_template_version, pass2_prompt_template_version, "
+                "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
                 ") VALUES ("
                 ":comp, :area, :model, :diffs, :workers, "
                 ":s4mode, :s5mode, :s5fc, "
-                ":gid, :p1tv, :p2tv"
+                ":gid, :p1tv, :p2tv, :uid, :aid, :uid, :aid"
                 ") RETURNING session_id::text"
             ),
             {
@@ -5032,24 +5659,209 @@ def create_workflow():
                 "gid": gen_id,
                 "p1tv": pass1_prompt_template_version,
                 "p2tv": pass2_prompt_template_version,
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
             },
         ).scalar()
         session_id = row
+        if previous_generation_id:
+            _log_content_copy(
+                conn,
+                session_id=session_id,
+                generation_id=int(gen_id),
+                entity_table="workflow_sessions",
+                entity_pk=str(session_id),
+                source_generation_id=int(previous_generation_id),
+                source_session_id=None,
+                source_entity_pk=None,
+                copy_stage="workflow_create",
+                copy_reason="New workflow version linked to previous generation",
+                copied_by_user_id=actor["user_id"],
+                copied_by_agent_id=actor["agent_id"],
+            )
 
         for step_num, step_name in WORKFLOW_STEPS:
             status = "ready" if step_num == 1 else "pending"
             conn.execute(
                 text(
-                    "INSERT INTO workflow_steps (session_id, step_number, step_name, status) "
-                    "VALUES (CAST(:sid AS uuid), :num, :name, :status)"
+                    "INSERT INTO workflow_steps ("
+                    "session_id, step_number, step_name, status, "
+                    "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                    ") VALUES (CAST(:sid AS uuid), :num, :name, :status, :uid, :aid, :uid, :aid)"
                 ),
-                {"sid": session_id, "num": step_num, "name": step_name, "status": status},
+                {
+                    "sid": session_id,
+                    "num": step_num,
+                    "name": step_name,
+                    "status": status,
+                    "uid": actor["user_id"],
+                    "aid": actor["agent_id"],
+                },
             )
 
-        # For new versions, preload Step 3 defaults from the linked previous generation.
+        # For new versions, preload context and Step 3 defaults from the linked previous generation.
         seeded_category_defaults = 0
+        reused_step1_directive = False
+        reused_step2_extracted = False
+        reused_context_source_session_id = None
         if previous_generation_id:
-            source_session_id = conn.execute(
+            # Reuse latest Step 1/2 generated artifacts from the previous version when available.
+            reused_context_source_session_id = conn.execute(
+                text(
+                    "SELECT ws.session_id::text "
+                    "FROM workflow_sessions ws "
+                    "WHERE ws.generation_id = :gid "
+                    "AND EXISTS ("
+                    "  SELECT 1 FROM workflow_artifacts wa "
+                    "  WHERE wa.session_id = ws.session_id "
+                    "    AND wa.artifact_type IN ('directive_generated', 'old_battlecard_extracted')"
+                    ") "
+                    "ORDER BY ws.created_at DESC LIMIT 1"
+                ),
+                {"gid": previous_generation_id},
+            ).scalar()
+            if reused_context_source_session_id:
+                source_context_artifacts = conn.execute(
+                    text(
+                        "SELECT DISTINCT ON (wa.artifact_type) "
+                        "wa.artifact_type, wa.artifact_name, wa.artifact_content, wa.artifact_metadata "
+                        "FROM workflow_artifacts wa "
+                        "WHERE wa.session_id::text = :src "
+                        "AND wa.artifact_type IN ('directive_generated', 'old_battlecard_extracted') "
+                        "ORDER BY wa.artifact_type, wa.created_at DESC"
+                    ),
+                    {"src": reused_context_source_session_id},
+                ).mappings().all()
+
+                for art in source_context_artifacts:
+                    artifact_type = art["artifact_type"]
+                    step_number = 1 if artifact_type == "directive_generated" else 2
+                    artifact_name = art["artifact_name"] or (
+                        "generated_directive.md" if artifact_type == "directive_generated" else "extracted_battlecard.md"
+                    )
+                    artifact_content = art["artifact_content"] or ""
+                    meta = art["artifact_metadata"]
+                    meta_json = json.dumps(meta) if meta is not None else None
+
+                    art_id = conn.execute(
+                        text(
+                            "INSERT INTO workflow_artifacts ("
+                            "session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata, "
+                            "source_generation_id, source_session_id, "
+                            "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                            ") VALUES ("
+                            "CAST(:sid AS uuid), :step, :atype, :name, :content, CAST(:meta AS jsonb), "
+                            ":src_gid, CAST(:src_sid AS uuid), :uid, :aid, :uid, :aid"
+                            ") RETURNING artifact_id"
+                        ),
+                        {
+                            "sid": session_id,
+                            "step": step_number,
+                            "atype": artifact_type,
+                            "name": artifact_name,
+                            "content": artifact_content,
+                            "meta": meta_json,
+                            "src_gid": previous_generation_id,
+                            "src_sid": reused_context_source_session_id,
+                            "uid": actor["user_id"],
+                            "aid": actor["agent_id"],
+                        },
+                    ).scalar()
+
+                    conn.execute(
+                        text(
+                            "INSERT INTO agent_turns ("
+                            "session_id, step_number, turn_type, role, content_type, content_preview, token_count, artifact_id, "
+                            "created_by_user_id, created_by_agent_id"
+                            ") VALUES ("
+                            "CAST(:sid AS uuid), :step, 'tool_result', 'system', :ctype, :preview, :tokens, :art_id, :uid, :agent_id"
+                            ")"
+                        ),
+                        {
+                            "sid": session_id,
+                            "step": step_number,
+                            "ctype": artifact_type,
+                            "preview": artifact_content[:500],
+                            "tokens": count_tokens(artifact_content),
+                            "art_id": art_id,
+                            "uid": actor["user_id"],
+                            "agent_id": actor["agent_id"],
+                        },
+                    )
+                    _log_content_copy(
+                        conn,
+                        session_id=session_id,
+                        generation_id=int(gen_id),
+                        entity_table="workflow_artifacts",
+                        entity_pk=str(art_id),
+                        source_generation_id=int(previous_generation_id) if previous_generation_id else None,
+                        source_session_id=reused_context_source_session_id,
+                        source_entity_pk=None,
+                        copy_stage=f"step{step_number}_context_reuse",
+                        copy_reason=f"Copied {artifact_type} from previous generation context",
+                        copied_by_user_id=actor["user_id"],
+                        copied_by_agent_id=actor["agent_id"],
+                    )
+
+                    if artifact_type == "directive_generated":
+                        reused_step1_directive = True
+                    elif artifact_type == "old_battlecard_extracted":
+                        reused_step2_extracted = True
+
+            # Advance step statuses when context was reused.
+            if reused_step1_directive:
+                conn.execute(
+                    text(
+                        "UPDATE workflow_steps "
+                        "SET status = 'completed', started_at = COALESCE(started_at, NOW()), completed_at = COALESCE(completed_at, NOW()) "
+                        "WHERE session_id::text = :sid AND step_number = 1"
+                    ),
+                    {"sid": session_id},
+                )
+                if reused_step2_extracted:
+                    conn.execute(
+                        text(
+                            "UPDATE workflow_steps "
+                            "SET status = 'completed', started_at = COALESCE(started_at, NOW()), completed_at = COALESCE(completed_at, NOW()) "
+                            "WHERE session_id::text = :sid AND step_number = 2"
+                        ),
+                        {"sid": session_id},
+                    )
+                    conn.execute(
+                        text(
+                            "UPDATE workflow_steps SET status = 'ready' "
+                            "WHERE session_id::text = :sid AND step_number = 3 AND status = 'pending'"
+                        ),
+                        {"sid": session_id},
+                    )
+                    conn.execute(
+                        text(
+                            "UPDATE workflow_sessions "
+                            "SET current_step = 3, updated_at = NOW(), "
+                            "updated_by_user_id = :uid, updated_by_agent_id = :aid "
+                            "WHERE session_id::text = :sid"
+                        ),
+                        {"sid": session_id, "uid": actor["user_id"], "aid": actor["agent_id"]},
+                    )
+                else:
+                    conn.execute(
+                        text(
+                            "UPDATE workflow_steps SET status = 'ready' "
+                            "WHERE session_id::text = :sid AND step_number = 2 AND status = 'pending'"
+                        ),
+                        {"sid": session_id},
+                    )
+                    conn.execute(
+                        text(
+                            "UPDATE workflow_sessions "
+                            "SET current_step = 2, updated_at = NOW(), "
+                            "updated_by_user_id = :uid, updated_by_agent_id = :aid "
+                            "WHERE session_id::text = :sid"
+                        ),
+                        {"sid": session_id, "uid": actor["user_id"], "aid": actor["agent_id"]},
+                    )
+
+            source_selection_session_id = conn.execute(
                 text(
                     "SELECT ws.session_id::text "
                     "FROM workflow_sessions ws "
@@ -5062,22 +5874,54 @@ def create_workflow():
                 ),
                 {"gid": previous_generation_id},
             ).scalar()
-            if source_session_id:
+            if source_selection_session_id:
                 seeded_category_defaults = conn.execute(
                     text(
-                        "INSERT INTO session_category_selections (session_id, catalog_id, inclusion_type, display_order) "
-                        "SELECT CAST(:sid AS uuid), scs.catalog_id, scs.inclusion_type, scs.display_order "
+                        "INSERT INTO session_category_selections ("
+                        "session_id, catalog_id, inclusion_type, display_order, "
+                        "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                        ") "
+                        "SELECT CAST(:sid AS uuid), scs.catalog_id, scs.inclusion_type, scs.display_order, "
+                        "COALESCE(scs.created_by_user_id, :uid), COALESCE(scs.created_by_agent_id, :aid), :uid, :aid "
                         "FROM session_category_selections scs "
                         "WHERE scs.session_id::text = :src "
                         "ORDER BY scs.display_order, scs.catalog_id"
                     ),
-                    {"sid": session_id, "src": source_session_id},
+                    {
+                        "sid": session_id,
+                        "src": source_selection_session_id,
+                        "uid": actor["user_id"],
+                        "aid": actor["agent_id"],
+                    },
                 ).rowcount or 0
+                if seeded_category_defaults:
+                    _log_content_copy(
+                        conn,
+                        session_id=session_id,
+                        generation_id=int(gen_id),
+                        entity_table="session_category_selections",
+                        entity_pk=f"count:{seeded_category_defaults}",
+                        source_generation_id=int(previous_generation_id) if previous_generation_id else None,
+                        source_session_id=source_selection_session_id,
+                        source_entity_pk=None,
+                        copy_stage="step3_selection_reuse",
+                        copy_reason="Copied Step 3 category selections from previous generation",
+                        copied_by_user_id=actor["user_id"],
+                        copied_by_agent_id=actor["agent_id"],
+                    )
 
     return jsonify({
         "success": True,
         "session_id": session_id,
+        "created_by_user_id": request_user.get("user_id"),
+        "created_by_user_email": request_user.get("user_email"),
+        "created_by_agent_id": "battlecard_review_app",
         "seeded_category_defaults": seeded_category_defaults,
+        "reused_context": {
+            "source_session_id": reused_context_source_session_id,
+            "directive_generated": reused_step1_directive,
+            "old_battlecard_extracted": reused_step2_extracted,
+        },
     })
 
 
@@ -5817,6 +6661,15 @@ def workflow_step3_save(session_id):
     _update_step_status(session_id, 3, "in_progress", progress_message="Saving category selections...")
 
     with ENGINE.begin() as conn:
+        actor = _ensure_actor_context(
+            conn,
+            user_ctx=_request_user_context(),
+            agent_id="battlecard_review_app",
+            agent_name="Battlecard Review App",
+            role_name=ROLE_ARTIFACT_CREATOR,
+            llm_model="",
+            agent_tools=["lakebase_postgres"],
+        )
         # Load category names from catalog
         catalog_rows = conn.execute(
             text("SELECT catalog_id, category_name FROM product_category_catalog ORDER BY display_order")
@@ -5833,14 +6686,18 @@ def workflow_step3_save(session_id):
         for idx, (cat_id_str, inclusion_type) in enumerate(selections_dict.items()):
             conn.execute(
                 text(
-                    "INSERT INTO session_category_selections (session_id, catalog_id, inclusion_type, display_order) "
-                    "VALUES (CAST(:sid AS uuid), :cid, :itype, :ord)"
+                    "INSERT INTO session_category_selections ("
+                    "session_id, catalog_id, inclusion_type, display_order, "
+                    "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                    ") VALUES (CAST(:sid AS uuid), :cid, :itype, :ord, :uid, :aid, :uid, :aid)"
                 ),
                 {
                     "sid": session_id,
                     "cid": int(cat_id_str),
                     "itype": inclusion_type,
                     "ord": idx,
+                    "uid": actor["user_id"],
+                    "aid": actor["agent_id"],
                 },
             )
 
@@ -5865,22 +6722,36 @@ def workflow_step3_save(session_id):
 
         cat_art_id = conn.execute(
             text(
-                "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
-                "VALUES (CAST(:sid AS uuid), 3, 'product_categories', 'selected_categories', :content, CAST(:meta AS jsonb)) "
+                "INSERT INTO workflow_artifacts ("
+                "session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata, "
+                "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                ") VALUES (CAST(:sid AS uuid), 3, 'product_categories', 'selected_categories', :content, CAST(:meta AS jsonb), :uid, :aid, :uid, :aid) "
                 "RETURNING artifact_id"
             ),
             {
                 "sid": session_id,
                 "content": categories_content,
                 "meta": json.dumps({"categories": non_skipped}),
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
             },
         ).scalar()
         conn.execute(
             text(
-                "INSERT INTO agent_turns (session_id, step_number, turn_type, role, content_type, content_preview, token_count, artifact_id) "
-                "VALUES (CAST(:sid AS uuid), 3, 'user_input', 'user', 'product_categories', :preview, :tokens, :aid)"
+                "INSERT INTO agent_turns ("
+                "session_id, step_number, turn_type, role, content_type, content_preview, token_count, artifact_id, "
+                "created_by_user_id, created_by_agent_id"
+                ") VALUES ("
+                "CAST(:sid AS uuid), 3, 'user_input', 'user', 'product_categories', :preview, :tokens, :art_id, :uid, :aid)"
             ),
-            {"sid": session_id, "preview": categories_content[:500], "tokens": count_tokens(categories_content), "aid": cat_art_id},
+            {
+                "sid": session_id,
+                "preview": categories_content[:500],
+                "tokens": count_tokens(categories_content),
+                "art_id": cat_art_id,
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
+            },
         )
 
         # Save category_selections artifact (JSON summary with core/cross/skipped lists)
@@ -5903,8 +6774,10 @@ def workflow_step3_save(session_id):
 
         art_id = conn.execute(
             text(
-                "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
-                "VALUES (CAST(:sid AS uuid), 3, 'category_selections', 'category_selections.json', :content, CAST(:meta AS jsonb)) "
+                "INSERT INTO workflow_artifacts ("
+                "session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata, "
+                "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                ") VALUES (CAST(:sid AS uuid), 3, 'category_selections', 'category_selections.json', :content, CAST(:meta AS jsonb), :uid, :aid, :uid, :aid) "
                 "RETURNING artifact_id"
             ),
             {
@@ -5915,15 +6788,27 @@ def workflow_step3_save(session_id):
                     "cross_platform_count": len(cross_names),
                     "skipped_count": len(skip_names),
                 }),
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
             },
         ).scalar()
 
         conn.execute(
             text(
-                "INSERT INTO agent_turns (session_id, step_number, turn_type, role, content_type, content_preview, token_count, artifact_id) "
-                "VALUES (CAST(:sid AS uuid), 3, 'user_input', 'user', 'category_selections', :preview, :tokens, :aid)"
+                "INSERT INTO agent_turns ("
+                "session_id, step_number, turn_type, role, content_type, content_preview, token_count, artifact_id, "
+                "created_by_user_id, created_by_agent_id"
+                ") VALUES ("
+                "CAST(:sid AS uuid), 3, 'user_input', 'user', 'category_selections', :preview, :tokens, :art_id, :uid, :aid)"
             ),
-            {"sid": session_id, "preview": artifact_content[:500], "tokens": count_tokens(artifact_content), "aid": art_id},
+            {
+                "sid": session_id,
+                "preview": artifact_content[:500],
+                "tokens": count_tokens(artifact_content),
+                "art_id": art_id,
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
+            },
         )
 
     _update_step_status(session_id, 3, "completed")
@@ -6602,11 +7487,44 @@ def workflow_step7_generate(session_id):
     return jsonify({"success": True})
 
 
-def _update_step_status(session_id, step_number, status, progress_current=None, progress_total=None, progress_message=None, error_message=None):
+def _update_step_status(
+    session_id,
+    step_number,
+    status,
+    progress_current=None,
+    progress_total=None,
+    progress_message=None,
+    error_message=None,
+    user_ctx=None,
+    agent_id: str = "battlecard_review_app",
+):
     """Update a workflow step's status."""
     with ENGINE.begin() as conn:
+        actor = _ensure_actor_context(
+            conn,
+            user_ctx=user_ctx,
+            agent_id=agent_id,
+            agent_name="Battlecard Review App",
+            role_name=ROLE_ARTIFACT_CREATOR,
+            llm_model="",
+            agent_tools=["lakebase_postgres"],
+        )
         sets = ["status = :status"]
-        params = {"sid": session_id, "step": step_number, "status": status}
+        params = {
+            "sid": session_id,
+            "step": step_number,
+            "status": status,
+            "uid": actor["user_id"],
+            "aid": actor["agent_id"],
+        }
+        sets.extend(
+            [
+                "updated_by_user_id = :uid",
+                "updated_by_agent_id = :aid",
+                "created_by_user_id = COALESCE(created_by_user_id, :uid)",
+                "created_by_agent_id = COALESCE(created_by_agent_id, :aid)",
+            ]
+        )
 
         if status == "in_progress":
             sets.append("started_at = COALESCE(started_at, NOW())")
@@ -6633,8 +7551,12 @@ def _update_step_status(session_id, step_number, status, progress_current=None, 
             params,
         )
         conn.execute(
-            text("UPDATE workflow_sessions SET current_step = :step, updated_at = NOW() WHERE session_id::text = :sid"),
-            {"sid": session_id, "step": step_number},
+            text(
+                "UPDATE workflow_sessions SET current_step = :step, updated_at = NOW(), "
+                "updated_by_user_id = :uid, updated_by_agent_id = :aid "
+                "WHERE session_id::text = :sid"
+            ),
+            {"sid": session_id, "step": step_number, "uid": actor["user_id"], "aid": actor["agent_id"]},
         )
 
 
@@ -6645,6 +7567,15 @@ def _advance_workflow(session_id, completed_step):
     skip over them and advance the first pending step in the chain.
     """
     with ENGINE.begin() as conn:
+        actor = _ensure_actor_context(
+            conn,
+            user_ctx=None,
+            agent_id="battlecard_review_app",
+            agent_name="Battlecard Review App",
+            role_name=ROLE_ARTIFACT_CREATOR,
+            llm_model="",
+            agent_tools=["lakebase_postgres"],
+        )
         # Find all steps after the completed one, ordered
         rows = conn.execute(
             text(
@@ -6663,10 +7594,11 @@ def _advance_workflow(session_id, completed_step):
                 # First pending step — mark it ready
                 conn.execute(
                     text(
-                        "UPDATE workflow_steps SET status = 'ready' "
+                        "UPDATE workflow_steps SET status = 'ready', "
+                        "updated_by_user_id = :uid, updated_by_agent_id = :aid "
                         "WHERE session_id::text = :sid AND step_number = :step AND status = 'pending'"
                     ),
-                    {"sid": session_id, "step": row.step_number},
+                    {"sid": session_id, "step": row.step_number, "uid": actor["user_id"], "aid": actor["agent_id"]},
                 )
             # Stop at the first non-completed step (whether we set it to ready or it's in another state)
             break
@@ -7906,14 +8838,24 @@ def _create_workflow_session_internal(
     step5_inline_fact_check: bool,
 ) -> tuple[str, int]:
     with ENGINE.begin() as conn:
+        actor = _ensure_actor_context(
+            conn,
+            user_ctx=system_user_context(user_id="eval_runner_user", user_name="Eval Runner", user_email="eval_runner@databricks.local", user_team="benchmarking"),
+            agent_id="battlecard_eval_runner",
+            agent_name="Battlecard Eval Runner",
+            role_name=ROLE_ARTIFACT_CREATOR,
+            llm_model=model_name,
+            agent_tools=["lakebase_postgres", "benchmark_runner"],
+        )
         gen_id = conn.execute(
             text(
                 "INSERT INTO battlecard_generations "
-                "(trigger_type, generated_by, generation_model, status) "
-                "VALUES ('manual_request', 'eval_runner', :model, 'draft') "
+                "(trigger_type, generated_by, generation_model, status, "
+                "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id) "
+                "VALUES ('manual_request', 'eval_runner', :model, 'draft', :uid, :aid, :uid, :aid) "
                 "RETURNING generation_id"
             ),
-            {"model": model_name},
+            {"model": model_name, "uid": actor["user_id"], "aid": actor["agent_id"]},
         ).scalar()
 
         session_id = conn.execute(
@@ -7921,11 +8863,12 @@ def _create_workflow_session_internal(
                 "INSERT INTO workflow_sessions ("
                 "competitor_name, product_area, model_name, diffs_per_category, max_workers, "
                 "step4_execution_mode, step5_execution_mode, step5_inline_fact_check, "
-                "generation_id, pass1_prompt_template_version, pass2_prompt_template_version"
+                "generation_id, pass1_prompt_template_version, pass2_prompt_template_version, "
+                "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
                 ") VALUES ("
                 ":comp, :area, :model, :diffs, :workers, "
                 ":s4mode, :s5mode, :s5fc, "
-                ":gid, :p1v, :p2v"
+                ":gid, :p1v, :p2v, :uid, :aid, :uid, :aid"
                 ") RETURNING session_id::text"
             ),
             {
@@ -7940,6 +8883,8 @@ def _create_workflow_session_internal(
                 "gid": gen_id,
                 "p1v": int(pass1_prompt_template_version),
                 "p2v": int(pass2_prompt_template_version),
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
             },
         ).scalar()
 
@@ -7947,10 +8892,19 @@ def _create_workflow_session_internal(
             status = "ready" if step_num == 1 else "pending"
             conn.execute(
                 text(
-                    "INSERT INTO workflow_steps (session_id, step_number, step_name, status) "
-                    "VALUES (CAST(:sid AS uuid), :num, :name, :status)"
+                    "INSERT INTO workflow_steps ("
+                    "session_id, step_number, step_name, status, "
+                    "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                    ") VALUES (CAST(:sid AS uuid), :num, :name, :status, :uid, :aid, :uid, :aid)"
                 ),
-                {"sid": session_id, "num": step_num, "name": step_name, "status": status},
+                {
+                    "sid": session_id,
+                    "num": step_num,
+                    "name": step_name,
+                    "status": status,
+                    "uid": actor["user_id"],
+                    "aid": actor["agent_id"],
+                },
             )
     return session_id, gen_id
 
@@ -7966,33 +8920,74 @@ def _seed_context_for_benchmark_session(session_id: str, core_categories: list[s
     }
 
     with ENGINE.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
-                "VALUES (CAST(:sid AS uuid), 1, 'directive_generated', 'directive.md', :content, CAST(:meta AS jsonb))"
-            ),
-            {"sid": session_id, "content": directive_content, "meta": json.dumps({"seeded": True})},
+        actor = _ensure_actor_context(
+            conn,
+            user_ctx=system_user_context(user_id="eval_runner_user", user_name="Eval Runner", user_email="eval_runner@databricks.local", user_team="benchmarking"),
+            agent_id="battlecard_eval_runner",
+            agent_name="Battlecard Eval Runner",
+            role_name=ROLE_ARTIFACT_CREATOR,
+            llm_model="",
+            agent_tools=["lakebase_postgres", "benchmark_runner"],
         )
         conn.execute(
             text(
-                "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
-                "VALUES (CAST(:sid AS uuid), 2, 'old_battlecard_extracted', 'old_battlecard.md', :content, CAST(:meta AS jsonb))"
+                "INSERT INTO workflow_artifacts ("
+                "session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata, "
+                "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                ") VALUES (CAST(:sid AS uuid), 1, 'directive_generated', 'directive.md', :content, CAST(:meta AS jsonb), :uid, :aid, :uid, :aid)"
             ),
-            {"sid": session_id, "content": old_battlecard_content, "meta": json.dumps({"seeded": True})},
+            {
+                "sid": session_id,
+                "content": directive_content,
+                "meta": json.dumps({"seeded": True}),
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
+            },
         )
         conn.execute(
             text(
-                "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
-                "VALUES (CAST(:sid AS uuid), 3, 'product_categories', 'categories.md', :content, CAST(:meta AS jsonb))"
+                "INSERT INTO workflow_artifacts ("
+                "session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata, "
+                "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                ") VALUES (CAST(:sid AS uuid), 2, 'old_battlecard_extracted', 'old_battlecard.md', :content, CAST(:meta AS jsonb), :uid, :aid, :uid, :aid)"
             ),
-            {"sid": session_id, "content": product_categories_content, "meta": json.dumps({"seeded": True})},
+            {
+                "sid": session_id,
+                "content": old_battlecard_content,
+                "meta": json.dumps({"seeded": True}),
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
+            },
         )
         conn.execute(
             text(
-                "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
-                "VALUES (CAST(:sid AS uuid), 3, 'category_selections', 'category_selections.json', :content, CAST(:meta AS jsonb))"
+                "INSERT INTO workflow_artifacts ("
+                "session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata, "
+                "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                ") VALUES (CAST(:sid AS uuid), 3, 'product_categories', 'categories.md', :content, CAST(:meta AS jsonb), :uid, :aid, :uid, :aid)"
             ),
-            {"sid": session_id, "content": json.dumps(selections, indent=2), "meta": json.dumps({"seeded": True})},
+            {
+                "sid": session_id,
+                "content": product_categories_content,
+                "meta": json.dumps({"seeded": True}),
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
+            },
+        )
+        conn.execute(
+            text(
+                "INSERT INTO workflow_artifacts ("
+                "session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata, "
+                "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                ") VALUES (CAST(:sid AS uuid), 3, 'category_selections', 'category_selections.json', :content, CAST(:meta AS jsonb), :uid, :aid, :uid, :aid)"
+            ),
+            {
+                "sid": session_id,
+                "content": json.dumps(selections, indent=2),
+                "meta": json.dumps({"seeded": True}),
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
+            },
         )
 
         # Keep relational selections in sync with the seeded artifact so Step 4
@@ -8015,10 +9010,18 @@ def _seed_context_for_benchmark_session(session_id: str, core_categories: list[s
                 continue
             conn.execute(
                 text(
-                    "INSERT INTO session_category_selections (session_id, catalog_id, inclusion_type, display_order) "
-                    "VALUES (CAST(:sid AS uuid), :cid, 'core_product_category', :ord)"
+                    "INSERT INTO session_category_selections ("
+                    "session_id, catalog_id, inclusion_type, display_order, "
+                    "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                    ") VALUES (CAST(:sid AS uuid), :cid, 'core_product_category', :ord, :uid, :aid, :uid, :aid)"
                 ),
-                {"sid": session_id, "cid": int(catalog_id), "ord": display_order},
+                {
+                    "sid": session_id,
+                    "cid": int(catalog_id),
+                    "ord": display_order,
+                    "uid": actor["user_id"],
+                    "aid": actor["agent_id"],
+                },
             )
             display_order += 1
 
@@ -8033,21 +9036,27 @@ def _seed_context_for_benchmark_session(session_id: str, core_categories: list[s
         conn.execute(
             text(
                 "UPDATE workflow_steps SET status = 'completed', completed_at = NOW(), "
-                "progress_current = 1, progress_total = 1, progress_message = 'Seeded by eval runner' "
+                "progress_current = 1, progress_total = 1, progress_message = 'Seeded by eval runner', "
+                "updated_by_user_id = :uid, updated_by_agent_id = :aid "
                 "WHERE session_id::text = :sid AND step_number IN (1,2,3)"
             ),
-            {"sid": session_id},
+            {"sid": session_id, "uid": actor["user_id"], "aid": actor["agent_id"]},
         )
         conn.execute(
             text(
-                "UPDATE workflow_steps SET status = 'ready', progress_message = 'Ready for benchmark generation' "
+                "UPDATE workflow_steps SET status = 'ready', progress_message = 'Ready for benchmark generation', "
+                "updated_by_user_id = :uid, updated_by_agent_id = :aid "
                 "WHERE session_id::text = :sid AND step_number = 4"
             ),
-            {"sid": session_id},
+            {"sid": session_id, "uid": actor["user_id"], "aid": actor["agent_id"]},
         )
         conn.execute(
-            text("UPDATE workflow_sessions SET current_step = 4, updated_at = NOW() WHERE session_id::text = :sid"),
-            {"sid": session_id},
+            text(
+                "UPDATE workflow_sessions SET current_step = 4, updated_at = NOW(), "
+                "updated_by_user_id = :uid, updated_by_agent_id = :aid "
+                "WHERE session_id::text = :sid"
+            ),
+            {"sid": session_id, "uid": actor["user_id"], "aid": actor["agent_id"]},
         )
 
 

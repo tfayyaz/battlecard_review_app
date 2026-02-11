@@ -1,0 +1,7 @@
+name: battlecards-review-pg-local
+command: [".venv/bin/python", "app.py"]
+env:
+  - name: DATABRICKS_HOST
+    value: https://fe-vm-pmt.cloud.databricks.com
+  - name: EXA_API_KEY
+    value: ${EXA_API_KEY}

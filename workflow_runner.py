@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 from sqlalchemy import text
+from identity import ensure_agent, ensure_user, system_user_context
 
 try:
     import mlflow
@@ -1633,7 +1634,8 @@ class WorkflowRunner:
                     "COALESCE(step5_execution_mode, 'auto') AS step5_execution_mode, "
                     "COALESCE(step5_inline_fact_check, FALSE) AS step5_inline_fact_check, "
                     "COALESCE(pass1_prompt_template_version, 2) AS pass1_prompt_template_version, "
-                    "COALESCE(pass2_prompt_template_version, 2) AS pass2_prompt_template_version "
+                    "COALESCE(pass2_prompt_template_version, 2) AS pass2_prompt_template_version, "
+                    "created_by_user_id, created_by_agent_id "
                     "FROM workflow_sessions WHERE session_id::text = :sid"
                 ),
                 {"sid": self.session_id},
@@ -1650,6 +1652,37 @@ class WorkflowRunner:
         self.step5_inline_fact_check = bool(row.get("step5_inline_fact_check"))
         self.pass1_prompt_template_version = row["pass1_prompt_template_version"]
         self.pass2_prompt_template_version = row["pass2_prompt_template_version"]
+        self.created_by_user_id = row.get("created_by_user_id") or "anonymous_user"
+        self.created_by_agent_id = row.get("created_by_agent_id") or "battlecard_review_app"
+
+    def _step_agent_id(self, step_number: int) -> str:
+        if 1 <= int(step_number or 0) <= 7:
+            return f"custom_battlecard_agent_pass_step_{int(step_number)}"
+        return "custom_battlecard_agent_pass_step_0"
+
+    def _ensure_actor_records(self, conn, step_number: int, model_name: Optional[str] = None) -> Dict[str, str]:
+        email = str(self.created_by_user_id or "anonymous_user")
+        if "@" not in email:
+            email = f"{email}@databricks.local"
+        user_id = ensure_user(
+            conn,
+            system_user_context(
+                user_id=self.created_by_user_id or "anonymous_user",
+                user_name=str(self.created_by_user_id or "Anonymous User"),
+                user_email=email,
+                user_team="battlecard",
+            ),
+        )
+        agent_id = ensure_agent(
+            conn,
+            agent_id=self._step_agent_id(step_number),
+            agent_name=f"Custom Battlecard Agent - Step {int(step_number)}",
+            agent_version="1",
+            llm_model=model_name or self.model_name or "",
+            llm_model_version="",
+            agent_tools_list=["lakebase_postgres", "databricks_model_serving"],
+        )
+        return {"user_id": user_id, "agent_id": agent_id}
 
     # ------------------------------------------------------------------
     # DB helpers
@@ -1658,8 +1691,24 @@ class WorkflowRunner:
     def _update_step(self, step_number, status, **kwargs):
         """Update step status in the database."""
         with self.engine.begin() as conn:
+            actor = self._ensure_actor_records(conn, step_number, self.model_name)
             sets = ["status = :status", "heartbeat_at = NOW()"]
-            params = {"sid": self.session_id, "step": step_number, "status": status, "wid": self.worker_id}
+            params = {
+                "sid": self.session_id,
+                "step": step_number,
+                "status": status,
+                "wid": self.worker_id,
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
+            }
+            sets.extend(
+                [
+                    "updated_by_user_id = :uid",
+                    "updated_by_agent_id = :aid",
+                    "created_by_user_id = COALESCE(created_by_user_id, :uid)",
+                    "created_by_agent_id = COALESCE(created_by_agent_id, :aid)",
+                ]
+            )
             if status == "in_progress":
                 sets.append("started_at = COALESCE(started_at, NOW())")
                 sets.append("worker_id = :wid")
@@ -1697,15 +1746,27 @@ class WorkflowRunner:
                 params,
             )
             conn.execute(
-                text("UPDATE workflow_sessions SET current_step = :step, updated_at = NOW() WHERE session_id::text = :sid"),
-                {"sid": self.session_id, "step": step_number},
+                text(
+                    "UPDATE workflow_sessions SET current_step = :step, updated_at = NOW(), "
+                    "updated_by_user_id = :uid, updated_by_agent_id = :aid "
+                    "WHERE session_id::text = :sid"
+                ),
+                {"sid": self.session_id, "step": step_number, "uid": actor["user_id"], "aid": actor["agent_id"]},
             )
 
     def _send_heartbeat(self, step_number, progress_message=None, progress_current=None, progress_total=None):
         """Send a heartbeat update without changing status."""
         with self.engine.begin() as conn:
+            actor = self._ensure_actor_records(conn, step_number, self.model_name)
             sets = ["heartbeat_at = NOW()"]
-            params = {"sid": self.session_id, "step": step_number, "wid": self.worker_id}
+            params = {
+                "sid": self.session_id,
+                "step": step_number,
+                "wid": self.worker_id,
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
+            }
+            sets.extend(["updated_by_user_id = :uid", "updated_by_agent_id = :aid"])
             if progress_message is not None:
                 sets.append("progress_message = :pm")
                 params["pm"] = progress_message
@@ -1720,14 +1781,30 @@ class WorkflowRunner:
                 params,
             )
 
-    def _save_artifact(self, step_number, artifact_type, artifact_name, content, metadata=None):
+    def _save_artifact(
+        self,
+        step_number,
+        artifact_type,
+        artifact_name,
+        content,
+        metadata=None,
+        source_generation_id: Optional[int] = None,
+        source_session_id: Optional[str] = None,
+    ):
         """Save an artifact to the database and return the artifact_id."""
         with self.engine.begin() as conn:
+            actor = self._ensure_actor_records(conn, step_number, self.model_name)
             meta_val = json.dumps(metadata) if metadata else None
             art_id = conn.execute(
                 text(
-                    "INSERT INTO workflow_artifacts (session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata) "
-                    "VALUES (CAST(:sid AS uuid), :step, :atype, :aname, :content, CAST(:meta AS jsonb)) "
+                    "INSERT INTO workflow_artifacts ("
+                    "session_id, step_number, artifact_type, artifact_name, artifact_content, artifact_metadata, "
+                    "source_generation_id, source_session_id, created_by_user_id, created_by_agent_id, "
+                    "updated_by_user_id, updated_by_agent_id"
+                    ") VALUES ("
+                    "CAST(:sid AS uuid), :step, :atype, :aname, :content, CAST(:meta AS jsonb), "
+                    ":src_gid, CAST(:src_sid AS uuid), :uid, :aid, :uid, :aid"
+                    ") "
                     "RETURNING artifact_id"
                 ),
                 {
@@ -1737,6 +1814,10 @@ class WorkflowRunner:
                     "aname": artifact_name,
                     "content": content,
                     "meta": meta_val,
+                    "src_gid": source_generation_id,
+                    "src_sid": source_session_id,
+                    "uid": actor["user_id"],
+                    "aid": actor["agent_id"],
                 },
             ).scalar()
         return art_id
@@ -1859,6 +1940,7 @@ class WorkflowRunner:
 
     def _get_or_create_generation_id(self, conn):
         """Return workflow generation_id, creating/linking one if missing."""
+        actor = self._ensure_actor_records(conn, 4, self.model_name)
         gen_id = conn.execute(
             text("SELECT generation_id FROM workflow_sessions WHERE session_id::text = :sid"),
             {"sid": self.session_id},
@@ -1868,15 +1950,22 @@ class WorkflowRunner:
 
         gen_id = conn.execute(
             text(
-                "INSERT INTO battlecard_generations (trigger_type, generated_by, generation_model, status) "
-                "VALUES ('manual_request', 'workflow_runner', :model, 'draft') "
+                "INSERT INTO battlecard_generations ("
+                "trigger_type, generated_by, generation_model, status, "
+                "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                ") "
+                "VALUES ('manual_request', 'workflow_runner', :model, 'draft', :uid, :aid, :uid, :aid) "
                 "RETURNING generation_id"
             ),
-            {"model": self.model_name},
+            {"model": self.model_name, "uid": actor["user_id"], "aid": actor["agent_id"]},
         ).scalar()
         conn.execute(
-            text("UPDATE workflow_sessions SET generation_id = :gid, updated_at = NOW() WHERE session_id::text = :sid"),
-            {"gid": int(gen_id), "sid": self.session_id},
+            text(
+                "UPDATE workflow_sessions SET generation_id = :gid, updated_at = NOW(), "
+                "updated_by_user_id = :uid, updated_by_agent_id = :aid "
+                "WHERE session_id::text = :sid"
+            ),
+            {"gid": int(gen_id), "sid": self.session_id, "uid": actor["user_id"], "aid": actor["agent_id"]},
         )
         logger.warning(
             "Session %s had no generation_id; created fallback generation_id=%s",
@@ -1893,6 +1982,7 @@ class WorkflowRunner:
 
         hydrated = 0
         with self.engine.begin() as conn:
+            actor = self._ensure_actor_records(conn, 4, self.model_name)
             gen_id = self._get_or_create_generation_id(conn)
             session_created_at = conn.execute(
                 text("SELECT created_at FROM workflow_sessions WHERE session_id::text = :sid"),
@@ -2249,11 +2339,12 @@ class WorkflowRunner:
         preview = (content[:500] if content else "")
         token_count = self._count_tokens(content) if content else 0
         with self.engine.begin() as conn:
+            actor = self._ensure_actor_records(conn, step_number, model_name or self.model_name)
             conn.execute(
                 text(
                     "INSERT INTO agent_turns (session_id, step_number, turn_type, role, content_type, "
-                    "content_preview, token_count, model_name, artifact_id) "
-                    "VALUES (CAST(:sid AS uuid), :step, :ttype, :role, :ctype, :preview, :tokens, :model, :aid)"
+                    "content_preview, token_count, model_name, artifact_id, created_by_user_id, created_by_agent_id) "
+                    "VALUES (CAST(:sid AS uuid), :step, :ttype, :role, :ctype, :preview, :tokens, :model, :art_id, :uid, :agent_id)"
                 ),
                 {
                     "sid": self.session_id,
@@ -2264,7 +2355,9 @@ class WorkflowRunner:
                     "preview": preview,
                     "tokens": token_count,
                     "model": model_name,
-                    "aid": artifact_id,
+                    "art_id": artifact_id,
+                    "uid": actor["user_id"],
+                    "agent_id": actor["agent_id"],
                 },
             )
 
@@ -2375,6 +2468,243 @@ class WorkflowRunner:
 
         return result
 
+    def _get_previous_generation_id(self) -> Optional[int]:
+        """Return previous_generation_id linked to this workflow session, if any."""
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT bg.previous_generation_id "
+                    "FROM workflow_sessions ws "
+                    "JOIN battlecard_generations bg ON ws.generation_id = bg.generation_id "
+                    "WHERE ws.session_id::text = :sid"
+                ),
+                {"sid": self.session_id},
+            ).mappings().first()
+        if not row:
+            return None
+        prev_id = row.get("previous_generation_id")
+        return int(prev_id) if prev_id is not None else None
+
+    def _load_generation_artifact_json(self, generation_id: int, artifact_type: str) -> Any:
+        """Load the latest JSON artifact for a generation across linked workflow sessions."""
+        with self.engine.begin() as conn:
+            content = conn.execute(
+                text(
+                    "SELECT wa.artifact_content "
+                    "FROM workflow_artifacts wa "
+                    "JOIN workflow_sessions ws ON ws.session_id = wa.session_id "
+                    "WHERE ws.generation_id = :gid AND wa.artifact_type = :atype "
+                    "ORDER BY wa.created_at DESC "
+                    "LIMIT 1"
+                ),
+                {"gid": int(generation_id), "atype": artifact_type},
+            ).scalar()
+        if not content:
+            return None
+        try:
+            return json.loads(content)
+        except Exception:
+            return None
+
+    def _load_generation_review_snapshot(self, generation_id: int) -> Dict[int, Dict[str, Any]]:
+        """Return merged latest review state per key_diff_id and scope for a generation."""
+        with self.engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT review_id, review_type, feedback_text, reviewed_at "
+                    "FROM human_reviews "
+                    "WHERE generation_id = :gid "
+                    "ORDER BY review_id DESC, reviewed_at DESC"
+                ),
+                {"gid": int(generation_id)},
+            ).mappings().all()
+
+        status_map = {
+            "approve": "approved",
+            "request_edit": "needs_revision",
+            "reject": "rejected",
+        }
+        merged: Dict[int, Dict[str, Any]] = {}
+        for row in rows:
+            payload = {}
+            raw_feedback = row.get("feedback_text")
+            if isinstance(raw_feedback, str) and raw_feedback:
+                try:
+                    payload = json.loads(raw_feedback)
+                except Exception:
+                    payload = {"comment": raw_feedback}
+
+            key_diff_id = payload.get("key_diff_id")
+            if key_diff_id is None:
+                diff_id = str(payload.get("diff_id") or "")
+                if diff_id.startswith("kd-"):
+                    try:
+                        key_diff_id = int(diff_id.replace("kd-", ""))
+                    except Exception:
+                        key_diff_id = None
+            if key_diff_id is None:
+                continue
+            try:
+                key_diff_id = int(key_diff_id)
+            except Exception:
+                continue
+
+            scope = str(payload.get("scope") or "").strip()
+            comment = str(payload.get("comment") or "").strip()
+            status = status_map.get(str(row.get("review_type") or "").strip(), "")
+
+            entry = merged.setdefault(key_diff_id, {"scopes": {}})
+            scope_entry = entry["scopes"].setdefault(
+                scope or "__unspecified__",
+                {
+                    "status": "",
+                    "comment": "",
+                    "review_id": row.get("review_id"),
+                    "reviewed_at": str(row.get("reviewed_at") or ""),
+                },
+            )
+            if status and not scope_entry.get("status"):
+                scope_entry["status"] = status
+            if comment and not scope_entry.get("comment"):
+                scope_entry["comment"] = comment
+
+        flagged = {"needs_revision", "rejected"}
+        for kd_id, entry in merged.items():
+            scopes = entry.get("scopes", {})
+            key_scope = scopes.get("key_diff", {})
+            entry["key_diff_needs_regen"] = key_scope.get("status") in flagged
+            entry["claims_need_regen"] = any(
+                (scope != "key_diff") and (scope_data.get("status") in flagged)
+                for scope, scope_data in scopes.items()
+            )
+            key_feedback_lines = []
+            if key_scope.get("status"):
+                key_feedback_lines.append(f"key_diff status: {key_scope['status']}")
+            if key_scope.get("comment"):
+                key_feedback_lines.append(f"key_diff comment: {key_scope['comment']}")
+            entry["key_diff_feedback"] = "\n".join(key_feedback_lines).strip()
+
+            claim_feedback_lines = []
+            for scope_name, scope_data in scopes.items():
+                if scope_name == "key_diff":
+                    continue
+                status = scope_data.get("status", "")
+                comment = scope_data.get("comment", "")
+                if status:
+                    line = f"{scope_name}: {status}"
+                    if comment:
+                        line += f" | {comment}"
+                    claim_feedback_lines.append(line)
+                elif comment:
+                    claim_feedback_lines.append(f"{scope_name}: comment only | {comment}")
+            entry["claim_feedback"] = "\n".join(claim_feedback_lines).strip()
+
+        return merged
+
+    def _regenerate_single_key_diff(
+        self,
+        skeleton: Dict[str, Any],
+        *,
+        directive: str,
+        context: str,
+        feedback_text: str,
+        extra_feedback: str = "",
+    ) -> Dict[str, Any]:
+        """Regenerate one key differentiator skeleton from reviewer feedback."""
+        category = str(skeleton.get("category") or "").strip()
+        competitor = str(self.competitor or "").strip()
+        feedback_block = (feedback_text or "").strip()
+        if extra_feedback:
+            feedback_block = (feedback_block + "\n" + str(extra_feedback).strip()).strip()
+        if not feedback_block:
+            feedback_block = "No explicit reviewer comment provided; improve clarity and precision."
+
+        revision_prompt = (
+            "You are revising ONE key differentiator for a Databricks battlecard.\n"
+            "Return ONLY strict JSON with the required schema.\n\n"
+            f"Competitor: {competitor}\n"
+            f"Category: {category}\n\n"
+            "## Existing key differentiator JSON\n"
+            f"{json.dumps(skeleton, indent=2)}\n\n"
+            "## Reviewer feedback to address\n"
+            f"{feedback_block}\n\n"
+            "## Directive\n"
+            f"{directive}\n\n"
+            "## Additional Context\n"
+            f"{context}\n\n"
+            "Requirements:\n"
+            "- Keep the same category.\n"
+            "- Keep rankings coherent for buyer impact.\n"
+            "- Produce a concise key_differentiator title and a buyer-benefit description.\n"
+            "- Use only rating values: strong_advantage, advantage, partial, disadvantage.\n"
+            "- Ensure rationale fields are specific and actionable.\n"
+        )
+
+        schema = {
+            "name": "pass1_single_diff_revision",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "key_differentiator": {"type": "string"},
+                    "description": {"type": "string"},
+                    "selection_reasoning": {"type": "string"},
+                    "rank_reasoning": {"type": "string"},
+                    "directive_alignment": {"type": "string"},
+                    "databricks_rating": {
+                        "type": "string",
+                        "enum": ["strong_advantage", "advantage", "partial", "disadvantage"],
+                    },
+                    "competitor_rating": {
+                        "type": "string",
+                        "enum": ["strong_advantage", "advantage", "partial", "disadvantage"],
+                    },
+                },
+                "required": [
+                    "key_differentiator",
+                    "description",
+                    "selection_reasoning",
+                    "rank_reasoning",
+                    "directive_alignment",
+                    "databricks_rating",
+                    "competitor_rating",
+                ],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        }
+
+        raw = call_model(
+            client=self.client,
+            model_name=self.model_name,
+            rendered_prompt=revision_prompt,
+            json_schema=schema,
+            usage_callback=self._record_token_usage,
+        )
+        revised = parse_model_json(raw)
+        if not isinstance(revised, dict):
+            raise ValueError("Single key-diff regeneration returned non-object JSON")
+
+        key_diff_name = str(revised.get("key_differentiator") or skeleton.get("key_differentiator") or "").strip()
+        safe_key = "_".join([p for p in key_diff_name.replace("/", " ").replace("-", " ").split() if p]) or "revised_diff"
+        safe_cat = "_".join([p for p in category.replace("/", " ").split() if p]) or "category"
+        merged = dict(skeleton)
+        merged.update(
+            {
+                "id": f"{safe_cat}_{safe_key}",
+                "category": category,
+                "competitor": competitor,
+                "key_differentiator": key_diff_name,
+                "description": str(revised.get("description") or "").strip(),
+                "selection_reasoning": str(revised.get("selection_reasoning") or "").strip(),
+                "rank_reasoning": str(revised.get("rank_reasoning") or "").strip(),
+                "directive_alignment": str(revised.get("directive_alignment") or "").strip(),
+                "databricks_rating": str(revised.get("databricks_rating") or "partial"),
+                "competitor_rating": str(revised.get("competitor_rating") or "partial"),
+                "regenerated_from_review": True,
+            }
+        )
+        return merged
+
     def _build_context(self, context_sources=None):
         """Build the XML-tagged context string from selected sources.
 
@@ -2409,6 +2739,201 @@ class WorkflowRunner:
             review_feedback=review_feedback,
             fact_check_results=fact_check_results,
         )
+
+    def _build_pass1_incremental_plan(self, target_categories: List[str]) -> Optional[Dict[str, Any]]:
+        """Prepare previous-version carry-forward plan for Step 4."""
+        prev_gen_id = self._get_previous_generation_id()
+        if not prev_gen_id:
+            return None
+
+        prev_skeletons = self._load_generation_artifact_json(prev_gen_id, "pass1_skeletons")
+        if not isinstance(prev_skeletons, list) or not prev_skeletons:
+            return None
+
+        reviews = self._load_generation_review_snapshot(prev_gen_id)
+        target_set = set(target_categories or [])
+
+        # Hydrate missing previous key_diff_ids via generation/category/name lookup.
+        with self.engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT kd.key_diff_id, kd.key_diff_name, pcc.category_name "
+                    "FROM key_differentiators kd "
+                    "JOIN product_category_catalog pcc ON kd.category_id = pcc.catalog_id "
+                    "WHERE kd.generation_id = :gid"
+                ),
+                {"gid": int(prev_gen_id)},
+            ).mappings().all()
+        prev_id_lookup = {
+            ((str(r.get("category_name") or "").strip().lower()), (str(r.get("key_diff_name") or "").strip().lower())): int(r["key_diff_id"])
+            for r in rows
+        }
+
+        by_category: Dict[str, List[Dict[str, Any]]] = {}
+        for raw in prev_skeletons:
+            if not isinstance(raw, dict):
+                continue
+            category = str(raw.get("category") or "").strip()
+            if category not in target_set:
+                continue
+            sk = dict(raw)
+            prev_kd_id = sk.get("key_diff_id")
+            try:
+                prev_kd_id = int(prev_kd_id) if prev_kd_id is not None else None
+            except Exception:
+                prev_kd_id = None
+            if prev_kd_id is None:
+                lookup_key = (category.lower(), str(sk.get("key_differentiator") or "").strip().lower())
+                prev_kd_id = prev_id_lookup.get(lookup_key)
+            if prev_kd_id is not None:
+                sk["previous_key_diff_id"] = int(prev_kd_id)
+                sk["copied_from_generation_id"] = int(prev_gen_id)
+            by_category.setdefault(category, []).append(sk)
+
+        working: List[Dict[str, Any]] = []
+        for category in target_categories:
+            cat_skeletons = by_category.get(category, [])
+            cat_skeletons.sort(key=lambda s: int(s.get("rank", 0) or 0))
+            if len(cat_skeletons) < int(self.diffs_per_category):
+                # Not enough prior content to safely do selective carry-forward.
+                return None
+            working.extend(cat_skeletons[: int(self.diffs_per_category)])
+
+        regen_indexes: List[int] = []
+        feedback_by_index: Dict[int, str] = {}
+        for idx, sk in enumerate(working):
+            prev_kd_id = sk.get("previous_key_diff_id")
+            if prev_kd_id is None:
+                continue
+            review_entry = reviews.get(int(prev_kd_id), {})
+            if review_entry.get("key_diff_needs_regen"):
+                regen_indexes.append(idx)
+                feedback_by_index[idx] = str(review_entry.get("key_diff_feedback") or "").strip()
+
+        return {
+            "previous_generation_id": int(prev_gen_id),
+            "skeletons": working,
+            "regen_indexes": regen_indexes,
+            "feedback_by_index": feedback_by_index,
+            "total_count": len(working),
+            "reused_count": len(working) - len(regen_indexes),
+        }
+
+    def _build_pass2_incremental_plan(self, skeletons: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Prepare selective carry-forward plan for Step 5 claims."""
+        prev_gen_id = self._get_previous_generation_id()
+        if not prev_gen_id:
+            return None
+
+        prev_skeletons = self._load_generation_artifact_json(prev_gen_id, "pass1_skeletons")
+        prev_claims = self._load_generation_artifact_json(prev_gen_id, "pass2_claims")
+        if not isinstance(prev_skeletons, list) or not isinstance(prev_claims, list):
+            return None
+
+        reviews = self._load_generation_review_snapshot(prev_gen_id)
+        pair_count = min(len(prev_skeletons), len(prev_claims))
+        if pair_count <= 0:
+            return None
+
+        claim_by_prev_kd_id: Dict[int, Dict[str, Any]] = {}
+        claim_by_name: Dict[tuple[str, str], Dict[str, Any]] = {}
+        prev_kd_by_name: Dict[tuple[str, str], int] = {}
+        previous_claim_ids_by_kd: Dict[tuple[int, str], int] = {}
+        with self.engine.begin() as conn:
+            claim_rows = conn.execute(
+                text(
+                    "SELECT cl.claim_id, cl.key_diff_id, co.company_type "
+                    "FROM claims cl "
+                    "JOIN companies co ON cl.company_id = co.company_id "
+                    "WHERE cl.generation_id = :gid"
+                ),
+                {"gid": int(prev_gen_id)},
+            ).mappings().all()
+            for r in claim_rows:
+                try:
+                    kd_for_claim = int(r.get("key_diff_id"))
+                except Exception:
+                    continue
+                company_type = str(r.get("company_type") or "").strip().lower()
+                if not company_type:
+                    continue
+                previous_claim_ids_by_kd[(kd_for_claim, company_type)] = int(r.get("claim_id"))
+        for i in range(pair_count):
+            sk = prev_skeletons[i]
+            cl = prev_claims[i]
+            if not isinstance(sk, dict) or not isinstance(cl, dict):
+                continue
+            key = (
+                str(sk.get("category") or "").strip().lower(),
+                str(sk.get("key_differentiator") or "").strip().lower(),
+            )
+            kd_id = sk.get("key_diff_id")
+            try:
+                kd_id = int(kd_id) if kd_id is not None else None
+            except Exception:
+                kd_id = None
+            if kd_id is not None:
+                claim_by_prev_kd_id[int(kd_id)] = cl
+                prev_kd_by_name[key] = int(kd_id)
+            claim_by_name[key] = cl
+
+        preserved_by_index: Dict[int, Dict[str, Any]] = {}
+        regen_indexes: List[int] = []
+        feedback_by_index: Dict[int, str] = {}
+        for idx, sk in enumerate(skeletons):
+            key = (
+                str(sk.get("category") or "").strip().lower(),
+                str(sk.get("key_differentiator") or "").strip().lower(),
+            )
+            prev_kd_id = sk.get("previous_key_diff_id")
+            try:
+                prev_kd_id = int(prev_kd_id) if prev_kd_id is not None else None
+            except Exception:
+                prev_kd_id = None
+            if prev_kd_id is None:
+                prev_kd_id = prev_kd_by_name.get(key)
+
+            previous_claim = None
+            if prev_kd_id is not None:
+                previous_claim = claim_by_prev_kd_id.get(int(prev_kd_id))
+            if previous_claim is None:
+                previous_claim = claim_by_name.get(key)
+
+            review_entry = reviews.get(int(prev_kd_id), {}) if prev_kd_id is not None else {}
+            key_diff_changed = bool(sk.get("regenerated_from_review"))
+            claims_need_regen = bool(review_entry.get("claims_need_regen"))
+            key_diff_needs_regen = bool(review_entry.get("key_diff_needs_regen"))
+
+            if previous_claim and not key_diff_changed and not claims_need_regen and not key_diff_needs_regen:
+                preserved_payload = dict(previous_claim)
+                if prev_kd_id is not None:
+                    preserved_payload["copied_from_generation_id"] = int(prev_gen_id)
+                    preserved_payload["copied_from_key_diff_id"] = int(prev_kd_id)
+                    preserved_payload["copied_from_databricks_claim_id"] = previous_claim_ids_by_kd.get(
+                        (int(prev_kd_id), "databricks")
+                    )
+                    preserved_payload["copied_from_competitor_claim_id"] = previous_claim_ids_by_kd.get(
+                        (int(prev_kd_id), "competitor")
+                    )
+                preserved_by_index[idx] = preserved_payload
+                continue
+
+            regen_indexes.append(idx)
+            claim_feedback = str(review_entry.get("claim_feedback") or "").strip()
+            if not claim_feedback and key_diff_needs_regen:
+                claim_feedback = str(review_entry.get("key_diff_feedback") or "").strip()
+            if claim_feedback:
+                feedback_by_index[idx] = claim_feedback
+
+        return {
+            "previous_generation_id": int(prev_gen_id),
+            "preserved_by_index": preserved_by_index,
+            "regen_indexes": regen_indexes,
+            "feedback_by_index": feedback_by_index,
+            "reused_count": len(preserved_by_index),
+            "regen_count": len(regen_indexes),
+            "total_count": len(skeletons),
+        }
 
     # ------------------------------------------------------------------
     # Pass 1: Generate Key Differentiators (Skeletons)
@@ -2692,10 +3217,158 @@ class WorkflowRunner:
                 prompt_text=template_text,
             )
             with self.engine.begin() as conn:
+                actor = self._ensure_actor_records(conn, 4, self.model_name)
                 conn.execute(
-                    text("UPDATE workflow_sessions SET pass1_prompt_version_id = :vid, updated_at = NOW() WHERE session_id::text = :sid"),
-                    {"vid": pass1_version_id, "sid": self.session_id},
+                    text(
+                        "UPDATE workflow_sessions SET pass1_prompt_version_id = :vid, updated_at = NOW(), "
+                        "updated_by_user_id = :uid, updated_by_agent_id = :aid "
+                        "WHERE session_id::text = :sid"
+                    ),
+                    {"vid": pass1_version_id, "sid": self.session_id, "uid": actor["user_id"], "aid": actor["agent_id"]},
                 )
+
+            # Incremental carry-forward: reuse previous version skeletons and only regenerate
+            # key differentiators explicitly marked needs_revision/rejected at key_diff scope.
+            target_categories = core_cats if (ver >= 3 and core_cats) else categories
+            pass1_incremental = self._build_pass1_incremental_plan(target_categories)
+            if pass1_incremental and pass1_incremental.get("skeletons"):
+                skeletons = [dict(s) for s in pass1_incremental["skeletons"]]
+                regen_indexes = list(pass1_incremental.get("regen_indexes") or [])
+                feedback_by_index = dict(pass1_incremental.get("feedback_by_index") or {})
+                reused_count = int(pass1_incremental.get("reused_count") or 0)
+                previous_gen_id = int(pass1_incremental.get("previous_generation_id"))
+
+                self._update_step(
+                    4,
+                    "in_progress",
+                    progress_message=(
+                        f"[4/6] Reusing previous key differentiators from generation #{previous_gen_id} — "
+                        f"{reused_count}/{len(skeletons)} carried forward, {len(regen_indexes)} to regenerate..."
+                    ),
+                    progress_current=3,
+                    progress_total=6,
+                )
+
+                incremental_errors = []
+                for i, idx in enumerate(regen_indexes, start=1):
+                    sk = skeletons[idx]
+                    try:
+                        regen_feedback = feedback_by_index.get(idx, "")
+                        regenerated = self._regenerate_single_key_diff(
+                            sk,
+                            directive=directive,
+                            context=context,
+                            feedback_text=regen_feedback,
+                            extra_feedback=str(feedback or "").strip(),
+                        )
+                        regenerated["rank"] = sk.get("rank", regenerated.get("rank", i))
+                        regenerated["catalog_id"] = sk.get("catalog_id", regenerated.get("catalog_id"))
+                        regenerated["previous_key_diff_id"] = sk.get("previous_key_diff_id", sk.get("key_diff_id"))
+                        skeletons[idx] = regenerated
+                    except Exception as regen_exc:
+                        incremental_errors.append(
+                            {
+                                "index": int(idx),
+                                "key_differentiator": str(sk.get("key_differentiator") or "")[:120],
+                                "error": str(regen_exc),
+                            }
+                        )
+                    self._update_step(
+                        4,
+                        "in_progress",
+                        progress_message=(
+                            f"[4/6] Reusing previous key differentiators — regenerated {i}/{len(regen_indexes)} "
+                            f"(errors: {len(incremental_errors)})"
+                        ),
+                        progress_current=3,
+                        progress_total=6,
+                    )
+
+                if incremental_errors:
+                    raise RuntimeError(
+                        f"Pass 1 incremental regeneration failed for {len(incremental_errors)} differentiator(s)."
+                    )
+
+                self._update_step(
+                    4,
+                    "in_progress",
+                    progress_message=f"[5/6] Saving {len(skeletons)} key differentiators (incremental reuse mode)...",
+                    progress_current=4,
+                    progress_total=6,
+                )
+                skeletons_content = json.dumps(skeletons, indent=2)
+                art_id = self._save_artifact(
+                    4,
+                    "pass1_skeletons",
+                    "key_differentiators.json",
+                    skeletons_content,
+                    metadata={
+                        "count": len(skeletons),
+                        "total": len(skeletons),
+                        "generated_count": len(regen_indexes),
+                        "written_count": len(skeletons),
+                        "partial": False,
+                        "categories": target_categories,
+                        "model": self.model_name,
+                        "prompt_version_id": pass1_version_id,
+                        "execution_mode": "incremental_reuse",
+                        "incremental_from_previous_generation_id": previous_gen_id,
+                        "reused_count": reused_count,
+                        "regenerated_count": len(regen_indexes),
+                        "token_usage": self._usage_summary(),
+                    },
+                )
+                self._record_turn(
+                    4,
+                    "model_output",
+                    "assistant",
+                    "pass1_skeletons",
+                    skeletons_content,
+                    model_name=self.model_name,
+                    artifact_id=art_id,
+                )
+
+                self._update_step(
+                    4,
+                    "in_progress",
+                    progress_message=f"[6/6] Writing {len(skeletons)} key differentiators to database...",
+                    progress_current=5,
+                    progress_total=6,
+                )
+                skeletons = self._save_skeletons_to_lakebase(skeletons, append=False)
+                self._save_artifact(
+                    4,
+                    "pass1_skeletons",
+                    "key_differentiators.json",
+                    json.dumps(skeletons, indent=2),
+                    metadata={
+                        "count": len(skeletons),
+                        "total": len(skeletons),
+                        "generated_count": len(regen_indexes),
+                        "written_count": len(skeletons),
+                        "partial": False,
+                        "has_key_diff_ids": True,
+                        "categories": target_categories,
+                        "model": self.model_name,
+                        "prompt_version_id": pass1_version_id,
+                        "execution_mode": "incremental_reuse",
+                        "incremental_from_previous_generation_id": previous_gen_id,
+                        "reused_count": reused_count,
+                        "regenerated_count": len(regen_indexes),
+                        "token_usage": self._usage_summary(),
+                    },
+                )
+                self._update_step(
+                    4,
+                    "waiting_human",
+                    progress_message=(
+                        f"Pass 1 incremental reuse complete: carried forward {reused_count} differentiators, "
+                        f"regenerated {len(regen_indexes)} from prior review feedback."
+                    ),
+                    progress_current=6,
+                    progress_total=6,
+                )
+                return
 
             # ---------- PARALLEL PER-CATEGORY PATH ----------
             if use_parallel_pass1:
@@ -3197,6 +3870,13 @@ class WorkflowRunner:
         """Delete all Step 4 generation-scoped rows for a clean Pass 1 write."""
         conn.execute(
             text(
+                "DELETE FROM content_copy_log "
+                "WHERE generation_id = :gid AND entity_table IN ('key_differentiators', 'claims')"
+            ),
+            {"gid": gen_id},
+        )
+        conn.execute(
+            text(
                 "DELETE FROM fact_checks WHERE evidence_id IN "
                 "(SELECT e.evidence_id FROM evidence e JOIN claims c ON e.claim_id = c.claim_id WHERE c.generation_id = :gid)"
             ),
@@ -3232,6 +3912,7 @@ class WorkflowRunner:
         append=False clears generation-scoped rows first (full refresh).
         """
         with self.engine.begin() as conn:
+            actor = self._ensure_actor_records(conn, 4, self.model_name)
             gen_id = self._get_or_create_generation_id(conn)
 
             # Regeneration path: replace generation-scoped differentiators instead of
@@ -3257,6 +3938,11 @@ class WorkflowRunner:
             catalog_names = list(catalog_by_name.keys())
 
             unresolved_categories = []
+            def _safe_int(v):
+                try:
+                    return int(v) if v is not None and str(v).strip() != "" else None
+                except Exception:
+                    return None
             for sk in skeletons:
                 category_name = (sk.get("category") or "").strip()
 
@@ -3324,17 +4010,66 @@ class WorkflowRunner:
 
                 key_diff_id = conn.execute(
                     text(
-                        "INSERT INTO key_differentiators (category_id, key_diff_name, key_diff_description, display_order, generation_id) "
-                        "VALUES (:cat, :name, :desc, :order, :gen_id) RETURNING key_diff_id"
+                        "INSERT INTO key_differentiators ("
+                        "category_id, generation_id, copied_from_generation_id, copied_from_key_diff_id, "
+                        "key_diff_name, key_diff_description, display_order, "
+                        "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                        ") VALUES ("
+                        ":cat, :gen_id, :copied_gen, :copied_kd, :name, :desc, :order, :uid, :aid, :uid, :aid"
+                        ") RETURNING key_diff_id"
                     ),
                     {
                         "cat": int(cat_id),
+                        "gen_id": int(gen_id),
+                        "copied_gen": (
+                            _safe_int(sk.get("copied_from_generation_id"))
+                            if sk.get("copied_from_generation_id") and not sk.get("regenerated_from_review")
+                            else None
+                        ),
+                        "copied_kd": (
+                            _safe_int(sk.get("previous_key_diff_id"))
+                            if sk.get("previous_key_diff_id") and not sk.get("regenerated_from_review")
+                            else None
+                        ),
                         "name": sk.get("key_differentiator", ""),
                         "desc": sk.get("description", ""),
                         "order": sk.get("rank", 0),
-                        "gen_id": int(gen_id),
+                        "uid": actor["user_id"],
+                        "aid": actor["agent_id"],
                     },
                 ).scalar()
+                copied_generation = (
+                    _safe_int(sk.get("copied_from_generation_id"))
+                    if sk.get("copied_from_generation_id") and not sk.get("regenerated_from_review")
+                    else None
+                )
+                copied_key_diff = (
+                    _safe_int(sk.get("previous_key_diff_id"))
+                    if sk.get("previous_key_diff_id") and not sk.get("regenerated_from_review")
+                    else None
+                )
+                if copied_generation and copied_key_diff:
+                    conn.execute(
+                        text(
+                            "INSERT INTO content_copy_log ("
+                            "session_id, generation_id, entity_table, entity_pk, "
+                            "source_generation_id, source_entity_pk, copy_stage, copy_reason, "
+                            "copied_by_user_id, copied_by_agent_id"
+                            ") VALUES ("
+                            "CAST(:sid AS uuid), :gid, 'key_differentiators', :entity_pk, "
+                            ":src_gid, :src_pk, 'step4_incremental_reuse', "
+                            "'Reused previously approved/unreviewed key differentiator', :uid, :aid)"
+                        ),
+                        {
+                            "sid": self.session_id,
+                            "gid": int(gen_id),
+                            "entity_pk": str(key_diff_id),
+                            "src_gid": copied_generation,
+                            "src_pk": str(copied_key_diff),
+                            "uid": actor["user_id"],
+                            "aid": actor["agent_id"],
+                        },
+                    )
                 sk["catalog_id"] = int(cat_id)
                 sk["key_diff_id"] = key_diff_id
                 sk["generation_id"] = int(gen_id)
@@ -3382,6 +4117,7 @@ class WorkflowRunner:
             except Exception:
                 logger.exception("Failed to persist hydrated key_diff_id bindings for session %s", self.session_id)
         total = len(skeletons)
+        pass2_incremental = self._build_pass2_incremental_plan(skeletons)
         ctx_flags = resolve_context_source_flags(context_sources)
         directive = (self._get_artifact_content("directive_generated") or "") if ctx_flags["directive"] else ""
         context = self._build_context(ctx_flags)
@@ -3408,18 +4144,61 @@ class WorkflowRunner:
                 prompt_text=template_text,
             )
             with self.engine.begin() as conn:
+                actor = self._ensure_actor_records(conn, 5, self.model_name)
                 conn.execute(
-                    text("UPDATE workflow_sessions SET pass2_prompt_version_id = :vid, updated_at = NOW() WHERE session_id::text = :sid"),
-                    {"vid": pass2_version_id, "sid": self.session_id},
+                    text(
+                        "UPDATE workflow_sessions SET pass2_prompt_version_id = :vid, updated_at = NOW(), "
+                        "updated_by_user_id = :uid, updated_by_agent_id = :aid "
+                        "WHERE session_id::text = :sid"
+                    ),
+                    {"vid": pass2_version_id, "sid": self.session_id, "uid": actor["user_id"], "aid": actor["agent_id"]},
                 )
 
             # Per-batch prompts already receive directive content
             # through the context XML; avoid injecting directives twice.
             directives_for_template = "" if ver in (5, 6, 7, 8, 9, 10, 11, 12) else directive
 
+            preserved_claims_by_index: Dict[int, Dict[str, Any]] = {}
+            review_feedback_by_index: Dict[int, str] = {}
+            if pass2_incremental:
+                preserved_claims_by_index = {
+                    int(k): dict(v)
+                    for k, v in (pass2_incremental.get("preserved_by_index") or {}).items()
+                    if isinstance(v, dict)
+                }
+                review_feedback_by_index = {
+                    int(k): str(v or "").strip()
+                    for k, v in (pass2_incremental.get("feedback_by_index") or {}).items()
+                    if str(v or "").strip()
+                }
+                regen_indexes = sorted(
+                    {
+                        int(i)
+                        for i in (pass2_incremental.get("regen_indexes") or [])
+                        if isinstance(i, int) or str(i).isdigit()
+                    }
+                )
+                if not regen_indexes and not preserved_claims_by_index:
+                    # Safety fallback: nothing reusable detected; run full generation.
+                    pass2_incremental = None
+            if pass2_incremental:
+                active_indexes = sorted(
+                    {
+                        int(i)
+                        for i in (pass2_incremental.get("regen_indexes") or [])
+                        if isinstance(i, int) or str(i).isdigit()
+                    }
+                )
+            else:
+                active_indexes = list(range(total))
+
             # Build category payloads for templates that expect key_diffs_json.
+            # In incremental mode this includes only diffs that need regeneration.
             category_payloads = {}
-            for sk in skeletons:
+            for idx in active_indexes:
+                if idx < 0 or idx >= len(skeletons):
+                    continue
+                sk = skeletons[idx]
                 cat = sk.get("category", "")
                 category_payloads.setdefault(cat, []).append(
                     {
@@ -3820,6 +4599,16 @@ class WorkflowRunner:
             batch_timeline = []
             batch_sequence = 0
             written_indexes = set()
+            incremental_mode = bool(pass2_incremental)
+            incremental_previous_gen_id = (
+                int(pass2_incremental.get("previous_generation_id"))
+                if pass2_incremental and pass2_incremental.get("previous_generation_id")
+                else None
+            )
+            incremental_preserved_indexes = sorted([idx for idx in preserved_claims_by_index.keys() if 0 <= idx < total])
+            for idx in incremental_preserved_indexes:
+                all_claims[idx] = dict(preserved_claims_by_index[idx])
+            active_generation_indexes = [idx for idx in active_indexes if 0 <= idx < total]
 
             def _iso_from_ts(ts: float | None) -> str | None:
                 if ts is None:
@@ -3846,6 +4635,10 @@ class WorkflowRunner:
                         "step5_inline_fact_check": bool(self.step5_inline_fact_check),
                         "errors": errors,
                         "warnings": warnings,
+                        "incremental_mode": incremental_mode,
+                        "incremental_previous_generation_id": incremental_previous_gen_id,
+                        "incremental_reused_count": len(incremental_preserved_indexes),
+                        "incremental_regen_count": len(active_generation_indexes),
                         "batch_timeline": batch_timeline,
                         "token_usage": self._usage_summary(),
                         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -3915,16 +4708,22 @@ class WorkflowRunner:
 
             # Clear previous Step 5 claim rows once at run start, then append per generated batch.
             with self.engine.begin() as prep_conn:
+                prep_actor = self._ensure_actor_records(prep_conn, 5, self.model_name)
                 prep_gen_id = self._get_or_create_generation_id(prep_conn)
                 self._clear_generation_claim_rows(prep_conn, int(prep_gen_id))
                 prep_conn.execute(
-                    text("UPDATE battlecard_generations SET total_claims = 0 WHERE generation_id = :gid"),
-                    {"gid": int(prep_gen_id)},
+                    text(
+                        "UPDATE battlecard_generations SET total_claims = 0, "
+                        "updated_by_user_id = :uid, updated_by_agent_id = :aid "
+                        "WHERE generation_id = :gid"
+                    ),
+                    {"gid": int(prep_gen_id), "uid": prep_actor["user_id"], "aid": prep_actor["agent_id"]},
                 )
 
             # Record a representative Pass 2 prompt (using first skeleton)
             if skeletons:
-                first_sk = skeletons[0]
+                first_idx = active_generation_indexes[0] if active_generation_indexes else 0
+                first_sk = skeletons[first_idx]
                 representative_prompt = render_template(
                     template_text,
                     competitor=self.competitor,
@@ -3953,7 +4752,13 @@ class WorkflowRunner:
                     "selection_reasoning": sk.get("selection_reasoning", ""),
                 }
 
-            def _process_single_diff(idx: int, sk: dict, *, force_single_payload: bool = False) -> dict:
+            def _process_single_diff(
+                idx: int,
+                sk: dict,
+                *,
+                force_single_payload: bool = False,
+                review_feedback_text: str = "",
+            ) -> dict:
                 """Generate claims for a single skeleton diff."""
                 import time as _time
                 start_time = _time.time()
@@ -3981,6 +4786,12 @@ class WorkflowRunner:
                     directives=directives_for_template,
                     context=context,
                 )
+                if review_feedback_text:
+                    rendered += (
+                        "\n\n## Reviewer Feedback To Address\n"
+                        f"{review_feedback_text}\n\n"
+                        "Regenerate this differentiator's claims so they explicitly address this feedback."
+                    )
 
                 # Log a snippet of the rendered prompt to verify key_differentiator is included
                 logger.info("Pass 2 skeleton %d prompt snippet: ...%s...", idx, rendered[200:400])
@@ -4093,13 +4904,94 @@ class WorkflowRunner:
                     raise
 
             # Stage 3: Generate claims
-            step5_exec = self._resolve_step5_execution(ver, len(category_payloads), total)
+            step5_exec = self._resolve_step5_execution(ver, len(category_payloads), max(len(active_generation_indexes), 1))
             runtime_mode = step5_exec["runtime_mode"]
             if step5_exec.get("fallback_reason"):
                 logger.warning("Step 5 execution fallback: %s", step5_exec["fallback_reason"])
                 warnings.append({"code": "execution_mode_fallback", "message": step5_exec["fallback_reason"]})
 
-            if runtime_mode in ("category_parallel", "category_sequential"):
+            if incremental_mode:
+                runtime_mode = "incremental_reuse"
+                regen_total = len(active_generation_indexes)
+                reused_total = len(incremental_preserved_indexes)
+                warnings.append(
+                    {
+                        "code": "incremental_reuse",
+                        "message": (
+                            f"Carrying forward {reused_total} claim pairs from previous generation "
+                            f"#{incremental_previous_gen_id}; regenerating {regen_total} flagged claim pairs."
+                        ),
+                    }
+                )
+
+                if regen_total <= 0:
+                    self._update_step(
+                        5,
+                        "in_progress",
+                        progress_message=(
+                            f"[3/5] No flagged claims to regenerate. Carrying forward {reused_total} claim pairs "
+                            f"from previous generation #{incremental_previous_gen_id}..."
+                        ),
+                        progress_current=0,
+                        progress_total=1,
+                    )
+                else:
+                    self._update_step(
+                        5,
+                        "in_progress",
+                        progress_message=(
+                            f"[3/5] Regenerating flagged claims — 0/{regen_total} "
+                            f"(carried forward {reused_total}, model: {self.model_name}, prompt: V{ver})..."
+                            f"{self._tpm_status_suffix()}"
+                        ),
+                        progress_current=0,
+                        progress_total=max(regen_total, 1),
+                    )
+                    for pos, idx in enumerate(active_generation_indexes, start=1):
+                        sk = skeletons[idx]
+                        kd_name = str(sk.get("key_differentiator") or "")[:80]
+                        review_feedback_text = review_feedback_by_index.get(idx, "")
+                        gen_started_ts = time.time()
+                        try:
+                            all_claims[idx] = _process_single_diff(
+                                idx,
+                                sk,
+                                force_single_payload=True,
+                                review_feedback_text=review_feedback_text,
+                            )
+                        except Exception as e:
+                            error_str = str(e)
+                            errors.append({"index": idx, "key_differentiator": kd_name, "error": error_str})
+                            self._update_step(5, "in_progress", last_error=f"[{kd_name}] {error_str[:500]}")
+                        gen_finished_ts = time.time()
+                        _write_claim_batch(
+                            [idx],
+                            kd_name or f"diff-{idx + 1}",
+                            generate_started_ts=gen_started_ts,
+                            generate_ended_ts=gen_finished_ts,
+                        )
+                        self._update_step(
+                            5,
+                            "in_progress",
+                            progress_current=pos,
+                            progress_total=max(regen_total, 1),
+                            progress_message=(
+                                f"[3/5] Regenerating flagged claims — {pos}/{regen_total} complete "
+                                f"(carried forward {reused_total})"
+                                f"{self._tpm_status_suffix()}"
+                            ),
+                        )
+
+                if incremental_preserved_indexes:
+                    now_ts = time.time()
+                    _write_claim_batch(
+                        incremental_preserved_indexes,
+                        "carry_forward_previous",
+                        generate_started_ts=now_ts,
+                        generate_ended_ts=now_ts,
+                    )
+
+            elif runtime_mode in ("category_parallel", "category_sequential"):
                 category_to_indexes = {}
                 for idx, sk in enumerate(skeletons):
                     category = sk.get("category", "")
@@ -4616,11 +5508,12 @@ class WorkflowRunner:
                               progress_current=total, progress_total=total)
 
             claims_content = json.dumps(all_claims, indent=2)
+            generated_count = len([c for c in all_claims if isinstance(c, dict)])
             art_id = self._save_artifact(
                 5, "pass2_claims", "claims.json",
                 claims_content,
                 metadata={
-                    "count": len(all_claims),
+                    "count": generated_count,
                     "model": self.model_name,
                     "prompt_version_id": pass2_version_id,
                     "max_workers": self.max_workers,
@@ -4629,8 +5522,12 @@ class WorkflowRunner:
                     "errors": errors,
                     "warnings": warnings,
                     "partial": False,
-                    "generated_count": len(all_claims),
+                    "generated_count": generated_count,
                     "written_count": len(written_indexes),
+                    "incremental_mode": incremental_mode,
+                    "incremental_previous_generation_id": incremental_previous_gen_id,
+                    "incremental_reused_count": len(incremental_preserved_indexes),
+                    "incremental_regen_count": len(active_generation_indexes),
                     "batch_timeline": batch_timeline,
                     "token_usage": self._usage_summary(),
                 },
@@ -4655,7 +5552,13 @@ class WorkflowRunner:
                 final_details["warnings"] = warnings
             self._update_step(5, "waiting_human",
                               progress_message=(
-                                  f"Generated {len(all_claims)} claim pairs. Saved {len(written_indexes)} claim pairs to Lakebase. Review and approve or provide feedback."
+                                  f"Generated {generated_count} claim pairs. Saved {len(written_indexes)} claim pairs to Lakebase."
+                                  + (
+                                      f" Reused {len(incremental_preserved_indexes)} from previous version and regenerated {len(active_generation_indexes)}."
+                                      if incremental_mode
+                                      else ""
+                                  )
+                                  + " Review and approve or provide feedback."
                                   f"{self._tpm_status_suffix()}"
                               ),
                               progress_current=total, progress_total=total,
@@ -4673,6 +5576,13 @@ class WorkflowRunner:
 
     def _clear_generation_claim_rows(self, conn, gen_id: int):
         """Delete all claim-side rows for a generation."""
+        conn.execute(
+            text(
+                "DELETE FROM content_copy_log "
+                "WHERE generation_id = :gid AND entity_table = 'claims'"
+            ),
+            {"gid": gen_id},
+        )
         conn.execute(
             text(
                 "DELETE FROM fact_checks WHERE evidence_id IN "
@@ -4709,6 +5619,7 @@ class WorkflowRunner:
     ):
         """Save Pass 2 claims into the Lakebase claims/evidence/fact_checks tables."""
         with self.engine.begin() as conn:
+            actor = self._ensure_actor_records(conn, 5, self.model_name)
             # Reuse the generation created at workflow creation.
             # If missing, recover deterministically and link it before writes.
             gen_id = self._get_or_create_generation_id(conn)
@@ -4909,8 +5820,14 @@ class WorkflowRunner:
 
                     db_claim_id = conn.execute(
                         text(
-                            "INSERT INTO claims (generation_id, key_diff_id, company_id, rating, rating_symbol, headline, description, change_type) "
-                            "VALUES (:gen, :kd, :co, :rating, :symbol, :head, :desc, 'new') RETURNING claim_id"
+                            "INSERT INTO claims ("
+                            "generation_id, key_diff_id, company_id, rating, rating_symbol, headline, description, "
+                            "change_type, previous_claim_id, copied_from_generation_id, "
+                            "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                            ") VALUES ("
+                            ":gen, :kd, :co, :rating, :symbol, :head, :desc, 'new', :prev_claim_id, :copied_gen, "
+                            ":uid, :aid, :uid, :aid"
+                            ") RETURNING claim_id"
                         ),
                         {
                             "gen": gen_id,
@@ -4920,9 +5837,43 @@ class WorkflowRunner:
                             "symbol": _rating_to_symbol(sk.get("databricks_rating", "")),
                             "head": claim.get("databricks_headline", ""),
                             "desc": db_desc_flat,
+                            "prev_claim_id": (
+                                int(claim.get("copied_from_databricks_claim_id"))
+                                if claim.get("copied_from_databricks_claim_id")
+                                else None
+                            ),
+                            "copied_gen": (
+                                int(claim.get("copied_from_generation_id"))
+                                if claim.get("copied_from_generation_id")
+                                else None
+                            ),
+                            "uid": actor["user_id"],
+                            "aid": actor["agent_id"],
                         },
                     ).scalar()
                     total_claims += 1
+                    if claim.get("copied_from_databricks_claim_id"):
+                        conn.execute(
+                            text(
+                                "INSERT INTO content_copy_log ("
+                                "session_id, generation_id, entity_table, entity_pk, "
+                                "source_generation_id, source_entity_pk, copy_stage, copy_reason, "
+                                "copied_by_user_id, copied_by_agent_id"
+                                ") VALUES ("
+                                "CAST(:sid AS uuid), :gid, 'claims', :entity_pk, :src_gid, :src_pk, "
+                                "'step5_incremental_reuse', 'Reused previously approved/unreviewed databricks claim', "
+                                ":uid, :aid)"
+                            ),
+                            {
+                                "sid": self.session_id,
+                                "gid": int(gen_id),
+                                "entity_pk": str(db_claim_id),
+                                "src_gid": claim.get("copied_from_generation_id"),
+                                "src_pk": str(claim.get("copied_from_databricks_claim_id")),
+                                "uid": actor["user_id"],
+                                "aid": actor["agent_id"],
+                            },
+                        )
 
                     # Insert detail items for Databricks claim
                     db_detail_item_ids = []
@@ -4963,8 +5914,14 @@ class WorkflowRunner:
 
                     comp_claim_id = conn.execute(
                         text(
-                            "INSERT INTO claims (generation_id, key_diff_id, company_id, rating, rating_symbol, headline, description, change_type) "
-                            "VALUES (:gen, :kd, :co, :rating, :symbol, :head, :desc, 'new') RETURNING claim_id"
+                            "INSERT INTO claims ("
+                            "generation_id, key_diff_id, company_id, rating, rating_symbol, headline, description, "
+                            "change_type, previous_claim_id, copied_from_generation_id, "
+                            "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id"
+                            ") VALUES ("
+                            ":gen, :kd, :co, :rating, :symbol, :head, :desc, 'new', :prev_claim_id, :copied_gen, "
+                            ":uid, :aid, :uid, :aid"
+                            ") RETURNING claim_id"
                         ),
                         {
                             "gen": gen_id,
@@ -4974,9 +5931,43 @@ class WorkflowRunner:
                             "symbol": _rating_to_symbol(sk.get("competitor_rating", "")),
                             "head": claim.get("competitor_headline", ""),
                             "desc": comp_desc_flat,
+                            "prev_claim_id": (
+                                int(claim.get("copied_from_competitor_claim_id"))
+                                if claim.get("copied_from_competitor_claim_id")
+                                else None
+                            ),
+                            "copied_gen": (
+                                int(claim.get("copied_from_generation_id"))
+                                if claim.get("copied_from_generation_id")
+                                else None
+                            ),
+                            "uid": actor["user_id"],
+                            "aid": actor["agent_id"],
                         },
                     ).scalar()
                     total_claims += 1
+                    if claim.get("copied_from_competitor_claim_id"):
+                        conn.execute(
+                            text(
+                                "INSERT INTO content_copy_log ("
+                                "session_id, generation_id, entity_table, entity_pk, "
+                                "source_generation_id, source_entity_pk, copy_stage, copy_reason, "
+                                "copied_by_user_id, copied_by_agent_id"
+                                ") VALUES ("
+                                "CAST(:sid AS uuid), :gid, 'claims', :entity_pk, :src_gid, :src_pk, "
+                                "'step5_incremental_reuse', 'Reused previously approved/unreviewed competitor claim', "
+                                ":uid, :aid)"
+                            ),
+                            {
+                                "sid": self.session_id,
+                                "gid": int(gen_id),
+                                "entity_pk": str(comp_claim_id),
+                                "src_gid": claim.get("copied_from_generation_id"),
+                                "src_pk": str(claim.get("copied_from_competitor_claim_id")),
+                                "uid": actor["user_id"],
+                                "aid": actor["agent_id"],
+                            },
+                        )
 
                     # Insert detail items for competitor claim
                     comp_detail_item_ids = []
@@ -5039,8 +6030,12 @@ class WorkflowRunner:
                     raise
 
             conn.execute(
-                text("UPDATE battlecard_generations SET total_claims = :tc WHERE generation_id = :gid"),
-                {"tc": total_claims, "gid": gen_id},
+                text(
+                    "UPDATE battlecard_generations SET total_claims = :tc, "
+                    "updated_by_user_id = :uid, updated_by_agent_id = :aid "
+                    "WHERE generation_id = :gid"
+                ),
+                {"tc": total_claims, "gid": gen_id, "uid": actor["user_id"], "aid": actor["agent_id"]},
             )
 
     def _save_evidence_and_fact_checks(
@@ -5055,6 +6050,7 @@ class WorkflowRunner:
         inline_fact_check: bool = False,
     ):
         """Save evidence rows and optionally seed fact-check rows from citation metadata."""
+        actor = self._ensure_actor_records(conn, 5, self.model_name)
         citations = claim_data.get("citations", {})
         sources_list = claim_data.get("sources", [])
         if detail_item_ids is None:
@@ -5182,8 +6178,11 @@ class WorkflowRunner:
                         text(
                             "INSERT INTO fact_checks "
                             "(evidence_id, status, fact_check_source_id, fact_check_source_text, reasoning, dispute_details, "
-                            "checked_at, checked_by, check_method, confidence_score) "
-                            "VALUES (:eid, :status, :src_id, :src_text, :reasoning, :dispute, NOW(), :checked_by, :method, :confidence)"
+                            "checked_at, checked_by, check_method, confidence_score, "
+                            "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id) "
+                            "VALUES ("
+                            ":eid, :status, :src_id, :src_text, :reasoning, :dispute, NOW(), :checked_by, :method, :confidence, "
+                            ":uid, :aid, :uid, :aid)"
                         ),
                         {
                             "eid": evidence_id,
@@ -5195,6 +6194,8 @@ class WorkflowRunner:
                             "checked_by": "workflow_runner_inline",
                             "method": "llm_assisted",
                             "confidence": confidence,
+                            "uid": actor["user_id"],
+                            "aid": actor["agent_id"],
                         },
                     )
 

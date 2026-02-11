@@ -14,6 +14,7 @@ from exa_py import Exa
 from openai import OpenAI
 from sqlalchemy import text
 from workflow_runner import call_model
+from identity import ensure_agent, ensure_user, system_user_context
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +42,41 @@ class ExaFactChecker:
     def __init__(self, session_id, engine):
         self.session_id = session_id
         self.engine = engine
+        self.created_by_user_id = "anonymous_user"
+        with self.engine.begin() as conn:
+            sid_user = conn.execute(
+                text("SELECT created_by_user_id FROM workflow_sessions WHERE session_id::text = :sid"),
+                {"sid": self.session_id},
+            ).scalar()
+            if sid_user:
+                self.created_by_user_id = str(sid_user)
 
         exa_key = os.getenv("EXA_API_KEY")
         if not exa_key:
             raise ValueError("EXA_API_KEY environment variable is not set")
         self.exa = Exa(api_key=exa_key)
         self.llm_client = _get_openai_client()
+
+    def _ensure_actor(self, conn):
+        user_id = ensure_user(
+            conn,
+            system_user_context(
+                user_id=self.created_by_user_id,
+                user_name=self.created_by_user_id,
+                user_email=f"{self.created_by_user_id}@databricks.local",
+                user_team="battlecard",
+            ),
+        )
+        agent_id = ensure_agent(
+            conn,
+            agent_id="custom_battlecard_agent_pass_step_6",
+            agent_name="Custom Battlecard Agent - Step 6",
+            agent_version="1",
+            llm_model=self.MODEL_NAME,
+            llm_model_version="",
+            agent_tools_list=["exa_web_search", "lakebase_postgres", "databricks_model_serving"],
+        )
+        return {"user_id": user_id, "agent_id": agent_id}
 
     def run_fact_checks(self):
         """Main orchestrator: load claims, search Exa, judge with LLM, save results."""
@@ -167,13 +197,20 @@ class ExaFactChecker:
         )
         summary = self._build_summary(gen_id)
         with self.engine.begin() as conn:
+            actor = self._ensure_actor(conn)
             conn.execute(
                 text(
                     "INSERT INTO workflow_artifacts "
-                    "(session_id, step_number, artifact_type, artifact_name, artifact_content) "
-                    "VALUES (CAST(:sid AS uuid), 6, 'fact_check_results', 'fact_check_summary', :content)"
+                    "(session_id, step_number, artifact_type, artifact_name, artifact_content, "
+                    "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id) "
+                    "VALUES (CAST(:sid AS uuid), 6, 'fact_check_results', 'fact_check_summary', :content, :uid, :aid, :uid, :aid)"
                 ),
-                {"sid": self.session_id, "content": json.dumps(summary)},
+                {
+                    "sid": self.session_id,
+                    "content": json.dumps(summary),
+                    "uid": actor["user_id"],
+                    "aid": actor["agent_id"],
+                },
             )
 
         # 5. Set step 6 to waiting_human
@@ -345,6 +382,7 @@ Return ONLY the JSON object, no other text."""
     def _update_fact_check(self, evidence_id, verdict, source_id, source_text, reasoning, dispute_details, confidence):
         """Update existing fact_check row or insert new one."""
         with self.engine.begin() as conn:
+            actor = self._ensure_actor(conn)
             # Check if row exists
             existing = conn.execute(
                 text("SELECT fact_check_id FROM fact_checks WHERE evidence_id = :eid LIMIT 1"),
@@ -359,14 +397,17 @@ Return ONLY the JSON object, no other text."""
                         "fact_check_source_text = :src_text, reasoning = :reasoning, "
                         "dispute_details = :dispute, checked_at = NOW(), "
                         "checked_by = 'exa_fact_checker', check_method = 'automated', "
-                        "confidence_score = :confidence "
+                        "confidence_score = :confidence, "
+                        "updated_by_user_id = :uid, updated_by_agent_id = :aid, "
+                        "created_by_user_id = COALESCE(created_by_user_id, :uid), "
+                        "created_by_agent_id = COALESCE(created_by_agent_id, :aid) "
                         "WHERE evidence_id = :eid"
                     ),
                     {
                         "verdict": verdict, "src_id": source_id,
                         "src_text": source_text, "reasoning": reasoning,
                         "dispute": dispute_details, "confidence": confidence,
-                        "eid": evidence_id,
+                        "eid": evidence_id, "uid": actor["user_id"], "aid": actor["agent_id"],
                     },
                 )
             else:
@@ -374,15 +415,16 @@ Return ONLY the JSON object, no other text."""
                     text(
                         "INSERT INTO fact_checks "
                         "(evidence_id, status, fact_check_source_id, fact_check_source_text, "
-                        "reasoning, dispute_details, checked_at, checked_by, check_method, confidence_score) "
+                        "reasoning, dispute_details, checked_at, checked_by, check_method, confidence_score, "
+                        "created_by_user_id, created_by_agent_id, updated_by_user_id, updated_by_agent_id) "
                         "VALUES (:eid, :verdict, :src_id, :src_text, :reasoning, :dispute, "
-                        "NOW(), 'exa_fact_checker', 'automated', :confidence)"
+                        "NOW(), 'exa_fact_checker', 'automated', :confidence, :uid, :aid, :uid, :aid)"
                     ),
                     {
                         "eid": evidence_id, "verdict": verdict,
                         "src_id": source_id, "src_text": source_text,
                         "reasoning": reasoning, "dispute": dispute_details,
-                        "confidence": confidence,
+                        "confidence": confidence, "uid": actor["user_id"], "aid": actor["agent_id"],
                     },
                 )
 
@@ -421,8 +463,23 @@ Return ONLY the JSON object, no other text."""
                      progress_message=None, error_message=None):
         """Update workflow step status (mirrors app.py _update_step_status)."""
         with self.engine.begin() as conn:
+            actor = self._ensure_actor(conn)
             sets = ["status = :status", "heartbeat_at = NOW()"]
-            params = {"sid": self.session_id, "step": step_number, "status": status}
+            params = {
+                "sid": self.session_id,
+                "step": step_number,
+                "status": status,
+                "uid": actor["user_id"],
+                "aid": actor["agent_id"],
+            }
+            sets.extend(
+                [
+                    "updated_by_user_id = :uid",
+                    "updated_by_agent_id = :aid",
+                    "created_by_user_id = COALESCE(created_by_user_id, :uid)",
+                    "created_by_agent_id = COALESCE(created_by_agent_id, :aid)",
+                ]
+            )
 
             if status == "in_progress":
                 sets.append("started_at = COALESCE(started_at, NOW())")
@@ -448,6 +505,10 @@ Return ONLY the JSON object, no other text."""
                 params,
             )
             conn.execute(
-                text("UPDATE workflow_sessions SET current_step = :step, updated_at = NOW() WHERE session_id::text = :sid"),
-                {"sid": self.session_id, "step": step_number},
+                text(
+                    "UPDATE workflow_sessions SET current_step = :step, updated_at = NOW(), "
+                    "updated_by_user_id = :uid, updated_by_agent_id = :aid "
+                    "WHERE session_id::text = :sid"
+                ),
+                {"sid": self.session_id, "step": step_number, "uid": actor["user_id"], "aid": actor["agent_id"]},
             )
